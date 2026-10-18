@@ -461,15 +461,21 @@ async fn a_block_page_is_not_an_empty_listing() {
     assert_eq!(reports[0].outcome, SourceOutcome::BadResponse { reason: "not a directory listing".into() });
 }
 
+const ARM64_CD: &str = "/debian/debian-cd/current/arm64/bt-cd/";
+const NETINST: &str = "/debian/debian-cd/current/arm64/bt-cd/debian-13.7.0-arm64-netinst.iso.torrent";
+
+fn netinst() -> Vec<u8> {
+    fixture("debian/debian-cd-current-arm64-bt-cd-debian-13.7.0-arm64-netinst.iso.torrent")
+}
+
 #[tokio::test]
-async fn a_partial_answer_is_shown_but_asked_again() {
-    let dir = "/debian/debian-cd/current/arm64/bt-cd/";
-    let file = "/debian/debian-cd/current/arm64/bt-cd/debian-13.7.0-arm64-netinst.iso.torrent";
-    let torrent = fixture("debian/debian-cd-current-arm64-bt-cd-debian-13.7.0-arm64-netinst.iso.torrent");
+async fn a_locator_fallback_is_shown_but_asked_again() {
     let server = Server::start(vec![
-        (file, vec![status(500), status(500), ok(torrent)]),
-        (dir, vec![ok(fixture("debian/debian-cd-current-arm64-bt-cd.html"))]),
-        ("/debian/", vec![status(503)]),
+        (NETINST, vec![status(500), status(500), ok(netinst())]),
+        (ARM64_CD, vec![ok(fixture("debian/debian-cd-current-arm64-bt-cd.html"))]),
+        ("/debian/debian-cd/current/arm64/bt-dvd/", vec![ok(fixture("debian/debian-cd-current-arm64-bt-dvd.html"))]),
+        ("/debian/debian-cd/current/amd64/bt-cd/", vec![ok(fixture("debian/debian-cd-current-amd64-bt-cd.html"))]),
+        ("/debian/debian-cd/current/amd64/bt-dvd/", vec![ok(fixture("debian/debian-cd-current-amd64-bt-dvd.html"))]),
     ])
     .await;
     let search = Search::new(&server.config(&["debian"]), ResultCache::new()).unwrap();
@@ -481,6 +487,53 @@ async fn a_partial_answer_is_shown_but_asked_again() {
     assert!(degraded.releases[0].id.to_ref().starts_with('u'));
     assert_eq!(outcomes(&repaired), [("debian".into(), SourceOutcome::Ok { results: 1 })]);
     assert_eq!(repaired.releases[0].id.to_ref(), "bf7ed99351f7b08f0916b7b3e49cfa574d206879");
+}
+
+#[tokio::test]
+async fn an_answer_missing_a_directory_is_asked_again() {
+    let server = Server::start(vec![
+        (NETINST, vec![ok(netinst())]),
+        (ARM64_CD, vec![ok(fixture("debian/debian-cd-current-arm64-bt-cd.html"))]),
+        ("/debian/", vec![status(503)]),
+    ])
+    .await;
+    let search = Search::new(&server.config(&["debian"]), ResultCache::new()).unwrap();
+    let q = query("debian 13 arm64 netinst", &["debian"]);
+
+    let first = search.search(&q).await.unwrap();
+    let again = search.search(&q).await.unwrap();
+
+    assert_eq!(first.releases[0].id.to_ref(), "bf7ed99351f7b08f0916b7b3e49cfa574d206879");
+    assert_eq!(outcomes(&again), [("debian".into(), SourceOutcome::Ok { results: 1 })]);
+    assert_eq!(server.hits(ARM64_CD), 2);
+}
+
+#[tokio::test]
+async fn a_stale_catalog_is_shown_but_asked_again() {
+    let dir = scratch_dir("stale");
+    let up =
+        Server::start(vec![("/academictorrents/database.xml", vec![ok(fixture("academictorrents/database.xml"))])])
+            .await;
+    let down = Server::start(vec![("/academictorrents/", vec![status(503)])]).await;
+    let q = query("stack exchange", &["academictorrents"]);
+    let with_dir =
+        |server: &Server| SearchConfig { cache_dir: Some(dir.clone()), ..server.config(&["academictorrents"]) };
+    Search::new(&with_dir(&up), ResultCache::new()).unwrap().search(&q).await.unwrap();
+    let two_days_ago = std::time::SystemTime::now() - Duration::from_secs(48 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(dir.join("academictorrents.xml"))
+        .unwrap()
+        .set_modified(two_days_ago)
+        .unwrap();
+
+    let search = Search::new(&with_dir(&down), ResultCache::new()).unwrap();
+    let stale = search.search(&q).await.unwrap();
+    let again = search.search(&q).await.unwrap();
+
+    assert_eq!(stale.releases[0].name, "Stack Exchange Data Dump (2026-09-30)");
+    assert_eq!(outcomes(&again), [("academictorrents".into(), SourceOutcome::Ok { results: 2 })]);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]
