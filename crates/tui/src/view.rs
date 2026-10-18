@@ -100,17 +100,19 @@ fn progress(buf: &mut Buffer, x: u16, y: u16, cells: u16, fraction: Option<f64>,
     }
 }
 
-/// Key hints as `key verb` pairs, right-aligned before `right` within `room` cells. Pairs drop
-/// from the front, so the last one stays.
+fn hints_width(pairs: &[(&str, &str)]) -> u16 {
+    let cells = pairs.iter().map(|(k, v)| width(k) + 1 + width(v)).sum::<usize>() + pairs.len().saturating_sub(1) * 3;
+    cells as u16
+}
+
+/// Key hints as `key verb` pairs, most useful first, right-aligned before `right` within `room`
+/// cells. Pairs drop from the end, so the first one stays.
 fn hints(buf: &mut Buffer, right: u16, y: u16, room: u16, pairs: &[(&str, &str)]) {
-    let length = |p: &[(&str, &str)]| -> usize {
-        p.iter().map(|(k, v)| width(k) + 1 + width(v)).sum::<usize>() + p.len().saturating_sub(1) * 3
-    };
     let mut pairs = pairs.to_vec();
-    while pairs.len() > 1 && length(&pairs) > usize::from(room) {
-        pairs.remove(0);
+    while pairs.len() > 1 && hints_width(&pairs) > room {
+        pairs.pop();
     }
-    let mut x = right.saturating_sub(length(&pairs) as u16);
+    let mut x = right.saturating_sub(hints_width(&pairs));
     for (i, (key, verb)) in pairs.iter().enumerate() {
         if i > 0 {
             x += 3;
@@ -757,16 +759,6 @@ fn help(buf: &mut Buffer, screen: &Screen) {
 
 fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
     let y = screen.footer;
-    let mut room = screen.right - CONTENT;
-    if let Some(toast) = &state.toast {
-        let color = match toast.tone {
-            Tone::Info => TEXT,
-            Tone::Success => ACTION,
-            Tone::Warning | Tone::Error => ERROR,
-        };
-        let used = put(buf, CONTENT, y, room, &toast.text, fg(color));
-        room = room.saturating_sub(used + 4);
-    }
     let pause = match state.cursor.and_then(|item| match item {
         Item::Download(id) => state.job(id),
         Item::Result(_) => None,
@@ -790,7 +782,19 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
         }
         (Focus::List, None) => vec![("/", "search"), ("?", "keys")],
     };
-    if room > 0 && !pairs.is_empty() {
+    // The toast gets the room the first hint leaves, so a message never hides the first key.
+    let mut room = screen.right - CONTENT;
+    let first = pairs.first().map_or(0, |pair| hints_width(&[*pair]) + 4);
+    if let Some(toast) = &state.toast {
+        let color = match toast.tone {
+            Tone::Info => TEXT,
+            Tone::Success => ACTION,
+            Tone::Warning | Tone::Error => ERROR,
+        };
+        let used = put(buf, CONTENT, y, room.saturating_sub(first), &toast.text, fg(color));
+        room = room.saturating_sub(used + 4);
+    }
+    if !pairs.is_empty() {
         hints(buf, screen.right, y, room, &pairs);
     }
 }

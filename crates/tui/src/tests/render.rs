@@ -94,6 +94,19 @@ fn help_screens() {
 }
 
 #[test]
+fn a_toast_never_pushes_out_the_first_hint() {
+    let started = "Started Night of the Living Dead (1968) [DVD]";
+    let mut state = searched((100, 30));
+    press(&mut state, "d");
+    state.say(crate::state::Tone::Success, started);
+    let footer = line(&render(&state), 29);
+    assert_eq!(footer, format!("{:14}{started}{:8}space pause   x remove   o open", "", ""));
+    state.update(Msg::Resize(60, 16));
+    let footer = line(&render(&state), 15);
+    assert_eq!(footer, format!("{:14}Started Night of the Living…     space pause", ""));
+}
+
+#[test]
 fn a_cut_name_keeps_its_end() {
     let screen = shot(&searched((80, 24)));
     assert!(screen.contains("Night of the…Dead (1968) [DVD]"), "{screen}");

@@ -31,6 +31,7 @@ pub fn ellipsize(s: &str, max: usize) -> String {
         out.push(c);
         used += w;
     }
+    out.truncate(out.trim_end().len());
     out.push('…');
     out
 }
