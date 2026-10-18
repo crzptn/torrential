@@ -1,6 +1,3 @@
-//! The real binary, started the way an agent's shell starts it: no terminal, a fresh
-//! `TORRENTIAL_HOME`, and engines that must outlive the command that started them.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -69,7 +66,6 @@ impl Home {
         }
     }
 
-    /// The engine's pid and version from `daemon status`, or `None` when it is stopped.
     fn engine(&self) -> Option<(i32, String)> {
         let run = self.run(&["daemon", "status", "--json"]);
         let doc: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
@@ -228,7 +224,7 @@ fn a_killed_engine_comes_back_with_the_download_interrupted() {
     let home = Home::with(&[("TORRENTIAL_TEST_ENGINE", "fake"), ("TORRENTIAL_TEST_FAKE_RATE", "1MiB")]);
     assert_eq!(home.run(&["get", &magnet(10 << 30), "--dir", &home.downloads()]).code, 0);
     let (pid, _) = home.engine().unwrap();
-    // SAFETY: sends SIGKILL to the engine this test started.
+    // SAFETY: kill only sends a signal, and this pid is the engine this test started.
     unsafe { libc::kill(pid, libc::SIGKILL) };
     eventually("the killed engine is gone", Duration::from_secs(5), || !alive(pid));
     let status = home.run(&["status", "9b5212"]);

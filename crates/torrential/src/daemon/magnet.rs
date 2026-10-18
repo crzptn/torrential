@@ -1,5 +1,3 @@
-//! Magnet links, parsed by torrential rather than by the engine.
-
 use torrential_core::id::parse_full_infohash;
 use torrential_core::text::sanitize;
 use torrential_core::{Error, ErrorCode, InfoHash};
@@ -57,7 +55,6 @@ pub fn parse(uri: &str) -> Result<Magnet, Error> {
     Ok(Magnet { info_hash, name, exact_length, uri: uri.to_string() })
 }
 
-/// A magnet for a bare infohash. Peers come from the DHT.
 pub fn from_hash(info_hash: InfoHash) -> Magnet {
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
     let mut uri = "magnet:?".to_string();

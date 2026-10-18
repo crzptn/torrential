@@ -1,6 +1,3 @@
-//! The engine process driven through its request handler, with a fake torrent engine,
-//! search service, and disk.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -111,7 +108,6 @@ impl Harness {
         self.status().await.iter().map(|j| j.status.name()).collect()
     }
 
-    /// Polls status until `done` holds, for at most five seconds.
     async fn until(&self, what: &str, done: impl Fn(&[Job]) -> bool) -> Vec<Job> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {

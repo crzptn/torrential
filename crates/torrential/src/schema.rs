@@ -1,5 +1,3 @@
-//! `torrential schema`: the command definition and error registry as one JSON document.
-
 use clap::{Arg, ArgAction, Command};
 use serde::Serialize;
 use torrential_core::ErrorCode;
@@ -137,7 +135,6 @@ fn exit_codes() -> Vec<ExitSchema> {
     codes.into_iter().map(|code| ExitSchema { code, meaning: exit_meaning(code) }).collect()
 }
 
-/// What each exit class means. The codes come from `ErrorCode::exit_code`.
 fn exit_meaning(code: u8) -> &'static str {
     match code {
         0 => "success, including an empty search",

@@ -1,6 +1,5 @@
-//! Named color tokens for human mode, from the Vesper palette. Every color on screen
-//! comes from here. Vesper's background (#101010) and text (#FFFFFF) are left to the
-//! terminal, because forcing them breaks light themes.
+//! Vesper's background (#101010) and text (#FFFFFF) are left to the terminal, because
+//! forcing them breaks light themes.
 
 use anstyle::{Color, RgbColor, Style};
 

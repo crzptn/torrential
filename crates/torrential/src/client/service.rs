@@ -1,6 +1,3 @@
-//! `torrential daemon install|uninstall`: a launchd agent on macOS or a systemd user unit on
-//! Linux, which starts the engine at login and lets it resume downloads by itself.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -40,7 +37,6 @@ fn xml(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-/// The unit file. `torrential_home` carries a relocated home into the service.
 pub fn unit(manager: Manager, exe: &Path, log: &Path, torrential_home: Option<&str>) -> String {
     let exe = exe.display().to_string();
     match manager {

@@ -1,5 +1,3 @@
-//! Which files of a torrent a download wants, and what is risky about them.
-
 use std::path::{Path, PathBuf};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
@@ -18,7 +16,6 @@ pub fn check_paths(metainfo: &Metainfo) -> Result<(), Error> {
     Ok(())
 }
 
-/// `*` matches `/` too, and matching ignores case, so `*.MKV` finds `Season 1/e01.mkv`.
 pub fn compile(patterns: &[String]) -> Result<GlobSet, Error> {
     let mut set = GlobSetBuilder::new();
     for pattern in patterns {
@@ -31,7 +28,6 @@ pub fn compile(patterns: &[String]) -> Result<GlobSet, Error> {
     set.build().map_err(|e| Error::new(ErrorCode::Usage, format!("--files patterns do not compile: {e}")))
 }
 
-/// One flag per file. Fails with `no_selection` when patterns match nothing.
 pub fn wanted(metainfo: &Metainfo, selection: &Selection) -> Result<Vec<bool>, Error> {
     let patterns = match selection {
         Selection::All => return Ok(vec![true; metainfo.files.len()]),
@@ -48,7 +44,6 @@ pub fn wanted(metainfo: &Metainfo, selection: &Selection) -> Result<Vec<bool>, E
     }
 }
 
-/// Where each wanted file lands: `<dir>/<name>` for a single file, `<dir>/<name>/<path>` otherwise.
 pub fn targets(metainfo: &Metainfo, dir: &Path, wanted: &[bool]) -> Vec<PathBuf> {
     let root = dir.join(&metainfo.name);
     if metainfo.single_file {

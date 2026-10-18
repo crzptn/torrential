@@ -1,6 +1,3 @@
-//! Length-prefixed JSON frames over the engine socket, blocking for the client and async
-//! for the engine.
-
 use std::io::{self, Read, Write};
 
 use serde::Serialize;

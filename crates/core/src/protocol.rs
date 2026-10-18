@@ -80,7 +80,7 @@ pub struct GetReply {
     pub job: Job,
     /// Present for `--dry-run`, and when files are already known.
     pub plan: Option<DownloadPlan>,
-    /// For `updated`: the file selection before this request.
+    /// For `updated`, and for a `--dry-run` that would change the selection: the selection before this request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_selection: Option<Selection>,
 }

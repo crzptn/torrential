@@ -18,7 +18,7 @@ use crate::completions::complete_download_ids;
     after_help = "Examples:\n  torrential search arch linux iso\n  torrential get 9b5212 --dir ~/isos\n  torrential wait 9b5212"
 )]
 pub struct Cli {
-    /// Print one JSON document on stdout instead of text
+    /// Print JSON on stdout instead of text
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -85,7 +85,7 @@ pub struct SearchArgs {
     /// Hide results with fewer reported seeders, and results with unknown seeders
     #[arg(long, value_name = "N")]
     pub min_seeds: Option<u32>,
-    /// Hide larger results, and results with unknown size, such as 8GiB
+    /// Hide results larger than this, for example 8GiB, and results with unknown size
     #[arg(long, value_name = "SIZE", value_parser = parse_size)]
     pub max_size: Option<u64>,
     /// Order of the results. Relevance comes before popularity
@@ -117,13 +117,13 @@ pub struct GetArgs {
     /// An ID prefix, infohash, magnet link, .torrent file, or .torrent URL
     #[arg(value_name = "REF", add = ArgValueCandidates::new(complete_download_ids))]
     pub reference: String,
-    /// Download only files matching this glob or exact path. Repeat to add more
+    /// Download only files matching this glob or exact path. `*` crosses folders and case is ignored. Repeat to add more
     #[arg(long, value_name = "GLOB")]
     pub files: Vec<String>,
     /// The folder the download goes into
     #[arg(long, value_name = "DIR")]
     pub dir: Option<PathBuf>,
-    /// Allow a download larger than the 50 GiB cap, such as 120GiB
+    /// The largest download allowed, for example 120GiB. Without it the cap is 50 GiB
     #[arg(long, value_name = "SIZE", value_parser = parse_size)]
     pub max_size: Option<u64>,
     /// Print the selected size, destination, free space, and conflicts without downloading
@@ -146,7 +146,7 @@ pub struct WaitArgs {
     /// Stop when the download is done, or as soon as its file list is known
     #[arg(long, value_enum, default_value_t = Until::Done)]
     pub until: Until,
-    /// Give up after this long. Defaults to 100s off a terminal and no limit on one
+    /// Give up after this long. Defaults to 100s, or no limit when a person watches in a terminal
     #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
     pub timeout: Option<Duration>,
 }

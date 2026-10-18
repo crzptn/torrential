@@ -1,5 +1,3 @@
-//! Turning a typed ID prefix into one download or one recent search result.
-
 use torrential_core::error::{Candidate, Details};
 use torrential_core::id::shortest_unique_prefix;
 use torrential_core::{Error, ErrorCode, HexPrefix, Release, ReleaseId, TorrentId};
@@ -10,14 +8,12 @@ pub enum Found<'a> {
     Release(&'a Release),
 }
 
-/// What a prefix may name: downloads only, or downloads and recent search results.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scope {
     Downloads,
     DownloadsAndResults,
 }
 
-/// `command` names the subcommand in hints, such as `get`.
 pub fn prefix<'a>(
     prefix: &HexPrefix,
     jobs: &[(TorrentId, Option<&str>)],

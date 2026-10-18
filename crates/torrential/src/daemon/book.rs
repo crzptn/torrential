@@ -20,7 +20,7 @@ pub enum Intent {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Observed {
-    /// Not in the engine: waiting for a download slot.
+    /// Not in the engine. A running download here waits for a slot.
     Absent,
     /// Not in the engine since the engine restarted. Waits for `resume` or a new `get`.
     Parked,
@@ -41,7 +41,6 @@ pub enum Phase {
     },
 }
 
-/// What a running `verify` does once the recheck reports.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Verify {
     Report,
@@ -64,7 +63,6 @@ pub fn status(intent: &Intent, observed: Observed) -> JobStatus {
 }
 
 impl Observed {
-    /// Holds one of the active-download slots.
     pub fn occupies_slot(self) -> bool {
         matches!(
             self,
@@ -77,7 +75,6 @@ impl Observed {
     }
 }
 
-/// The stored part of a job.
 #[derive(Clone, PartialEq, Debug)]
 pub struct JobRecord {
     pub id: TorrentId,
@@ -112,7 +109,6 @@ impl JobEntry {
         self.record.id
     }
 
-    /// One flag per file, once the file list is known and the selection matches.
     pub fn wanted(&self) -> Option<Vec<bool>> {
         files::wanted(self.metainfo.as_deref()?, &self.record.selection).ok()
     }
@@ -131,7 +127,6 @@ impl JobEntry {
         }
     }
 
-    /// Bytes still to download, for disk admission.
     pub fn remaining(&self) -> u64 {
         match self.record.intent {
             Intent::Running => self.selected_size().map_or(0, |size| size.saturating_sub(self.verified())),
@@ -171,7 +166,6 @@ impl JobEntry {
     }
 }
 
-/// Jobs to start now: running, waiting for a slot, oldest first, as many as there are free slots.
 pub fn to_start<'a>(jobs: impl Iterator<Item = &'a JobEntry>, max_active: usize) -> Vec<TorrentId> {
     let mut waiting = Vec::new();
     let mut active = 0;

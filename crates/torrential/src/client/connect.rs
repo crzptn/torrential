@@ -1,6 +1,3 @@
-//! Reaching the engine: connect, handshake, start it when absent, and restart one left
-//! over from another version.
-
 use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
@@ -53,7 +50,6 @@ impl Conn {
     }
 }
 
-/// The engine that is already running, without starting one.
 pub fn existing(paths: &Paths, env: &Env) -> Result<Option<Conn>, Error> {
     let socket = paths.socket();
     let stream = match UnixStream::connect(&socket) {
@@ -97,7 +93,6 @@ pub fn ensure(paths: &Paths, env: &Env) -> Result<Conn, Error> {
     launch::start(paths, env)
 }
 
-/// Asks the engine to save its state and exit, then waits until its process is gone.
 pub fn stop(mut conn: Conn) -> Result<u32, Error> {
     let pid = conn.pid;
     // The engine may exit before its reply arrives; the process check below is what counts.

@@ -1,5 +1,3 @@
-//! Cell formats shared by plain and human output.
-
 use std::time::Duration;
 
 use torrential_core::Progress;
@@ -12,7 +10,6 @@ pub fn size(bytes: Option<u64>) -> String {
     bytes.map_or_else(|| UNKNOWN.to_string(), format_size)
 }
 
-/// `34.1%`, `100%` only when every byte is verified, `-` before the size is known.
 pub fn percent(progress: &Progress) -> String {
     match progress.size {
         None => NONE.to_string(),
@@ -37,12 +34,10 @@ pub fn elapsed(d: Duration) -> String {
     if d.as_secs() < 600 { format!("{}s", d.as_secs()) } else { format_duration(d) }
 }
 
-/// `0.7s` or `12.4s`.
 pub fn seconds_tenths(ms: u32) -> String {
     format!("{}.{}s", ms / 1000, ms % 1000 / 100)
 }
 
-/// `45m`, `5h`, `17d`, or `2y`. Days run up to two years.
 pub fn age(published: Option<i64>, now: i64) -> String {
     let Some(published) = published else { return UNKNOWN.to_string() };
     let secs = now.saturating_sub(published).max(0) as u64;
@@ -54,7 +49,6 @@ pub fn age(published: Option<i64>, now: i64) -> String {
     }
 }
 
-/// Unix seconds as `2026-10-18T09:12:03Z`.
 pub fn timestamp(unix: i64) -> String {
     let days = unix.div_euclid(86_400);
     let secs = unix.rem_euclid(86_400);
@@ -76,7 +70,6 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-/// Quotes a word for a POSIX shell only when it needs quoting.
 pub fn shell_word(word: &str) -> String {
     let plain = !word.is_empty() && word.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_./:=@%+,".contains(&b));
     if plain { word.to_string() } else { format!("'{}'", word.replace('\'', r"'\''")) }

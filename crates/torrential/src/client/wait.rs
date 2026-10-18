@@ -1,6 +1,3 @@
-//! `torrential wait`, and the live progress `get` attaches on a terminal. The engine
-//! streams job updates; this side decides when the wait ends and what to print.
-
 use std::io::Write;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -19,7 +16,6 @@ use crate::wire;
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(100);
 const HUMAN_HEARTBEAT: Duration = Duration::from_secs(240);
 
-/// At least one progress line every twentieth of the timeout, kept between 1 and 4 minutes.
 pub fn heartbeat(timeout: Option<Duration>) -> Duration {
     timeout.map_or(HUMAN_HEARTBEAT, |t| (t / 20).clamp(Duration::from_secs(60), Duration::from_secs(240)))
 }
@@ -44,7 +40,6 @@ pub fn evaluate(jobs: &[Job], ids: &[String], until: Until) -> Option<WaitEnd> {
         .map(|id| WaitEnd::Stopped { id })
 }
 
-/// Prints wait output for plain and JSON modes.
 pub struct Printer {
     pub mode: Mode,
 }
@@ -155,7 +150,6 @@ fn events(conn: Conn, request: &Request) -> Result<(Vec<Job>, Events), Error> {
     Ok((jobs, rx))
 }
 
-/// Plain and JSON `wait`. Returns the exit code.
 pub fn run(
     conn: Conn,
     refs: Vec<String>,

@@ -52,7 +52,6 @@ pub fn setup(shell: Shell) -> Setup {
     }
 }
 
-/// Valid shell either way: a comment naming the file, then the line to add to it.
 pub fn script(setup: &Setup) -> String {
     format!("# add this line to {}\n{}\n", setup.rc_file, setup.line)
 }

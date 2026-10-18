@@ -28,7 +28,6 @@ pub struct OwnerConfig {
     pub max_active: usize,
     /// `None` never exits when idle, for a service-managed engine.
     pub idle_timeout: Option<Duration>,
-    /// A service-managed engine resumes downloads that were running when it stopped.
     pub resume_on_start: bool,
 }
 
@@ -37,16 +36,11 @@ const WRITES_STOP_WITHIN: Duration = Duration::from_secs(10);
 
 pub type Reply<T> = oneshot::Sender<Result<T, Error>>;
 
-/// What a `get` or `files` names, resolved by the connection task.
 #[derive(Clone, Debug)]
 pub enum Source {
-    /// A download a prefix already named.
     Download(TorrentId),
     Magnet(Magnet),
-    Torrent {
-        metainfo: Metainfo,
-        origin: Origin,
-    },
+    Torrent { metainfo: Metainfo, origin: Origin },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -74,7 +68,6 @@ pub enum Resolved {
     Release { release: Box<Release>, cached: Option<Arc<Metainfo>> },
 }
 
-/// A torrent's file list, and what a download of it wants, for `files`.
 #[derive(Clone, Debug)]
 pub struct FilesInfo {
     pub id: TorrentId,
@@ -286,7 +279,6 @@ impl Owner {
         }
     }
 
-    /// Every download, oldest first, when `refs` is empty.
     fn resolve_jobs(&self, refs: &[String], command: &'static str) -> Result<Vec<TorrentId>, Error> {
         if refs.is_empty() {
             let mut all: Vec<&JobEntry> = self.jobs.values().collect();

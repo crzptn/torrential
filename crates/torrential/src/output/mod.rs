@@ -1,6 +1,3 @@
-//! How results reach the reader. Commands build a [`Doc`] or a JSON document and never
-//! print on their own.
-
 pub mod format;
 pub mod theme;
 pub mod views;
@@ -14,13 +11,10 @@ use torrential_core::text::sanitize;
 use crate::env::Env;
 use theme::{Token, paint};
 
-/// Chosen once per process.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Json,
-    /// Tab-separated lists and `key: value` objects, for agents and pipes.
     Plain,
-    /// Aligned, colored tables and live progress, for a person at a terminal.
     Human,
 }
 
@@ -36,26 +30,17 @@ impl Mode {
     }
 }
 
-/// One command's text output, independent of plain or human styling.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Doc {
     pub body: Body,
     pub summary: Vec<String>,
-    /// The command to run next. `None` when nothing is left to do.
     pub next: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Body {
-    Table {
-        header: Vec<&'static str>,
-        rows: Vec<Vec<Cell>>,
-    },
-    /// A single object: an optional title line, then `key: value` lines.
-    Fields {
-        title: Vec<Cell>,
-        fields: Vec<(&'static str, Cell)>,
-    },
+    Table { header: Vec<&'static str>, rows: Vec<Vec<Cell>> },
+    Fields { title: Vec<Cell>, fields: Vec<(&'static str, Cell)> },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -172,14 +157,12 @@ fn push_line(out: &mut String, line: &str) {
     out.push('\n');
 }
 
-/// The `--json` document: `schema` first, then the payload's fields, then `next`.
 pub fn json_document(payload: &impl Serialize, next: Option<&str>) -> String {
     let mut map = json_fields(payload);
     map.insert("next".into(), next.into());
     finish_json(map)
 }
 
-/// One NDJSON line of a stream, without `next`.
 pub fn json_line(payload: &impl Serialize) -> String {
     finish_json(json_fields(payload))
 }
@@ -202,7 +185,6 @@ fn finish_json(map: serde_json::Map<String, serde_json::Value>) -> String {
     text
 }
 
-/// A JSON payload with a `type`, for outputs that are not an engine reply.
 #[derive(Serialize)]
 pub struct Typed<T: Serialize> {
     #[serde(rename = "type")]
@@ -226,7 +208,6 @@ struct ErrorDocument<'a> {
     error: &'a Error,
 }
 
-/// Where an error goes and what it says, per mode.
 pub struct ErrorOutput {
     pub stdout: String,
     pub stderr: String,

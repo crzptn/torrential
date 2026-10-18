@@ -36,7 +36,6 @@ impl SearchPort for Unwired {
     }
 }
 
-/// A search service with a fixed catalog, shared with tests so they can change it.
 #[derive(Clone, Default)]
 pub struct Fake(Arc<Mutex<FakeState>>);
 
@@ -59,7 +58,6 @@ impl Fake {
         self.0.lock().unwrap().torrents.insert(url.to_string(), bytes);
     }
 
-    /// Makes every search take this long, to show it never holds up other commands.
     #[cfg(test)]
     pub fn set_delay(&self, delay: Duration) {
         self.0.lock().unwrap().delay = delay;

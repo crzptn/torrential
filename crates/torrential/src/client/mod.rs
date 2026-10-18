@@ -1,5 +1,3 @@
-//! The thin client: parse at the boundary, ask the engine, print the answer.
-
 pub mod connect;
 pub mod launch;
 pub mod service;
@@ -43,7 +41,6 @@ fn emit(mode: Mode, doc: &output::Doc, payload: &impl Serialize) -> u8 {
     0
 }
 
-/// The reply, or the error it carries.
 fn answer(response: Response) -> Result<Response, Error> {
     match response {
         Response::Error { error } => Err(error),
@@ -205,7 +202,6 @@ fn absolute(path: &Path, cwd: &Path, env: &Env) -> PathBuf {
     cwd.join(expanded)
 }
 
-/// Download references as the engine resolves them: prefixes, full hashes, or magnets.
 fn job_refs(references: &[String], cwd: &Path) -> Result<Vec<String>, Error> {
     references
         .iter()

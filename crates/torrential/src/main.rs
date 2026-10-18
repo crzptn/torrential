@@ -1,6 +1,3 @@
-//! torrential: search torrent indexes and download torrents, from a terminal or an agent.
-//! One binary with two roles: a thin client, and the engine process it starts.
-
 mod cli;
 mod client;
 mod completions;
@@ -62,7 +59,6 @@ fn main() -> ExitCode {
     ExitCode::from(client::run(command, mode, &env))
 }
 
-/// Clap's message, first line only, with the subcommand's help as the hint.
 fn usage_error(e: &clap::Error, args: &[String]) -> Error {
     let rendered = e.render().to_string();
     let message = rendered.lines().next().unwrap_or("invalid arguments").trim_start_matches("error: ").to_string();

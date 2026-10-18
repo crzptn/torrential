@@ -1,6 +1,3 @@
-//! `torrential daemon run`: the engine process. It owns every download, the SQLite store,
-//! the torrent engine, and the search service, and serves clients over a Unix socket.
-
 pub mod admission;
 pub mod book;
 pub mod engine_port;
@@ -47,8 +44,8 @@ pub struct Ports {
 }
 
 impl Ports {
-    /// Real ports when torrential is built with them. Until the wiring round, the engine and
-    /// search are unwired, and `TORRENTIAL_TEST_ENGINE=fake` simulates both for tests.
+    /// `TORRENTIAL_TEST_ENGINE=fake` swaps in the simulated engine and search, for tests and for
+    /// trying the CLI without a network.
     fn from_env(env: &Env) -> Self {
         if env.var("TORRENTIAL_TEST_ENGINE") == Some("fake") {
             let rate =
@@ -69,13 +66,11 @@ impl Ports {
     }
 }
 
-/// A running engine without its socket: the owner task, the engine thread, and the shared context.
 pub struct Running {
     pub ctx: Arc<Ctx>,
     pub owner: tokio::task::JoinHandle<()>,
 }
 
-/// Starts the actors. Must run inside a Tokio runtime.
 pub fn start(store: Store, ports: Ports, config: OwnerConfig, version: String) -> Result<Running, Error> {
     let (events_tx, events) = mpsc::unbounded_channel();
     let (engine, _thread) = engine_port::spawn(ports.engine, events_tx);
@@ -91,7 +86,6 @@ pub fn log(message: &str) {
     eprintln!("{} {message}", crate::output::format::timestamp(owner::now()));
 }
 
-/// Returns the process exit code.
 pub fn run(env: &Env, service: bool) -> u8 {
     let paths = match Paths::from_process(env) {
         Ok(paths) => paths,

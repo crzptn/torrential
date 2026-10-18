@@ -1,5 +1,3 @@
-//! One function per command result, turning typed data into a [`Doc`].
-
 use std::time::Duration;
 
 use torrential_core::id::shortest_unique_prefix;
@@ -47,7 +45,6 @@ pub fn release_ids(releases: &[Release]) -> Vec<String> {
         .collect()
 }
 
-/// Shortens a full ID string from the engine to its first characters, keeping a `u`.
 pub fn short_ref(id: &str) -> String {
     let (lead, hex) = id.strip_prefix('u').map_or(("", id), |rest| ("u", rest));
     format!("{lead}{}", &hex[..hex.len().min(SHORT_ID)])
@@ -433,21 +430,13 @@ pub fn changes(command: ChangeCommand, changes: &[Change]) -> Doc {
     Doc { body: Body::Table { header, rows }, summary, next }
 }
 
-/// The end of a `wait`: why it stopped and what that means for the exit code.
 #[derive(Clone, PartialEq, Debug)]
 pub enum WaitEnd {
     Done,
     Metadata,
-    /// Still running when the timeout passed.
     Timeout,
-    /// A download stopped with an error.
-    Failed {
-        id: String,
-    },
-    /// A download is paused or interrupted, so it will not finish on its own.
-    Stopped {
-        id: String,
-    },
+    Failed { id: String },
+    Stopped { id: String },
 }
 
 impl WaitEnd {
@@ -478,7 +467,6 @@ pub fn wait_row(elapsed: Duration, id: &str, job: &Job) -> Vec<Cell> {
     row
 }
 
-/// The closing `#` lines and `next` of a wait, after its rows.
 pub fn wait_end(end: &WaitEnd, elapsed: Duration, jobs: &[Job], ids: &[String]) -> (Vec<String>, Option<String>) {
     let after = format::elapsed(elapsed);
     let all = ids.join(" ");

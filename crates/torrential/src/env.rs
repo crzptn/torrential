@@ -1,5 +1,3 @@
-//! The process environment, read once at startup so detection is a pure function of it.
-
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default)]
@@ -7,7 +5,6 @@ pub struct Env {
     vars: HashMap<String, String>,
 }
 
-/// The coding agent running torrential, when one is detected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Agent {
     ClaudeCode,
@@ -37,7 +34,6 @@ impl Env {
         Self { vars: pairs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
     }
 
-    /// A set, non-empty variable.
     pub fn var(&self, key: &str) -> Option<&str> {
         self.vars.get(key).map(String::as_str).filter(|v| !v.is_empty())
     }

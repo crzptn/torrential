@@ -1,8 +1,7 @@
-//! Starting a detached engine. The client starts a short-lived launcher in a new session,
-//! which starts the engine and exits. Measured under Codex: a child that keeps the tool's
-//! process group dies when the call returns, and a child holding the tool's stdout hangs
-//! the call until it times out. So the launcher closes every inherited descriptor and the
-//! engine writes only to its log.
+//! Measured under Codex: a child that keeps the tool's process group dies when the call
+//! returns, and a child holding the tool's stdout hangs the call until it times out. So the
+//! client starts a short-lived launcher in a new session, the launcher closes every
+//! inherited descriptor, and the engine writes only to its log.
 
 use std::io::Read;
 use std::os::unix::process::CommandExt;
@@ -25,8 +24,7 @@ pub enum Blocked {
     Ipc { socket: PathBuf },
 }
 
-/// Why this process looks sandboxed, if it does. An engine started here would inherit the
-/// sandbox for life and never reach a peer.
+/// An engine started inside a sandbox inherits it for life and never reaches a peer.
 pub fn sandbox_signal(env: &Env, send_udp: impl FnOnce() -> std::io::Result<()>) -> Option<String> {
     if env.var("CODEX_SANDBOX_NETWORK_DISABLED") == Some("1") {
         return Some("CODEX_SANDBOX_NETWORK_DISABLED=1".to_string());
@@ -39,7 +37,7 @@ pub fn sandbox_signal(env: &Env, send_udp: impl FnOnce() -> std::io::Result<()>)
     }
 }
 
-/// One datagram to TEST-NET-1, which routes nowhere. Only a sandbox denies the send itself.
+/// TEST-NET-1 routes nowhere, so only a sandbox or a host firewall denies the send itself.
 pub fn send_udp() -> std::io::Result<()> {
     let socket = std::net::UdpSocket::bind(("0.0.0.0", 0))?;
     socket.send_to(&[0], ("192.0.2.1", 9)).map(drop)
@@ -77,7 +75,6 @@ pub fn sandbox_error(blocked: Blocked, env: &Env) -> Error {
         .with_hint(hint)
 }
 
-/// Starts an engine and connects to it.
 pub fn start(paths: &Paths, env: &Env) -> Result<Conn, Error> {
     if let Some(signal) = sandbox_signal(env, send_udp) {
         return Err(sandbox_error(Blocked::Network { signal }, env));
@@ -121,8 +118,6 @@ pub fn start(paths: &Paths, env: &Env) -> Result<Conn, Error> {
     }
 }
 
-/// `torrential daemon launch`: the middle process. It runs in its own session, starts the
-/// engine with its output in the log, prints the engine's pid, and exits.
 pub fn launch_stage(env: &Env) -> u8 {
     close_inherited_descriptors();
     let result = (|| -> Result<u32, String> {

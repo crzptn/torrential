@@ -1,5 +1,3 @@
-//! Where torrential keeps its files.
-
 use std::path::{Path, PathBuf};
 
 use torrential_core::{Error, ErrorCode};
@@ -9,10 +7,8 @@ use crate::env::Env;
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Paths {
     pub config: PathBuf,
-    /// The SQLite store, the owner lock, and the engine log.
     pub state: PathBuf,
     pub cache: PathBuf,
-    /// Mode 0700. Holds the engine socket.
     pub runtime: PathBuf,
     pub downloads: PathBuf,
 }
@@ -30,9 +26,6 @@ impl Paths {
         Self::resolve(env, uid, dirs::download_dir())
     }
 
-    /// `TORRENTIAL_HOME` puts config, state, cache, and runtime under one directory.
-    /// Otherwise the XDG directories apply, with `/tmp/torrential-<uid>` for the socket
-    /// when `XDG_RUNTIME_DIR` is unset, as on macOS.
     pub fn resolve(env: &Env, uid: u32, os_downloads: Option<PathBuf>) -> Result<Self, Error> {
         let home = env.var("HOME").map(PathBuf::from);
         let torrential_home = env.var("TORRENTIAL_HOME").map(PathBuf::from);
@@ -112,7 +105,8 @@ fn no_home() -> Error {
 pub fn network_filesystem(path: &Path) -> std::io::Result<Option<String>> {
     use std::os::unix::ffi::OsStrExt;
     let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
-    // SAFETY: statfs writes only into the zeroed struct we pass, and c_path is NUL-terminated.
+    // SAFETY: statfs is plain data, so all zeros is a valid value. The call writes only into it,
+    // and c_path is NUL-terminated.
     let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statfs(c_path.as_ptr(), &mut stat) } != 0 {
         return Err(std::io::Error::last_os_error());
@@ -143,7 +137,6 @@ fn network_kind(stat: &libc::statfs) -> Option<String> {
     Some(kind.to_string())
 }
 
-/// Refuses a state directory where SQLite cannot keep its guarantees.
 pub fn check_state_filesystem(state: &Path) -> Result<(), Error> {
     match network_filesystem(state) {
         Ok(None) => Ok(()),

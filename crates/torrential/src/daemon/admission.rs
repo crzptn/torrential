@@ -1,5 +1,4 @@
-//! Whether a download may start: size cap, existing files, and free disk. The checks are
-//! pure functions of a [`Space`] report, so tests feed them a fake filesystem.
+//! Disk state comes in through [`Disk`], so tests run the checks against a fake filesystem.
 
 use std::path::{Path, PathBuf};
 
@@ -29,7 +28,6 @@ pub trait Disk: Send {
     fn exists(&self, path: &Path) -> bool;
 }
 
-/// Free space to keep: 5% of the disk, and never less than 2 GiB.
 pub fn reserve(total: u64) -> u64 {
     (total / 20).max(MIN_RESERVE)
 }
@@ -56,7 +54,7 @@ impl Plan {
     }
 }
 
-/// `before` names the files a download already wanted, so files it wrote itself are not conflicts.
+/// Files in `already_wanted` were written by this download, so they are not conflicts.
 pub fn plan(
     metainfo: &Metainfo,
     selection: &Selection,
@@ -108,8 +106,6 @@ pub fn check_conflicts(plan: &Plan) -> Result<(), Error> {
     .with_hint("choose another folder with --dir, or move the existing files; torrential never overwrites"))
 }
 
-/// `needed` is what this download still has to write; `committed` is what other running
-/// downloads on the same disk still have to write.
 pub fn check_disk(space: Space, needed: u64, committed: u64) -> Result<(), Error> {
     let keep = reserve(space.total);
     let required = needed + committed + keep;
@@ -139,7 +135,8 @@ impl Disk for RealDisk {
         let existing = path.ancestors().find(|p| p.exists()).unwrap_or(Path::new("/"));
         let device = std::fs::metadata(existing)?.dev();
         let c_path = std::ffi::CString::new(existing.as_os_str().as_bytes())?;
-        // SAFETY: statvfs writes only into the zeroed struct, and c_path is NUL-terminated.
+        // SAFETY: statvfs is plain data, so all zeros is a valid value. The call writes only into it,
+        // and c_path is NUL-terminated.
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) } != 0 {
             return Err(std::io::Error::last_os_error());
@@ -166,7 +163,6 @@ impl Disk for RoomyDisk {
     }
 }
 
-/// One disk with a fixed report and a set of existing paths, shared with tests.
 #[cfg(test)]
 #[derive(Clone)]
 pub struct FakeDisk(std::sync::Arc<std::sync::Mutex<(Space, std::collections::BTreeSet<PathBuf>)>>);

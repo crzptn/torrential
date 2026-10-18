@@ -1,6 +1,3 @@
-//! The SQLite store. Only the owner task holds it, so it is the only writer. Rows decode
-//! into domain types here and nowhere else.
-
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
@@ -9,7 +6,7 @@ use torrential_core::{Error, ErrorCode, InfoHash, Release, Selection, TorrentId}
 
 use super::book::{Intent, JobRecord};
 
-/// Each entry upgrades the schema by one version. Never edit a shipped entry.
+/// A database records how many entries it has run, so a shipped entry must never change.
 const MIGRATIONS: &[&str] = &[r#"
 CREATE TABLE jobs (
     id TEXT PRIMARY KEY,
@@ -262,7 +259,6 @@ impl Store {
         })
     }
 
-    /// Records what a magnet's metadata revealed: the name, every hash, and the `.torrent` bytes.
     pub fn learn(
         &mut self,
         id: TorrentId,
@@ -303,7 +299,7 @@ impl Store {
         self.write(|tx| save_resume(tx, id, bytes, verified, now))
     }
 
-    /// Done and its final resume data commit together, so a crash between them cannot happen.
+    /// One transaction, so a crash cannot mark a download done without its final resume data.
     pub fn finish(&mut self, id: TorrentId, finished_at: i64, bytes: &[u8], verified: u64) -> Result<(), Error> {
         self.write(|tx| {
             save_resume(tx, id, bytes, verified, finished_at)?;

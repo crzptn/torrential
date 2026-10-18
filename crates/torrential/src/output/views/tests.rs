@@ -1,5 +1,3 @@
-//! Golden output for every command and every error class, rendered from fixture values.
-
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,7 +22,6 @@ fn tid(hex: &str) -> TorrentId {
     format!("{hex}{}", "0".repeat(40 - hex.len())).parse().unwrap()
 }
 
-/// Both renderings of one command result: plain text, then the JSON document pretty-printed.
 fn both(doc: &Doc, payload: &impl serde::Serialize) -> String {
     let json = render(Mode::Json, doc, payload);
     assert_eq!(json.matches('\n').count(), 1, "a JSON document is one line");
@@ -501,7 +498,6 @@ fn schema_document() {
     insta::assert_snapshot!(serde_json::to_string_pretty(&value).unwrap());
 }
 
-/// One error of every class, built by the code that raises it where that code exists.
 fn sample(code: ErrorCode) -> Error {
     use crate::daemon::admission::{self, Plan, Space};
     use crate::daemon::engine_port::FakeTorrentFile;

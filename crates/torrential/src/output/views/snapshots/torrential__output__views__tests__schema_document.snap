@@ -51,7 +51,7 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
         },
         {
           "name": "--max-size",
-          "help": "Hide larger results, and results with unknown size, such as 8GiB",
+          "help": "Hide results larger than this, for example 8GiB, and results with unknown size",
           "takes_value": true,
           "repeatable": false,
           "value_name": "SIZE"
@@ -127,7 +127,7 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
       "flags": [
         {
           "name": "--files",
-          "help": "Download only files matching this glob or exact path. Repeat to add more",
+          "help": "Download only files matching this glob or exact path. `*` crosses folders and case is ignored. Repeat to add more",
           "takes_value": true,
           "repeatable": true,
           "value_name": "GLOB"
@@ -141,7 +141,7 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
         },
         {
           "name": "--max-size",
-          "help": "Allow a download larger than the 50 GiB cap, such as 120GiB",
+          "help": "The largest download allowed, for example 120GiB. Without it the cap is 50 GiB",
           "takes_value": true,
           "repeatable": false,
           "value_name": "SIZE"
@@ -193,7 +193,7 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
         },
         {
           "name": "--timeout",
-          "help": "Give up after this long. Defaults to 100s off a terminal and no limit on one",
+          "help": "Give up after this long. Defaults to 100s, or no limit when a person watches in a terminal",
           "takes_value": true,
           "repeatable": false,
           "value_name": "DURATION"
@@ -327,7 +327,7 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
   "global_flags": [
     {
       "name": "--json",
-      "help": "Print one JSON document on stdout instead of text",
+      "help": "Print JSON on stdout instead of text",
       "takes_value": false,
       "repeatable": false
     }

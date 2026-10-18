@@ -108,10 +108,12 @@ pub enum EngineEvent {
         id: TorrentId,
         damaged_pieces: u32,
     },
+    /// A command failed, or the torrent stopped with an error such as a full disk.
     Failed {
         id: TorrentId,
         error: Error,
     },
+    /// The torrent left the engine. Adding the same torrent again before this fails.
     Removed {
         id: TorrentId,
     },
@@ -213,7 +215,6 @@ fn apply(port: &mut dyn EnginePort, command: EngineCommand) -> Option<EngineEven
     result.err().map(|error| EngineEvent::Failed { id, error })
 }
 
-/// A build without a torrent engine. The process still serves status and search.
 #[derive(Default)]
 pub struct Unwired {
     removed: Vec<TorrentId>,
@@ -292,17 +293,14 @@ pub fn parse_fake(bytes: &[u8]) -> Result<Metainfo, Error> {
         .map_err(|e| Error::new(ErrorCode::InvalidTorrent, format!("not a torrent file: {e}")))
 }
 
-/// The swarm a [`Fake`] downloads from, shared with tests so they can steer it.
 #[derive(Clone, Default)]
 pub struct Swarm(Arc<Mutex<SwarmState>>);
 
 #[derive(Default)]
 struct SwarmState {
-    /// Torrents peers can send metadata for.
     published: BTreeMap<TorrentId, FakeTorrentFile>,
     /// Without a published torrent, a magnet's `dn` and `xl` describe a one-file torrent.
     invent_from_magnets: bool,
-    /// Bytes per second each torrent downloads.
     rate: u64,
     damaged: BTreeMap<TorrentId, u32>,
 }
@@ -314,7 +312,6 @@ impl Swarm {
         swarm
     }
 
-    /// A swarm that has every magnet's torrent, for running the binary without an engine.
     pub fn inventive(rate: u64) -> Self {
         let swarm = Self::new(rate);
         swarm.0.lock().unwrap().invent_from_magnets = true;
@@ -337,7 +334,6 @@ impl Swarm {
     }
 }
 
-/// An engine that simulates downloads against a [`Swarm`].
 pub struct Fake {
     swarm: Swarm,
     torrents: BTreeMap<TorrentId, FakeTorrent>,
