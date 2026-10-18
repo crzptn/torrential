@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::engine::ArgValueCandidates;
-use torrential_core::{Category, Sort};
+use torrential_core::{Category, Playback, Screen, Sort};
 
 use crate::completions::complete_download_ids;
 
@@ -55,6 +55,11 @@ pub enum Command {
     Rm(RefsArgs),
     /// Re-hash the data on disk and report damaged pieces
     Verify(VerifyArgs),
+    /// Answer three questions once, so search ranks films and shows for your screen and player
+    #[command(
+        after_help = "Examples:\n  torrential setup\n  torrential setup --screen tv-4k --max-size 8GB --playback hevc-hdr\n  torrential setup --skip"
+    )]
+    Setup(SetupArgs),
     /// Diagnose sandbox, disk, state, engine, config, and sources
     Doctor(DoctorArgs),
     /// Open the terminal UI, which `torrential` alone also opens on a terminal
@@ -111,6 +116,30 @@ pub struct SearchArgs {
     #[arg(long)]
     pub fresh: bool,
 }
+
+#[derive(Args, Debug)]
+pub struct SetupArgs {
+    /// What you usually watch on
+    #[arg(long, value_enum)]
+    pub screen: Option<ScreenArg>,
+    /// How big one download can be, for example 8GB, or none for no limit
+    #[arg(long, value_name = "SIZE", value_parser = parse_limit)]
+    pub max_size: Option<Limit>,
+    /// What your player handles. h264 is the safe answer when unsure
+    #[arg(long, value_enum)]
+    pub playback: Option<PlaybackArg>,
+    /// Record that you would rather not answer, so nobody asks again
+    #[arg(long, conflicts_with_all = ["screen", "max_size", "playback"])]
+    pub skip: bool,
+}
+
+/// Every setup flag with every value it takes, for a person or an agent to fill in.
+pub const SETUP_FLAGS: &str =
+    "torrential setup --screen phone|laptop|tv|tv-4k --max-size 2GB|8GB|20GB|none --playback hevc-hdr|hevc|h264";
+
+/// A size cap. `None` is `--max-size none`, no cap.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Limit(pub Option<u64>);
 
 #[derive(Args, Debug)]
 pub struct DoctorArgs {
@@ -255,6 +284,51 @@ impl From<CategoryArg> for Category {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+pub enum ScreenArg {
+    /// A phone or tablet: 1080p, and 720p as readily
+    Phone,
+    /// A laptop or monitor: 1080p
+    Laptop,
+    /// A 1080p TV
+    Tv,
+    /// A 4K TV: 2160p
+    #[value(name = "tv-4k")]
+    Tv4k,
+}
+
+impl From<ScreenArg> for Screen {
+    fn from(arg: ScreenArg) -> Self {
+        match arg {
+            ScreenArg::Phone => Screen::Phone,
+            ScreenArg::Laptop => Screen::Laptop,
+            ScreenArg::Tv => Screen::Tv,
+            ScreenArg::Tv4k => Screen::Tv4k,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+pub enum PlaybackArg {
+    /// HEVC (x265) and HDR
+    #[value(name = "hevc-hdr")]
+    HevcHdr,
+    /// HEVC but not HDR
+    Hevc,
+    /// H.264 (x264) only, which every player handles
+    H264,
+}
+
+impl From<PlaybackArg> for Playback {
+    fn from(arg: PlaybackArg) -> Self {
+        match arg {
+            PlaybackArg::HevcHdr => Playback::HevcHdr,
+            PlaybackArg::Hevc => Playback::Hevc,
+            PlaybackArg::H264 => Playback::H264,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 pub enum SortArg {
     Relevance,
     Seeds,
@@ -275,6 +349,15 @@ impl From<SortArg> for Sort {
 
 fn parse_size(s: &str) -> Result<u64, String> {
     torrential_core::units::parse_size(s).ok_or_else(|| format!("{s:?} is not a size; use a form like 8GiB or 700MB"))
+}
+
+fn parse_limit(s: &str) -> Result<Limit, String> {
+    if s.trim().eq_ignore_ascii_case("none") {
+        return Ok(Limit(None));
+    }
+    torrential_core::units::parse_size(s)
+        .map(|size| Limit(Some(size)))
+        .ok_or_else(|| format!("{s:?} is not a size; use a form like 8GB, or none"))
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
@@ -315,6 +398,42 @@ mod tests {
     fn json_is_accepted_after_the_subcommand() {
         let cli = Cli::try_parse_from(["torrential", "status", "--json"]).unwrap();
         assert!(cli.json);
+    }
+
+    #[test]
+    fn setup_flags_name_the_values_the_config_stores() {
+        let screens = ScreenArg::value_variants().iter().map(|v| v.to_possible_value().unwrap().get_name().to_string());
+        let stored = ScreenArg::value_variants().iter().map(|v| Screen::from(*v).as_str().to_string());
+        assert_eq!(screens.collect::<Vec<_>>(), stored.collect::<Vec<_>>());
+        let players =
+            PlaybackArg::value_variants().iter().map(|v| v.to_possible_value().unwrap().get_name().to_string());
+        let stored = PlaybackArg::value_variants().iter().map(|v| Playback::from(*v).as_str().to_string());
+        assert_eq!(players.collect::<Vec<_>>(), stored.collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn every_value_the_setup_flags_line_lists_parses() {
+        let words: Vec<&str> = SETUP_FLAGS.split(' ').collect();
+        for pair in words[2..].chunks(2) {
+            for value in pair[1].split('|') {
+                let parsed = Cli::try_parse_from(["torrential", "setup", pair[0], value]);
+                assert!(parsed.is_ok(), "{} {value}: {:?}", pair[0], parsed.err());
+            }
+        }
+    }
+
+    #[test]
+    fn setup_takes_a_size_or_none_and_skip_stands_alone() {
+        let max_size = |value: &str| match Cli::try_parse_from(["torrential", "setup", "--max-size", value]) {
+            Ok(Cli { command: Some(Command::Setup(args)), .. }) => Ok(args.max_size),
+            Ok(_) => panic!("expected setup"),
+            Err(e) => Err(e.kind()),
+        };
+        assert_eq!(max_size("8GB"), Ok(Some(Limit(Some(8_000_000_000)))));
+        assert_eq!(max_size("none"), Ok(Some(Limit(None))));
+        assert_eq!(max_size("big"), Err(clap::error::ErrorKind::ValueValidation));
+        let both = Cli::try_parse_from(["torrential", "setup", "--skip", "--screen", "tv"]).unwrap_err();
+        assert_eq!(both.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

@@ -1,6 +1,7 @@
-//! `config.yaml` in the config folder: where downloads go and which sources search
-//! asks. The engine reads it when it starts. A file that does not parse is an error
-//! that names the line, never a silent fallback to the defaults.
+//! `config.yaml` in the config folder: where downloads go, which sources search
+//! asks, and the answers to `torrential setup`. The engine reads it when it starts,
+//! and clients read the answers before each search and download. A file that does not
+//! parse is an error that names the line, never a silent fallback to the defaults.
 //!
 //! ```yaml
 //! downloads:
@@ -11,6 +12,10 @@
 //!     - name: jackett
 //!       url: http://127.0.0.1:9117/api/v2.0/indexers/all/results/torznab/api
 //!       api_key_env: JACKETT_API_KEY
+//! preferences:
+//!   screen: tv-4k
+//!   max_size: 8GB
+//!   playback: hevc-hdr
 //! ```
 
 use std::borrow::Cow;
@@ -19,11 +24,13 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_saphyr::{Localizer, Location, SnippetMode, Spanned, UserMessageFormatter};
-use torrential_core::{Error, ErrorCode};
+use torrential_core::units::{parse_size, size_text};
+use torrential_core::{Error, ErrorCode, Playback, Preferences, Screen};
 use torrential_search::{SearchConfig, TorznabConfig};
 
 use crate::env::Env;
 use crate::paths::Paths;
+use crate::skill::{Writes, write_atomic};
 
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Config {
@@ -33,6 +40,8 @@ pub struct Config {
     pub search: SearchConfig,
     /// The file these settings came from. `None` when there is none and the defaults apply.
     pub file: Option<PathBuf>,
+    /// `None` when the file has no `preferences` block, so nobody has answered yet.
+    pub preferences: Option<Preferences>,
 }
 
 #[derive(Deserialize, Default)]
@@ -40,6 +49,24 @@ pub struct Config {
 struct File {
     downloads: Downloads,
     sources: Sources,
+    preferences: Option<Answers>,
+}
+
+/// The file as a client reads it. The other sections are the engine's to check, and can
+/// name variables that only the engine's environment sets.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct AnswersOnly {
+    preferences: Option<Answers>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct Answers {
+    screen: Option<Screen>,
+    /// A size such as `8GB`, or `none`.
+    max_size: Option<Spanned<String>>,
+    playback: Option<Playback>,
 }
 
 #[derive(Deserialize, Default)]
@@ -91,6 +118,99 @@ impl Config {
     }
 }
 
+/// The file `setup` writes: the one that exists, or `config.yaml`.
+pub fn file(paths: &Paths) -> Result<PathBuf, Error> {
+    Ok(read(paths)?.map_or_else(|| path(paths), |(path, _)| path))
+}
+
+/// The answers to `torrential setup`, read fresh, since the engine reads the file only
+/// when it starts.
+pub fn preferences(paths: &Paths) -> Result<Option<Preferences>, Error> {
+    let Some((path, text)) = read(paths)? else { return Ok(None) };
+    read_preferences(&text).map_err(|(line, message)| invalid(&path, line, &message))
+}
+
+/// Writes `preferences` as the file's top-level `preferences` block. Every other line,
+/// comments included, stays as it was. Returns the file and whether it changed.
+pub fn save_preferences(paths: &Paths, preferences: &Preferences, writes: &Writes) -> Result<(PathBuf, bool), Error> {
+    let (path, text) = read(paths)?.unwrap_or_else(|| (path(paths), String::new()));
+    let edited = with_block(&text, &block(preferences));
+    if read_preferences(&edited).ok().flatten() != Some(*preferences) {
+        return Err(invalid(&path, None, "setup cannot rewrite the preferences block in this file"));
+    }
+    if edited == text {
+        return Ok((path, false));
+    }
+    // Writing through a link keeps a config that lives elsewhere, such as in a dotfiles repo.
+    let target = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| writes.error(dir, e))?;
+    }
+    write_atomic(&target, edited.as_bytes()).map_err(|e| writes.error(&target, e))?;
+    Ok((path, true))
+}
+
+fn read_preferences(text: &str) -> Result<Option<Preferences>, Problem> {
+    let file: AnswersOnly = serde_saphyr::from_str(text).map_err(|e| problem(&e))?;
+    file.preferences.map(Answers::read).transpose()
+}
+
+impl Answers {
+    fn read(self) -> Result<Preferences, Problem> {
+        let max_size = match self.max_size {
+            Some(Spanned { value, referenced, .. }) if value.trim() != "none" => {
+                Some(parse_size(&value).ok_or_else(|| {
+                    let message = format!("preferences.max_size {value:?} is not a size; use a form like 8GB, or none");
+                    (Some(referenced.line()), message)
+                })?)
+            }
+            _ => None,
+        };
+        Ok(Preferences { screen: self.screen, max_size, playback: self.playback })
+    }
+}
+
+/// The block `setup` writes. Unanswered questions are left out, and `{}` records that the
+/// user chose not to answer.
+fn block(preferences: &Preferences) -> String {
+    let lines: Vec<String> = [
+        preferences.screen.map(|s| format!("  screen: {}", s.as_str())),
+        preferences.max_size.map(|max| format!("  max_size: {}", size_text(max))),
+        preferences.playback.map(|p| format!("  playback: {}", p.as_str())),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if lines.is_empty() { "preferences: {}\n".to_string() } else { format!("preferences:\n{}\n", lines.join("\n")) }
+}
+
+/// `text` with `block` in place of its top-level `preferences` block, or after its last
+/// line. The old block is its key line and the indented and blank lines after it, less
+/// trailing blank lines, so a comment at the left margin stays with what follows it.
+fn with_block(text: &str, block: &str) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let is_key = |line: &&str| line.strip_prefix("preferences").is_some_and(|rest| rest.starts_with(':'));
+    let Some(start) = lines.iter().position(is_key) else {
+        let mut out = text.to_string();
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        if !out.trim().is_empty() && !out.ends_with("\n\n") {
+            out.push('\n');
+        }
+        out.push_str(block);
+        return out;
+    };
+    let mut end = start + 1;
+    while end < lines.len() && (lines[end].starts_with([' ', '\t']) || lines[end].trim().is_empty()) {
+        end += 1;
+    }
+    while end > start + 1 && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    [lines[..start].concat(), block.to_string(), lines[end..].concat()].concat()
+}
+
 /// The file and its text. Both names at once is an error, since either could be the one the
 /// user edits.
 fn read(paths: &Paths) -> Result<Option<(PathBuf, String)>, Error> {
@@ -109,8 +229,12 @@ fn read(paths: &Paths) -> Result<Option<(PathBuf, String)>, Error> {
     }
 }
 
+fn problem(error: &serde_saphyr::Error) -> Problem {
+    (error.location().map(|at| at.line()), describe(error))
+}
+
 fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
-    let file: File = serde_saphyr::from_str(text).map_err(|e| (e.location().map(|at| at.line()), describe(&e)))?;
+    let file: File = serde_saphyr::from_str(text).map_err(|e| problem(&e))?;
     let downloads = file
         .downloads
         .dir
@@ -152,7 +276,8 @@ fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
         })
         .collect::<Result<_, _>>()?;
     let search = SearchConfig { torznab, disabled: file.sources.disabled, ..SearchConfig::default() };
-    Ok(Config { downloads, search, file: None })
+    let preferences = file.preferences.map(Answers::read).transpose()?;
+    Ok(Config { downloads, search, file: None, preferences })
 }
 
 /// The message without the line, which `invalid` adds, and without the excerpt of the file.
@@ -268,6 +393,136 @@ sources:
                 Some("move what you want to keep into one file and delete the other")
             )
         );
+    }
+
+    #[test]
+    fn reads_preferences_and_tells_unanswered_from_skipped() {
+        let all = "preferences:\n  screen: tv-4k\n  max_size: 8GB\n  playback: hevc-hdr\n";
+        let read = |text: &str| parse(text, &env()).unwrap().preferences;
+        assert_eq!(
+            read(all),
+            Some(Preferences {
+                screen: Some(Screen::Tv4k),
+                max_size: Some(8_000_000_000),
+                playback: Some(Playback::HevcHdr)
+            })
+        );
+        assert_eq!(read("preferences: {}\n"), Some(Preferences::default()));
+        assert_eq!(read("preferences:\n  max_size: none\n"), Some(Preferences::default()));
+        assert_eq!(read("sources:\n  disabled: [nyaa]\n"), None);
+    }
+
+    #[test]
+    fn bad_preferences_name_the_line() {
+        let cases = [
+            (
+                "preferences:\n  screen: tv4k\n",
+                "line 2: unknown variant `tv4k`, expected one of phone, laptop, tv, tv-4k",
+            ),
+            (
+                "preferences:\n  max_size: lots\n",
+                "line 2: preferences.max_size \"lots\" is not a size; use a form like 8GB, or none",
+            ),
+            (
+                "preferences:\n  speakers: 5.1\n",
+                "line 2: unknown field `speakers`, expected one of screen, max_size, playback",
+            ),
+        ];
+        for (text, expected) in cases {
+            let error = load(text).unwrap_err();
+            assert_eq!(error.message, format!("$TORRENTIAL_HOME/config/config.yaml {expected}"), "{text}");
+        }
+    }
+
+    /// A config folder under a temporary `TORRENTIAL_HOME`.
+    struct Folder {
+        _dir: tempfile::TempDir,
+        paths: Paths,
+    }
+
+    impl Folder {
+        fn new() -> Folder {
+            let dir = tempfile::tempdir().unwrap();
+            let env = Env::from_pairs([("HOME", "/Users/ada"), ("TORRENTIAL_HOME", dir.path().to_str().unwrap())]);
+            let paths = Paths::resolve(&env, 501, None).unwrap();
+            Folder { _dir: dir, paths }
+        }
+
+        fn write(&self, text: &str) {
+            std::fs::create_dir_all(&self.paths.config).unwrap();
+            std::fs::write(path(&self.paths), text).unwrap();
+        }
+
+        fn text(&self) -> String {
+            std::fs::read_to_string(path(&self.paths)).unwrap()
+        }
+
+        fn save(&self, preferences: Preferences) -> bool {
+            let writes = Writes { sandboxed: false, rerun: "torrential setup".into() };
+            save_preferences(&self.paths, &preferences, &writes).unwrap().1
+        }
+    }
+
+    const LAPTOP: Preferences =
+        Preferences { screen: Some(Screen::Laptop), max_size: Some(2_000_000_000), playback: Some(Playback::H264) };
+
+    #[test]
+    fn setup_replaces_only_the_preferences_block_and_keeps_comments() {
+        let folder = Folder::new();
+        folder.write(
+            "# where films go\ndownloads:\n  dir: ~/films # big disk\n\npreferences:\n  # old answers\n  screen: tv\n  \
+             max_size: 20GB\n\n# indexers\nsources:\n  disabled: [nyaa]\n",
+        );
+
+        let changed = folder.save(LAPTOP);
+
+        assert!(changed);
+        assert_eq!(
+            folder.text(),
+            "# where films go\ndownloads:\n  dir: ~/films # big disk\n\npreferences:\n  screen: laptop\n  \
+             max_size: 2GB\n  playback: h264\n\n# indexers\nsources:\n  disabled: [nyaa]\n"
+        );
+        assert_eq!(preferences(&folder.paths).unwrap(), Some(LAPTOP));
+        assert!(!folder.save(LAPTOP), "saving the same answers again changes nothing");
+    }
+
+    #[test]
+    fn setup_adds_the_block_after_the_last_line_or_creates_the_file() {
+        let existing = Folder::new();
+        existing.write("sources:\n  disabled: [nyaa] # too slow");
+        let missing = Folder::new();
+
+        existing.save(LAPTOP);
+        missing.save(LAPTOP);
+
+        let block = "preferences:\n  screen: laptop\n  max_size: 2GB\n  playback: h264\n";
+        assert_eq!(existing.text(), format!("sources:\n  disabled: [nyaa] # too slow\n\n{block}"));
+        assert_eq!(missing.text(), block);
+    }
+
+    #[test]
+    fn skipping_setup_writes_an_empty_block() {
+        let folder = Folder::new();
+        folder.write("preferences: {screen: tv}\ndownloads:\n  dir: /films\n");
+
+        folder.save(Preferences::default());
+
+        assert_eq!(folder.text(), "preferences: {}\ndownloads:\n  dir: /films\n");
+        assert_eq!(preferences(&folder.paths).unwrap(), Some(Preferences::default()));
+    }
+
+    #[test]
+    fn setup_writes_through_a_linked_config() {
+        let folder = Folder::new();
+        let dotfiles = folder.paths.config.parent().unwrap().join("dotfiles.yaml");
+        std::fs::create_dir_all(&folder.paths.config).unwrap();
+        std::fs::write(&dotfiles, "sources:\n  disabled: [nyaa]\n").unwrap();
+        std::os::unix::fs::symlink(&dotfiles, path(&folder.paths)).unwrap();
+
+        folder.save(Preferences::default());
+
+        assert!(path(&folder.paths).symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&dotfiles).unwrap(), "sources:\n  disabled: [nyaa]\n\npreferences: {}\n");
     }
 
     #[test]

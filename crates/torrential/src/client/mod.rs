@@ -2,6 +2,7 @@ pub mod connect;
 pub mod launch;
 mod probe;
 pub mod service;
+mod setup;
 pub mod tui;
 pub mod wait;
 
@@ -108,6 +109,7 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
             let reference = job_refs(std::slice::from_ref(&args.reference), &cwd)?.remove(0);
             changes(engine()?, Request::Verify { reference, repair: args.repair }, ChangeCommand::Verify, mode)
         }
+        Command::Setup(args) => setup::run(args, mode, env),
         Command::Doctor(args) => Ok(doctor(env, mode, args.network)),
         Command::Tui => tui::run(env),
         Command::Daemon { command } => daemon(command, env, mode),

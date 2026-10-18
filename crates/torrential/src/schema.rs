@@ -67,13 +67,27 @@ struct FieldSchema {
     help: &'static str,
 }
 
-const FIELDS: [FieldSchema; 1] = [FieldSchema {
-    name: "progress.piece_map",
-    help: "Where a download's data has arrived, in status, wait, and the TUI's watch stream: 64 characters, one per \
-           equal run of the torrent's pieces in order. 0 to 8 are eighths of the run's selected pieces that passed \
-           their hash check, and - is a run with no selected piece. Absent before the engine first samples it, which \
-           needs the file list, and once the download is done",
-}];
+const FIELDS: [FieldSchema; 3] = [
+    FieldSchema {
+        name: "progress.piece_map",
+        help: "Where a download's data has arrived, in status, wait, and the TUI's watch stream: 64 characters, one \
+               per equal run of the torrent's pieces in order. 0 to 8 are eighths of the run's selected pieces that \
+               passed their hash check, and - is a run with no selected piece. Absent before the engine first samples \
+               it, which needs the file list, and once the download is done",
+    },
+    FieldSchema {
+        name: "result.releases[].quality",
+        help: "What the release name says about the picture: resolution is 2160p, 1080p, 720p, or sd, codec is h264, \
+               hevc, or av1, and each is null when the name does not say. hdr is true for an HDR10, HDR10+, or Dolby \
+               Vision tag",
+    },
+    FieldSchema {
+        name: "result.query.preferences",
+        help: "The torrential setup answers the results were ranked with. Null when nobody has answered, and every \
+               field null when the user chose not to. Within equal relevance, results within max_size that the \
+               player handles come first, then official and lawful sources, then the resolution closest to the screen",
+    },
+];
 
 pub fn build(cli: &Command, version: String) -> Schema {
     let global_flags = cli.get_arguments().filter(|a| a.is_global_set()).map(flag).collect();
@@ -193,6 +207,7 @@ mod tests {
                 "resume",
                 "rm",
                 "verify",
+                "setup",
                 "doctor",
                 "tui",
                 "daemon",
@@ -201,7 +216,7 @@ mod tests {
                 "skill"
             ]
         );
-        let daemon = &schema()["commands"][11]["subcommands"];
+        let daemon = &schema()["commands"][12]["subcommands"];
         let subs: Vec<&str> = daemon.as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
         assert_eq!(subs, ["status", "stop", "install", "uninstall"]);
     }

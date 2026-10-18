@@ -234,7 +234,7 @@ impl Writes {
         Self { sandboxed: env.sandbox_harness().is_some(), rerun }
     }
 
-    fn error(&self, path: &Path, e: io::Error) -> Error {
+    pub fn error(&self, path: &Path, e: io::Error) -> Error {
         let denied = matches!(e.raw_os_error(), Some(libc::EPERM | libc::EACCES | libc::EROFS));
         let message = format!("cannot write {}: {e}", path.display());
         if denied && self.sandboxed {
@@ -434,7 +434,7 @@ fn replace_with_link(link: &Path, writes: &Writes) -> Result<(), Error> {
     write_link(link, writes)
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let partial = temporary(path);
     std::fs::write(&partial, bytes).and_then(|()| std::fs::rename(&partial, path)).inspect_err(|_| {
         let _ = std::fs::remove_file(&partial);
@@ -442,7 +442,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn temporary(path: &Path) -> PathBuf {
-    let name = path.file_name().expect("skill paths end in a name").to_string_lossy();
+    let name = path.file_name().expect("written paths end in a name").to_string_lossy();
     path.with_file_name(format!(".{name}.{}.partial", std::process::id()))
 }
 

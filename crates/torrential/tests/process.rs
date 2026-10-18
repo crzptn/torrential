@@ -379,3 +379,47 @@ fn doctor_reports_whether_the_skill_is_installed() {
     let after = skill_row(home.json(&["doctor", "--json"]));
     assert_eq!(after, ("ok".into(), "agents up_to_date, claude up_to_date".into()));
 }
+
+#[test]
+fn setup_shows_the_flags_saves_answers_and_records_a_skip() {
+    let home = Home::new();
+    let config = home.dir.path().join("th/config/config.yaml");
+    let file = config.display().to_string();
+    let flags =
+        "torrential setup --screen phone|laptop|tv|tv-4k --max-size 2GB|8GB|20GB|none --playback hevc-hdr|hevc|h264";
+
+    let unset = home.run(&["setup"]);
+    let saved = home.run(&["setup", "--screen", "tv-4k", "--max-size", "8GB", "--playback", "hevc-hdr"]);
+    let changed = home.json(&["setup", "--screen", "laptop", "--json"]);
+    let shown = home.json(&["setup", "--json"]);
+    let skipped = home.run(&["setup", "--skip"]);
+
+    assert_eq!(
+        unset.stdout,
+        format!(
+            "screen:   not set\nmax_size: not set\nplayback: not set\nfile:     {file}\n\
+             # not set; torrential setup --skip records a choice not to answer\nnext:     {flags}\n"
+        )
+    );
+    assert_eq!(
+        saved.stdout,
+        format!(
+            "saved\nscreen:   tv-4k\nmax_size: 8GB\nplayback: hevc-hdr\nfile:     {file}\n\
+             # search ranks for a 4K TV, up to 8 GB, plays HEVC and HDR\n\
+             # get refuses a download over 8 GB unless --max-size allows it\nnext:     torrential search <words>\n"
+        )
+    );
+    let answers = serde_json::json!({"screen": "laptop", "max_size": 8_000_000_000u64, "playback": "hevc-hdr"});
+    assert_eq!((changed["result"].as_str(), &changed["preferences"]), (Some("saved"), &answers));
+    assert_eq!(
+        (shown["result"].as_str(), &shown["preferences"], shown["file"].as_str()),
+        (Some("shown"), &answers, Some(file.as_str()))
+    );
+    assert_eq!(skipped.code, 0, "{}", skipped.stderr);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "preferences: {}\n");
+    assert!(
+        skipped.stdout.contains("\n# skipped; search ranks as it did before and stops suggesting setup\n"),
+        "{}",
+        skipped.stdout
+    );
+}

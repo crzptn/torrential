@@ -267,6 +267,51 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
       ]
     },
     {
+      "name": "setup",
+      "about": "Answer three questions once, so search ranks films and shows for your screen and player",
+      "arguments": [],
+      "flags": [
+        {
+          "name": "--screen",
+          "help": "What you usually watch on",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "SCREEN",
+          "values": [
+            "phone",
+            "laptop",
+            "tv",
+            "tv-4k"
+          ]
+        },
+        {
+          "name": "--max-size",
+          "help": "How big one download can be, for example 8GB, or none for no limit",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "SIZE"
+        },
+        {
+          "name": "--playback",
+          "help": "What your player handles. h264 is the safe answer when unsure",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "PLAYBACK",
+          "values": [
+            "hevc-hdr",
+            "hevc",
+            "h264"
+          ]
+        },
+        {
+          "name": "--skip",
+          "help": "Record that you would rather not answer, so nobody asks again",
+          "takes_value": false,
+          "repeatable": false
+        }
+      ]
+    },
+    {
       "name": "doctor",
       "about": "Diagnose sandbox, disk, state, engine, config, and sources",
       "arguments": [],
@@ -629,6 +674,14 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
     {
       "name": "progress.piece_map",
       "help": "Where a download's data has arrived, in status, wait, and the TUI's watch stream: 64 characters, one per equal run of the torrent's pieces in order. 0 to 8 are eighths of the run's selected pieces that passed their hash check, and - is a run with no selected piece. Absent before the engine first samples it, which needs the file list, and once the download is done"
+    },
+    {
+      "name": "result.releases[].quality",
+      "help": "What the release name says about the picture: resolution is 2160p, 1080p, 720p, or sd, codec is h264, hevc, or av1, and each is null when the name does not say. hdr is true for an HDR10, HDR10+, or Dolby Vision tag"
+    },
+    {
+      "name": "result.query.preferences",
+      "help": "The torrential setup answers the results were ranked with. Null when nobody has answered, and every field null when the user chose not to. Within equal relevance, results within max_size that the player handles come first, then official and lawful sources, then the resolution closest to the screen"
     }
   ],
   "next": null

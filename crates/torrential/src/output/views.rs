@@ -4,8 +4,10 @@ use std::time::Duration;
 use torrential_core::id::shortest_unique_prefix;
 use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
-use torrential_core::units::format_size;
-use torrential_core::{Job, JobStatus, Release, ReleaseId, SearchResult, Selection, SourceOutcome, TorrentId};
+use torrential_core::units::{format_limit, format_size, size_text};
+use torrential_core::{
+    Job, JobStatus, Preferences, Release, ReleaseId, SearchResult, Selection, SourceOutcome, TorrentId,
+};
 
 use super::format::{self, NONE};
 use super::theme::Token;
@@ -607,6 +609,41 @@ pub fn doctor(checks: &[Check], fix: Option<String>) -> Doc {
         summary: vec![format::count(problems, "problem")],
         next: fix,
     }
+}
+
+/// What `torrential setup` saved or found. `result` is `saved`, `unchanged`, or `shown`.
+pub fn setup(preferences: Option<&Preferences>, file: &Path, result: &str) -> Doc {
+    let value = |answer: Option<String>, open: &str| match (preferences, answer) {
+        (None, _) => Cell::styled("not set", Token::Muted),
+        (Some(_), Some(answer)) => Cell::new(answer),
+        (Some(_), None) => Cell::styled(open, Token::Muted),
+    };
+    let answers = preferences.copied().unwrap_or_default();
+    let fields = vec![
+        ("screen", value(answers.screen.map(|s| s.as_str().to_string()), "any")),
+        ("max_size", value(answers.max_size.map(size_text), "none")),
+        ("playback", value(answers.playback.map(|p| p.as_str().to_string()), "any")),
+        ("file", Cell::new(file.display().to_string())),
+    ];
+    let title = match result {
+        "shown" => Vec::new(),
+        word => vec![Cell::styled(word, Token::Mint)],
+    };
+    let summary = match preferences {
+        None => vec!["not set; torrential setup --skip records a choice not to answer".to_string()],
+        Some(p) if p.is_empty() => {
+            vec!["skipped; search ranks as it did before and stops suggesting setup".to_string()]
+        }
+        Some(p) => {
+            let mut lines = vec![format!("search ranks for {}", p.describe())];
+            if let Some(max) = p.max_size {
+                lines.push(format!("get refuses a download over {} unless --max-size allows it", format_limit(max)));
+            }
+            lines
+        }
+    };
+    let next = if result == "shown" { crate::cli::SETUP_FLAGS } else { "torrential search <words>" };
+    Doc { body: Body::Fields { title, fields }, summary, next: Some(next.to_string()) }
 }
 
 fn skill_state_cell(state: State) -> Cell {
