@@ -258,6 +258,23 @@ fn without_color_the_mark_the_ticks_and_the_words_still_carry_meaning() {
 }
 
 #[test]
+fn low_disk_space_is_said_in_words() {
+    let mut state = searched((100, 30));
+    press(&mut state, "j");
+    state.update(key(KeyCode::Enter));
+    state.update(Msg::Files { item: Item::Result(result_id("b7f20d")), result: Ok(dvd_files()) });
+    state.update(Msg::FreeSpace(Some(3 << 30)));
+    let buf = render_in(&state, ColorMode::NoColor);
+    assert!(line(&buf, 0).ends_with("↓ 10.0 MiB/s   low on space · 3.0 GiB free"), "{}", line(&buf, 0));
+    let (_, y) = find(&buf, "11 of 12 files");
+    assert!(line(&buf, y).contains("11 of 12 files · 398 MiB short of space"), "{}", line(&buf, y));
+    state.update(Msg::FreeSpace(Some(40 << 30)));
+    let buf = render_in(&state, ColorMode::NoColor);
+    assert!(line(&buf, 0).ends_with("     ↓ 10.0 MiB/s"), "nothing follows the rate: {}", line(&buf, 0));
+    assert!(line(&buf, y).contains("11 of 12 files · 40.0 GiB free"), "{}", line(&buf, y));
+}
+
+#[test]
 fn an_unreachable_engine_says_so_with_its_hint() {
     let mut state = app((100, 30));
     let error = Error::new(ErrorCode::DaemonUnavailable, "the engine did not start within 10s")

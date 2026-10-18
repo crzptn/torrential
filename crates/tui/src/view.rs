@@ -149,7 +149,7 @@ pub fn render(buf: &mut Buffer, state: &State, mode: ColorMode) -> Option<Positi
 fn masthead(buf: &mut Buffer, state: &State, screen: &Screen) {
     margin(buf, MASTHEAD, "torrential", bold(INK));
     let total = rate(state.rate());
-    let free = state.free_space.map(|f| format!("{} free", size(f)));
+    let free = state.free_space.map(|f| format!("low on space · {} free", size(f)));
     let mut parts: Vec<(&str, Style)> = Vec::new();
     match &state.engine {
         Engine::Starting => parts.extend([("starting the engine", fg(PENCIL)), (state.spinner(), fg(PENCIL))]),
@@ -668,8 +668,11 @@ fn file_tree(buf: &mut Buffer, state: &State, tree: &Tree, c: &Columns, y: u16, 
         if picked == 0 { "nothing picked".to_string() } else { format!("{picked} of {} files", tree.files.len()) };
     let used = put(buf, DETAIL, total, before_size(c) - DETAIL, &summary, fg(TEXT));
     if let Some(free) = state.free_space {
-        let text = format!(" · {} free", size(free));
-        let style = if free < tree.picked_size() { fg(ERROR) } else { fg(PENCIL) };
+        let picked = tree.picked_size();
+        let (text, style) = match picked.checked_sub(free) {
+            Some(short) if short > 0 => (format!(" · {} short of space", size(short)), fg(ERROR)),
+            _ => (format!(" · {} free", size(free)), fg(PENCIL)),
+        };
         put(buf, DETAIL + used, total, before_size(c).saturating_sub(DETAIL + used), &text, style);
     }
     put_right(buf, c.size, total, &size(tree.picked_size()), bold(INK));
