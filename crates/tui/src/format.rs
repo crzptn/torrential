@@ -94,7 +94,7 @@ pub fn name(s: &str, max: usize) -> String {
         used += char_width(chars[start]);
     }
     if inside(start) {
-        start = (start..(start + NEAR).min(chars.len())).find(|&i| !in_word(chars[i])).unwrap_or(start);
+        start = (start..=(start + NEAR).min(chars.len() - 1)).find(|&i| !in_word(chars[i])).unwrap_or(start);
     }
     while start < chars.len() && separator(chars[start]) {
         start += 1;
@@ -199,6 +199,7 @@ mod tests {
         assert_eq!(name("Night.of.the.Living.Dead.1968.1080p.BluRay.x264", 31), "Night.of.the…1080p.BluRay.x264");
         assert_eq!(name("ubuntu-24.04.5-desktop-amd64.iso", 20), "ubuntu-24…amd64.iso");
         assert_eq!(name("Night of the Living Dead", 31), "Night of the Living Dead");
+        assert_eq!(name("Night of the Living Dead, original score FLAC", 24), "Night of the…score FLAC", "4 cells on");
         assert_eq!(name("日本語のタイトル 第1話 1080p", 16), "日本語のタ…1080p");
         let flags = "🏳\u{fe0f}".repeat(6);
         assert_eq!((width(&flags), name(&flags, 10)), (12, format!("{flags}…")), "wider than its characters");
