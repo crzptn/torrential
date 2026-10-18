@@ -99,10 +99,9 @@ pub fn start(paths: &Paths, env: &Env) -> Result<Conn, Error> {
         Ok(pid) if status.success() => pid,
         _ => return Err(unavailable(format!("the engine launcher failed: {}", out.trim()))),
     };
-    let deadline = Instant::now() + START_WITHIN;
-    loop {
+    let started = poll(START_WITHIN, || {
         if let Some(conn) = connect::existing(paths, env)? {
-            return Ok(conn);
+            return Ok(Some(conn));
         }
         if !connect::alive(pid)
             && let Ok(bytes) = std::fs::read(paths.startup_error())
@@ -111,11 +110,31 @@ pub fn start(paths: &Paths, env: &Env) -> Result<Conn, Error> {
                 serde_json::from_slice(&bytes).unwrap_or_else(|_| unavailable("the engine failed to start".into()))
             );
         }
-        if Instant::now() > deadline {
-            return Err(unavailable(format!("the engine did not start within {}s", START_WITHIN.as_secs())));
+        Ok(None)
+    })?;
+    started.ok_or_else(|| unavailable(format!("the engine did not start within {}s", START_WITHIN.as_secs())))
+}
+
+/// Asks `ready` until it answers or `within` has passed.
+fn poll<T>(within: Duration, mut ready: impl FnMut() -> Result<Option<T>, Error>) -> Result<Option<T>, Error> {
+    let started = Instant::now();
+    loop {
+        if let Some(found) = ready()? {
+            return Ok(Some(found));
         }
-        std::thread::sleep(Duration::from_millis(20));
+        let waited = started.elapsed();
+        if waited > within {
+            return Ok(None);
+        }
+        std::thread::sleep(pause(waited));
     }
+}
+
+/// A tenth of the wait so far, from 2 to 20 ms. An engine listens about 25 ms after its
+/// launcher returns, so it is seen within 3 ms of that, while one that never listens is asked
+/// about 520 times in 10 s, near the 500 of a steady 20 ms poll.
+fn pause(waited: Duration) -> Duration {
+    (waited / 10).clamp(Duration::from_millis(2), Duration::from_millis(20))
 }
 
 pub fn launch_stage(env: &Env) -> u8 {
@@ -190,6 +209,35 @@ mod tests {
         assert!(sandbox_signal(&env(&[]), denied).unwrap().starts_with("sending a UDP datagram failed"));
         assert_eq!(sandbox_signal(&env(&[]), unreachable), None);
         assert_eq!(sandbox_signal(&env(&[]), || Ok(())), None);
+    }
+
+    #[test]
+    fn the_wait_for_the_engine_asks_often_at_first_and_less_later() {
+        let ms = Duration::from_millis;
+        let pauses = [ms(0), ms(25), ms(100), ms(10_000)].map(pause);
+        assert_eq!(pauses, [ms(2), Duration::from_micros(2_500), ms(10), ms(20)]);
+    }
+
+    #[test]
+    fn the_wait_for_the_engine_ends_when_it_answers_fails_or_runs_out() {
+        let mut asked = 0;
+        let answered = poll(Duration::from_secs(10), || {
+            asked += 1;
+            Ok((asked == 3).then_some("conn"))
+        });
+        let failed = poll(Duration::from_secs(10), || Err::<Option<()>, _>(Error::internal("startup failed")));
+        let started = Instant::now();
+        let mut idle_asks = 0;
+        let ran_out = poll(Duration::from_millis(300), || {
+            idle_asks += 1;
+            Ok(None::<()>)
+        });
+
+        assert_eq!((answered.unwrap(), asked), (Some("conn"), 3));
+        assert_eq!(failed.unwrap_err().message, "startup failed");
+        assert_eq!(ran_out.unwrap(), None);
+        assert!(started.elapsed() >= Duration::from_millis(300));
+        assert!(idle_asks < 60, "asked {idle_asks} times in 300 ms");
     }
 
     #[test]
