@@ -14,6 +14,9 @@ use crate::metainfo::Metainfo;
 use crate::observation::{Identity, Observation};
 
 pub(super) const LISTING_CAP: usize = 1 << 20;
+const TORRENT_CAP: usize = 2 << 20;
+const CONCURRENT: usize = 3;
+const HASH_REST_WITHIN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, PartialEq, Debug)]
 pub(super) struct Entry {
@@ -120,14 +123,15 @@ pub(super) fn listing(body: &[u8]) -> Result<Vec<Entry>, Failure> {
     Ok(torrents(&html))
 }
 
-/// Turns listed files into official releases. Each `.torrent` is fetched and hashed
-/// so the release gets a real ID; one that cannot be read in time keeps its URL as
-/// a locator.
+/// Turns the listed files the query covers into official releases. Each `.torrent` is
+/// fetched and hashed so the release gets a real ID; one that cannot be read in time
+/// keeps its URL as a locator. The other files are hashed after the search, so a later
+/// search that covers them does not wait on their `.torrent` files.
 pub(super) async fn resolve(ctx: &Ctx<'_>, files: Vec<(Url, Entry)>) -> Vec<Observation> {
-    const CONCURRENT: usize = 3;
+    let (covered, rest): (Vec<_>, Vec<_>) = files.into_iter().partition(|(_, entry)| ctx.terms.covers(entry.name()));
     // Leaves time to return the locators when the torrents are slow.
     let deadline = ctx.deadline.checked_sub(Duration::from_millis(300)).unwrap_or(ctx.deadline);
-    stream::iter(files)
+    let found = stream::iter(covered)
         .map(|(dir, entry)| async move {
             let url = super::at(&dir, &entry.file);
             let key = Key { url: url.to_string(), modified: entry.modified };
@@ -140,7 +144,41 @@ pub(super) async fn resolve(ctx: &Ctx<'_>, files: Vec<(Url, Entry)>) -> Vec<Obse
         .buffer_unordered(CONCURRENT)
         .filter_map(|o| async move { o })
         .collect()
-        .await
+        .await;
+    hash_later(ctx, rest);
+    found
+}
+
+fn hash_later(ctx: &Ctx<'_>, files: Vec<(Url, Entry)>) {
+    let unknown: Vec<(Url, Key)> = files
+        .into_iter()
+        .map(|(dir, entry)| {
+            let url = super::at(&dir, &entry.file);
+            let key = Key { url: url.to_string(), modified: entry.modified };
+            (url, key)
+        })
+        .filter(|(_, key)| ctx.stores.hashes.claim(key))
+        .collect();
+    if unknown.is_empty() {
+        return;
+    }
+    let (http, hashes) = (ctx.http.detached(), ctx.stores.hashes.clone());
+    tokio::spawn(async move {
+        let deadline = Instant::now() + HASH_REST_WITHIN;
+        stream::iter(unknown)
+            .for_each_concurrent(CONCURRENT, |(url, key)| {
+                let (http, hashes) = (&http, &hashes);
+                async move {
+                    if let Ok(body) = http.get(&url, TORRENT_CAP, deadline).await
+                        && let Ok(meta) = crate::metainfo::parse(&body)
+                    {
+                        hashes.insert(key, meta);
+                    }
+                }
+            })
+            .await;
+        hashes.save().await;
+    });
 }
 
 fn official(entry: Entry, dir: &Url, url: Url, meta: Option<Metainfo>) -> Option<Observation> {
@@ -161,11 +199,10 @@ fn official(entry: Entry, dir: &Url, url: Url, meta: Option<Metainfo>) -> Option
 }
 
 async fn metainfo(ctx: &Ctx<'_>, url: &Url, key: Key, deadline: Instant) -> Option<Metainfo> {
-    const CAP: usize = 2 << 20;
     if let Some(known) = ctx.stores.hashes.get(&key) {
         return Some(known);
     }
-    let body = ctx.http.get(url, CAP, deadline).await.ok()?;
+    let body = ctx.http.get(url, TORRENT_CAP, deadline).await.ok()?;
     let meta = crate::metainfo::parse(&body).ok()?;
     ctx.stores.hashes.insert(key, meta.clone());
     Some(meta)

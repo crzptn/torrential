@@ -3,7 +3,7 @@
 //! and the modification time its listing shows, so a file replaced in place is
 //! fetched again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +26,8 @@ pub(crate) struct Key {
 pub(crate) struct Hashes {
     dir: Option<PathBuf>,
     known: Mutex<HashMap<Key, Metainfo>>,
+    /// Files claimed for a background hash. Each is fetched once per process, even when that fails.
+    claimed: Mutex<HashSet<Key>>,
     unsaved: AtomicBool,
     /// One save at a time, so the newest snapshot is the one left on disk.
     saving: tokio::sync::Mutex<()>,
@@ -43,7 +45,18 @@ struct Stored {
 impl Hashes {
     pub fn new(dir: Option<PathBuf>) -> Hashes {
         let known = dir.as_deref().map(|d| parse(&std::fs::read(d.join(FILE)).unwrap_or_default())).unwrap_or_default();
-        Hashes { dir, known: Mutex::new(known), unsaved: AtomicBool::new(false), saving: tokio::sync::Mutex::new(()) }
+        Hashes {
+            dir,
+            known: Mutex::new(known),
+            claimed: Mutex::default(),
+            unsaved: AtomicBool::new(false),
+            saving: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// Whether `key` is unknown and not yet claimed for a background hash. Claims it.
+    pub fn claim(&self, key: &Key) -> bool {
+        !self.lock().contains_key(key) && self.claimed.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone())
     }
 
     pub fn get(&self, key: &Key) -> Option<Metainfo> {

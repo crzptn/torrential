@@ -663,10 +663,28 @@ const UBUNTU_PAGES: [(&str, &str); 6] = [
     ("/ubuntu/", "ubuntu/index.html"),
 ];
 
+/// One-file torrents named after each file a series page lists, so each hashes to its own ID.
 async fn ubuntu_server() -> Server {
     let mut routes = vec![(UBUNTU_TORRENT, vec![ok(netinst())])];
+    for (path, page) in &UBUNTU_PAGES[..5] {
+        let html = String::from_utf8(fixture(page)).unwrap();
+        for file in
+            html.split("href=\"").skip(1).filter_map(|s| s.split('"').next()).filter(|f| f.ends_with(".torrent"))
+        {
+            let route: &'static str = format!("{path}{file}").leak();
+            if !routes.iter().any(|(r, _)| *r == route) {
+                routes.push((route, vec![ok(named_torrent(file))]));
+            }
+        }
+    }
     routes.extend(UBUNTU_PAGES.map(|(path, page)| (path, vec![ok(fixture(page))])));
     Server::start(routes).await
+}
+
+fn named_torrent(name: &str) -> Vec<u8> {
+    let info =
+        format!("d6:lengthi1048576e4:name{}:{name}12:piece lengthi262144e6:pieces80:{}e", name.len(), "z".repeat(80));
+    format!("d4:info{info}e").into_bytes()
 }
 
 fn ubuntu_page_hits(server: &Server) -> [usize; 6] {
@@ -719,6 +737,46 @@ async fn a_later_process_answers_from_the_listing_pages_on_disk_unless_fresh() {
     assert_eq!(hits_from_disk, [1; 6], "only the first process asked for the pages");
     assert_eq!(listed_with_size(&fresh), live_server_2404());
     assert_eq!(ubuntu_page_hits(&server), [2; 6], "a fresh search asked for every page");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_search_hashes_the_other_listed_releases_for_the_next_one() {
+    let dir = scratch_dir("hash-later");
+    let server = ubuntu_server().await;
+    let config = SearchConfig { cache_dir: Some(dir.clone()), ..server.config(&["ubuntu"]) };
+    Search::new(&config, ResultCache::new())
+        .unwrap()
+        .search(&query("ubuntu 24.04.5 live server", &["ubuntu"]))
+        .await
+        .unwrap();
+    let saved = || -> usize {
+        let body = std::fs::read(dir.join("torrent-hashes.json")).unwrap_or_default();
+        serde_json::from_slice::<Vec<serde_json::Value>>(&body).map_or(0, |all| all.len())
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while saved() < 10 {
+        assert!(Instant::now() < deadline, "the other releases were not hashed");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let later =
+        Search::new(&config, ResultCache::new()).unwrap().search(&query("ubuntu 22.04", &["ubuntu"])).await.unwrap();
+
+    let mut found: Vec<(bool, String)> =
+        later.releases.iter().map(|r| (r.id.to_ref().starts_with('u'), r.name.clone())).collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            (false, "ubuntu-22.04.5-desktop-amd64.iso".to_string()),
+            (false, "ubuntu-22.04.5-live-server-amd64.iso".to_string())
+        ],
+        "both are hashed, neither is a locator"
+    );
+    let fetched = ["ubuntu-22.04.5-desktop-amd64.iso.torrent", "ubuntu-22.04.5-live-server-amd64.iso.torrent"]
+        .map(|file| server.hits(&format!("/ubuntu/22.04/{file}")));
+    assert_eq!(fetched, [1, 1], "each was fetched once, behind the first search");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

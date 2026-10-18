@@ -164,7 +164,7 @@ impl From<FetchError> for Failure {
 /// State that outlives one search: hashed `.torrent` files, the Academic Torrents
 /// catalog, and the official listing pages.
 pub(crate) struct Stores {
-    hashes: hashes::Hashes,
+    hashes: Arc<hashes::Hashes>,
     academic: academic::Catalog,
     pages: pages::Pages,
 }
@@ -172,7 +172,7 @@ pub(crate) struct Stores {
 impl Stores {
     pub fn new(cache_dir: Option<PathBuf>) -> Stores {
         Stores {
-            hashes: hashes::Hashes::new(cache_dir.clone()),
+            hashes: Arc::new(hashes::Hashes::new(cache_dir.clone())),
             academic: academic::Catalog::new(cache_dir.clone()),
             pages: pages::Pages::new(cache_dir),
         }

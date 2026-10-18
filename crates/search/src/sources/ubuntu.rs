@@ -18,11 +18,7 @@ pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>
     let dirs = series.iter().map(|s| at(base, &format!("{s}/"))).collect();
     let mut files = Vec::new();
     for (dir, entries) in listing::fetch_all(ctx, dirs).await? {
-        for entry in newest_point_releases(entries) {
-            if ctx.terms.covers(entry.name()) {
-                files.push((dir.clone(), entry));
-            }
-        }
+        files.extend(newest_point_releases(entries).into_iter().map(|entry| (dir.clone(), entry)));
     }
     Ok(listing::resolve(ctx, files).await)
 }
