@@ -175,6 +175,27 @@ Add `--json` to any command for JSON on stdout, with `"schema":1` in every objec
 
 Exit code 0 means success. Exit code 8 means `wait` returned while the download still runs. Off a terminal, `wait` returns after 100 seconds unless you pass `--timeout`. `torrential schema` prints every command, flag, exit code, and error code as JSON.
 
+## Build and test from source
+
+The Nix dev shell in `flake.nix` supplies CMake, Ninja, pkg-config, Boost, and OpenSSL for macOS and Linux. Rust comes from your own toolchain. libtorrent 2.1.2 is a Git submodule in `vendor/libtorrent`, and `crates/engine/build.rs` builds it with CMake and links it statically.
+
+If you cloned without `--recursive`, fetch the submodule first:
+
+```sh
+git submodule update --init --recursive
+```
+
+Build and test inside the dev shell:
+
+```sh
+nix --extra-experimental-features 'nix-command flakes' develop -c cargo build --release
+nix --extra-experimental-features 'nix-command flakes' develop -c cargo test
+```
+
+If flakes are already on in your Nix config, `nix develop -c` is enough. The tests stay on your machine. The swarm tests run a seeder on 127.0.0.1, and the search tests read recorded responses. To search the live sources, run `cargo test -p torrential-search --test live -- --ignored` in the dev shell.
+
+The binary loads OpenSSL from the Nix store path it was built against. If Nix garbage collection removes that path, the binary no longer starts, so build it again.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
