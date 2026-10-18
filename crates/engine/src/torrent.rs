@@ -70,6 +70,7 @@ pub struct Metainfo {
     name: String,
     piece_length: u32,
     files: Vec<FileEntry>,
+    web_seeds: Vec<String>,
 }
 
 impl Metainfo {
@@ -80,6 +81,7 @@ impl Metainfo {
             name: parsed.name,
             piece_length: parsed.piece_length,
             files: bridge::file_entries(parsed.files),
+            web_seeds: parsed.web_seeds,
             bytes,
         })
     }
@@ -98,6 +100,11 @@ impl Metainfo {
 
     pub fn files(&self) -> &[FileEntry] {
         &self.files
+    }
+
+    /// The `url-list` URLs, as the file lists them.
+    pub fn web_seeds(&self) -> &[String] {
+        &self.web_seeds
     }
 
     pub fn as_bytes(&self) -> &[u8] {

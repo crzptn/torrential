@@ -131,6 +131,7 @@ ParsedTorrent parsed(lt::add_torrent_params const& atp) {
     p.name = str(atp.name);
   }
   if (!p.hashes.has_v1 && !p.hashes.has_v2) fail(FailureKind::InvalidInput, "no info hash");
+  for (auto const& seed : atp.url_seeds) p.web_seeds.push_back(str(seed));
   return p;
 }
 
@@ -217,6 +218,11 @@ lt::session_params make_params(SessionSettings const& s) {
   // waits until libtorrent retries those seeds, min_reconnect_time (60 s) or
   // more later.
   p.set_bool(lt::settings_pack::close_redundant_connections, false);
+  // libtorrent connects at most 3 web seeds per torrent, counting each interesting one in the
+  // order added. A web seed whose files all redirected elsewhere never reconnects yet stays
+  // interesting, and the seeds the redirects made stay connected, so web seeds added later,
+  // such as archive.org's servers, never got a slot. 0 lifts the limit to 100.
+  p.set_int(lt::settings_pack::max_web_seed_connections, 0);
   p.set_int(lt::settings_pack::alert_queue_size, 10000);
   p.set_int(lt::settings_pack::alert_mask, lt::alert_category::status | lt::alert_category::error |
                                                lt::alert_category::storage | lt::alert_category::dht);
@@ -393,6 +399,10 @@ void Session::remove(rust::Slice<const std::uint8_t> id) { session_.remove_torre
 
 void Session::connect_peer(rust::Slice<const std::uint8_t> id, rust::Str address, std::uint16_t port) {
   find(id).connect_peer(lt::tcp::endpoint(parse_address(address), port));
+}
+
+void Session::add_web_seed(rust::Slice<const std::uint8_t> id, rust::Str url) {
+  find(id).add_url_seed(std::string(url));
 }
 
 rust::Vec<std::uint8_t> Session::metainfo(rust::Slice<const std::uint8_t> id) const {

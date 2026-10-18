@@ -90,6 +90,7 @@ pub(crate) mod ffi {
         has_metadata: bool,
         piece_length: u32,
         files: Vec<FileRecord>,
+        web_seeds: Vec<String>,
     }
 
     struct PriorityRecord {
@@ -218,6 +219,7 @@ pub(crate) mod ffi {
         fn save_resume_data_if_progressed(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn remove(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn connect_peer(self: Pin<&mut Session>, id: &[u8], address: &str, port: u16) -> Result<()>;
+        fn add_web_seed(self: Pin<&mut Session>, id: &[u8], url: &str) -> Result<()>;
         fn metainfo(self: &Session, id: &[u8]) -> Result<Vec<u8>>;
         fn info_dictionary(self: &Session, id: &[u8]) -> Result<Vec<u8>>;
         fn files(self: &Session, id: &[u8]) -> Result<Vec<FileRecord>>;

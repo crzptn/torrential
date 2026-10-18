@@ -120,6 +120,13 @@ impl Session {
         r.map_err(|e| with_id(e, id))
     }
 
+    /// Adds a web seed to a torrent the session already has. libtorrent ignores one it has, and
+    /// saves it in the resume data.
+    pub fn add_web_seed(&mut self, id: TorrentId, url: &str) -> Result<(), EngineError> {
+        let r = self.native.pin_mut().add_web_seed(id.as_bytes(), url);
+        r.map_err(|e| with_id(e, id))
+    }
+
     /// The info dictionary, plus piece layers for v2 and hybrid torrents, as
     /// a `.torrent` file. Trackers and web seeds are not included.
     pub fn metainfo(&self, id: TorrentId) -> Result<Metainfo, EngineError> {

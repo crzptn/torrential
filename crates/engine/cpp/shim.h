@@ -58,6 +58,7 @@ class Session {
   void save_resume_data_if_progressed(rust::Slice<const std::uint8_t> id);
   void remove(rust::Slice<const std::uint8_t> id);
   void connect_peer(rust::Slice<const std::uint8_t> id, rust::Str address, std::uint16_t port);
+  void add_web_seed(rust::Slice<const std::uint8_t> id, rust::Str url);
   rust::Vec<std::uint8_t> metainfo(rust::Slice<const std::uint8_t> id) const;
   rust::Vec<std::uint8_t> info_dictionary(rust::Slice<const std::uint8_t> id) const;
   rust::Vec<FileRecord> files(rust::Slice<const std::uint8_t> id) const;

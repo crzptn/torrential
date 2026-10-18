@@ -38,6 +38,10 @@ fn torrent_calls_name_what_is_missing() {
     assert_eq!(err.kind(), ErrorKind::UnknownTorrent);
     assert_eq!(err.message(), "0707070707070707070707070707070707070707");
     assert_eq!(node.session.announce_to_dht(unknown).unwrap_err().kind(), ErrorKind::UnknownTorrent);
+    assert_eq!(
+        node.session.add_web_seed(unknown, "http://127.0.0.1:9/").unwrap_err().kind(),
+        ErrorKind::UnknownTorrent
+    );
 
     let lonely = Magnet::parse(&magnet(Some([9; 20]), None)).unwrap();
     let id = node.add(AddTorrent::new(TorrentSource::Magnet(lonely), save.path()));
@@ -52,6 +56,18 @@ fn torrent_calls_name_what_is_missing() {
     let mut add = AddTorrent::new(TorrentSource::Metainfo(fixture.torrent(TorrentFormat::V1)), save.path());
     add.files = FileSelection::Only(BTreeSet::from([FileIndex::new(2)]));
     assert_eq!(node.session.add(add).unwrap_err().kind(), ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_torrent_file_lists_its_web_seeds_as_written() {
+    let fixture = Fixture::new("item", &[("a.bin", 20_000)], 23);
+    let plain = fixture.torrent(TorrentFormat::V1);
+    let seeds = "l29:https://archive.org/download/9:/6/items/e";
+    let bytes = [&plain.as_bytes()[..plain.as_bytes().len() - 1], b"8:url-list", seeds.as_bytes(), b"e"].concat();
+    let listed = Metainfo::from_bytes(bytes).unwrap();
+    assert_eq!(listed.web_seeds(), ["https://archive.org/download/", "/6/items/"]);
+    assert_eq!(listed.info_hash(), plain.info_hash());
+    assert_eq!(plain.web_seeds(), [] as [String; 0]);
 }
 
 #[test]
