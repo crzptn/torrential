@@ -55,6 +55,12 @@ pub fn parse(uri: &str) -> Result<Magnet, Error> {
     Ok(Magnet { info_hash, name, exact_length, uri: uri.to_string() })
 }
 
+impl Magnet {
+    pub fn has_trackers(&self) -> bool {
+        url::Url::parse(&self.uri).is_ok_and(|url| url.query_pairs().any(|(key, _)| key == "tr"))
+    }
+}
+
 pub fn from_hash(info_hash: InfoHash) -> Magnet {
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
     let mut uri = "magnet:?".to_string();

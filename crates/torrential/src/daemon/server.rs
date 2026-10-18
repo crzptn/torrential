@@ -14,7 +14,7 @@ use torrential_core::{Error, ErrorCode, Release, ReleaseId, SearchQuery, SearchR
 
 use super::engine_port::{EngineHandle, Metainfo, ParseTorrent};
 use super::files;
-use super::magnet;
+use super::magnet::{self, Magnet};
 use super::owner::{Command, FilesInfo, GetCommand, MetaTarget, Origin, Reply, Resolved, Source, Update};
 use super::search_port::{Progress, SearchPort};
 use crate::wire;
@@ -188,8 +188,10 @@ async fn release_source(ctx: &Ctx, release: Release, cached: Option<Arc<Metainfo
     if let Some(url) = release.torrent_url {
         match fetch(ctx, url).await {
             Ok(metainfo) => return Ok(Source::Torrent { metainfo, origin: Origin::Url }),
-            Err(error) if magnet.is_none() => return Err(error),
-            Err(_) => {}
+            // A magnet without trackers, like archive.org's, finds peers only through the DHT, and
+            // waiting on it would hide why the fetch failed.
+            Err(error) if !magnet.as_ref().is_some_and(Magnet::has_trackers) => return Err(error),
+            Err(error) => super::log(&format!("{} falls back to its magnet: {}", release.id.to_ref(), error.message)),
         }
     }
     match (magnet, release.id) {

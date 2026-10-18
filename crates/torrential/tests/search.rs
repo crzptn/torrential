@@ -456,12 +456,16 @@ fn files_on_an_archive_org_result_reads_its_torrent_url_not_the_bare_magnet() {
                 vec![ok(fixture("archive.org/advancedsearch.php-night-of-the-living-dead.json"))],
             ),
             (item, vec![ok(torrent("night_of_the_living_dead_dvd"))]),
+            ("/archive.org/download/Night_Of_The_Living_Dead_raw_HD_WS/", vec![status(503)]),
         ]
     });
     let home = Home::new(&server, &["archive.org"], "");
 
-    let found = home.run(&["search", "night", "of", "the", "living", "dead", "--json"]).json();
+    let found = home.run(&["search", "night", "of", "the", "living", "dead", "--limit", "50", "--json"]).json();
     let files = home.run(&["files", "6bc1af", "--json"]).json();
+    let asked = std::time::Instant::now();
+    let unreachable = home.run(&["files", "27f32a"]);
+    let took = asked.elapsed();
 
     let release = found["result"]["releases"]
         .as_array()
@@ -478,4 +482,12 @@ fn files_on_an_archive_org_result_reads_its_torrent_url_not_the_bare_magnet() {
         (Some("torrent_url"), Some("night_of_the_living_dead_dvd"))
     );
     assert_eq!(server.asked(item).len(), 1);
+    // Rather than a minute waiting for DHT peers that a magnet without trackers may never find.
+    assert_eq!(unreachable.code, 5, "{}", unreachable.stderr);
+    assert!(
+        unreachable.stderr.starts_with("error[fetch_failed]: could not fetch the .torrent file: http 503\n"),
+        "{}",
+        unreachable.stderr
+    );
+    assert!(took < Duration::from_secs(15), "took {took:?}");
 }
