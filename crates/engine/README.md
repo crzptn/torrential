@@ -12,19 +12,18 @@ git submodule update --init --recursive
 nix --extra-experimental-features 'nix-command flakes' develop -c cargo test -p torrential-engine
 ```
 
-## Static release builds
+## Static linking
 
-OpenSSL links dynamically today, from `OPENSSL_LIB_DIR` in the dev shell. A
-fully static release link needs:
+`build.rs` links libtorrent and OpenSSL statically. OpenSSL comes from
+`libssl.a` and `libcrypto.a` in `OPENSSL_LIB_DIR`, which the dev shell points
+at nixpkgs `openssl.override { static = true; }`. On macOS the binary loads
+only libraries under `/usr/lib` and `/System/Library`, and
+`crates/torrential/tests/linkage.rs` fails if that changes.
 
-- Static `libssl.a` and `libcrypto.a`, for example nixpkgs `pkgsStatic.openssl`
-  or the `openssl-src` crate.
-- `OPENSSL_USE_STATIC_LIBS=ON` and the `.a` paths in the CMake defines, and
-  `static=ssl` and `static=crypto` link lines in `build.rs`.
-- On Linux musl, a static C++ runtime (`-static-libstdc++`, or libc++ built
-  for musl).
-- A CA bundle that libtorrent's OpenSSL loads, because a static OpenSSL does
-  not find the system trust store. The plan's spike 0c covers this.
+For HTTPS trackers, libtorrent also loads a CA bundle from fixed system paths:
+`/etc/ssl/cert.pem` on macOS, and the distribution paths on Linux. A static
+OpenSSL needs no CA bundle of its own. See
+`vendor/libtorrent/src/session_impl.cpp`.
 
-macOS needs nothing more. libc++, libSystem, CoreFoundation, and
-SystemConfiguration are always dynamic system libraries.
+A fully static Linux musl build also needs a static C++ runtime
+(`-static-libstdc++`, or libc++ built for musl).

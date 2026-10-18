@@ -194,7 +194,7 @@ nix --extra-experimental-features 'nix-command flakes' develop -c cargo test
 
 If flakes are already on in your Nix config, `nix develop -c` is enough. The tests stay on your machine. The swarm tests run a seeder on 127.0.0.1, and the search tests read recorded responses. To search the live sources, run `cargo test -p torrential-search --test live -- --ignored` in the dev shell.
 
-The binary loads OpenSSL from the Nix store path it was built against. If Nix garbage collection removes that path, the binary no longer starts, so build it again.
+OpenSSL links statically, like libtorrent, so the binary loads no library from the Nix store. It keeps working after Nix garbage collection.
 
 ## License
 
