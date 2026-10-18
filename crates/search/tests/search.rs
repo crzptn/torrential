@@ -600,6 +600,34 @@ async fn progress_shows_each_answer_and_the_final_ranking_is_unchanged() {
 }
 
 #[tokio::test]
+async fn a_torrent_fetch_failure_never_quotes_the_link() {
+    let torrent = netinst();
+    let server = Server::start(vec![
+        ("/dl/ok", vec![ok(torrent.clone())]),
+        ("/dl/huge", vec![Reply { content_length: false, ..ok(vec![b'd'; 17 << 20]) }]),
+    ])
+    .await;
+    let search = Search::new(&SearchConfig::default(), ResultCache::new()).unwrap();
+    let link = |path: &str| format!("{}{path}?jackett_apikey=k3y", server.base);
+
+    let fetched = search.fetch_torrent(&link("/dl/ok")).await.unwrap();
+    let missing = search.fetch_torrent(&link("/dl/gone")).await.unwrap_err();
+    let huge = search.fetch_torrent(&link("/dl/huge")).await.unwrap_err();
+    let refused = search.fetch_torrent("http://127.0.0.1:9/dl?apikey=k3y").await.unwrap_err();
+
+    assert_eq!(fetched, torrent);
+    assert_eq!(
+        (missing.code, missing.message.as_str()),
+        (ErrorCode::FetchFailed, "could not fetch the .torrent file: http 404")
+    );
+    assert_eq!(huge.message, "could not fetch the .torrent file: larger than 16 MiB");
+    assert!(refused.message.starts_with("could not fetch the .torrent file: "), "{}", refused.message);
+    for error in [&missing, &huge, &refused] {
+        assert!(!serde_json::to_string(error).unwrap().contains("k3y"), "{error:?}");
+    }
+}
+
+#[tokio::test]
 async fn rejects_unknown_sources_and_queries_without_words() {
     let search = Search::new(&SearchConfig::default(), ResultCache::new()).unwrap();
 

@@ -27,12 +27,13 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, timeout_at};
-use torrential_core::{Error, ErrorCode, SearchQuery, SearchResult};
+use torrential_core::{Error, ErrorCode, SearchQuery, SearchResult, text};
+use url::Url;
 
 use crate::assemble::{Answer, Run, assemble, merged, vet};
 use crate::cache::AnswerKey;
 pub use crate::cache::ResultCache;
-use crate::http::Http;
+use crate::http::{FetchError, Http, Retry};
 use crate::sources::{Ctx, Failure, Source, Stores};
 use crate::terms::Terms;
 
@@ -188,6 +189,31 @@ impl Search {
         let (result, linked) = assemble(query, &terms, &runs, millis(started.elapsed()))?;
         cache.remember(&linked);
         Ok(result)
+    }
+
+    /// The `.torrent` file at `url`, which may be a private link from
+    /// [`ResultCache::find`], so errors never quote it.
+    pub async fn fetch_torrent(&self, url: &str) -> Result<Vec<u8>, Error> {
+        const CAP: usize = 16 << 20;
+        const WITHIN: Duration = Duration::from_secs(20);
+        let url = Url::parse(url)
+            .ok()
+            .filter(|u| matches!(u.scheme(), "http" | "https"))
+            .ok_or_else(|| Error::new(ErrorCode::InvalidRef, "a .torrent URL must start with http:// or https://"))?;
+        // A private tracker may count each request for a .torrent as a grab.
+        let body = self.inner.http.fetch(&url, CAP, Instant::now() + WITHIN, Retry::Never).await;
+        body.map_err(|e| {
+            let why = match e {
+                FetchError::Timeout => format!("no answer within {} seconds", WITHIN.as_secs()),
+                FetchError::Status(status) => format!("http {status}"),
+                FetchError::Connect(reason) | FetchError::Decode(reason) => {
+                    text::truncate(&text::sanitize(&reason), 160)
+                }
+                FetchError::TooLarge(cap) => format!("larger than {} MiB", cap >> 20),
+            };
+            Error::new(ErrorCode::FetchFailed, format!("could not fetch the .torrent file: {why}"))
+                .with_hint("check the network connection, or download by magnet link")
+        })
     }
 
     fn select(&self, names: &[String]) -> Result<Vec<Arc<Source>>, Error> {
