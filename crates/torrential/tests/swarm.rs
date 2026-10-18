@@ -231,6 +231,20 @@ impl Seeder {
     fn uploaded(&self) -> u64 {
         self.session.status(self.id).unwrap().uploaded_payload
     }
+
+    /// The upload count once the seeder has no peer left. A killed peer's uTP stream gets no
+    /// reset, so the seeder keeps sending into it until the stream times out, seconds later.
+    fn uploaded_once_alone(&self) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let status = self.session.status(self.id).unwrap();
+            if status.peers == 0 {
+                return status.uploaded_payload;
+            }
+            assert!(Instant::now() < deadline, "the seeder kept {} peers", status.peers);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -367,12 +381,12 @@ fn a_killed_engine_resumes_without_downloading_verified_pieces_again() {
     let addr = home.logged_addrs().pop().expect("the engine logged its listen address");
     std::thread::sleep(Duration::from_secs(1));
     home.kill_engine();
-    let sent_before_restart = seeder.uploaded();
+    let sent_before_restart = seeder.uploaded_once_alone();
 
     assert_eq!(state(&home.job(&fixture.id())), "interrupted");
     assert_eq!(home.logged_addrs().last(), Some(&addr), "the new engine listens on the same port");
     assert_eq!(home.ok(&["resume", &fixture.short()])["changes"][0]["result"], "resumed");
-    let wait = home.run(&["wait", &fixture.short(), "--timeout", RECONNECT]);
+    let wait = home.run(&["wait", &fixture.short()]);
     assert_eq!(wait.code, 0, "{}{}", wait.stdout, wait.stderr);
     let resent = seeder.uploaded() - sent_before_restart;
     assert!(
