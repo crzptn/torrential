@@ -19,6 +19,7 @@ use crate::env::Env;
 use crate::output::views::{self, ChangeCommand, Check, CheckStatus, DaemonReport};
 use crate::output::{self, Mode, Typed, render};
 use crate::paths::Paths;
+use crate::skill::{self, SkillCommand, Writes};
 use connect::Conn;
 
 pub fn run(command: Command, mode: Mode, env: &Env) -> u8 {
@@ -115,6 +116,7 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
             print!("{}", output::json_document(&schema, None));
             Ok(0)
         }
+        Command::Skill { command } => skill(command, mode, env, &cwd),
         Command::Completions { shell } => {
             let setup = crate::completions::setup(shell);
             match mode {
@@ -290,6 +292,62 @@ fn daemon(command: DaemonCommand, env: &Env, mode: Mode) -> Result<u8, Error> {
     }
 }
 
+fn skill(command: SkillCommand, mode: Mode, env: &Env, cwd: &Path) -> Result<u8, Error> {
+    let version = env.version();
+    let shipped = skill::Shipped { text: skill::SKILL, version: &version };
+    #[derive(Serialize)]
+    struct Changes<'a> {
+        scope: skill::Scope,
+        changes: &'a [skill::Change],
+    }
+    match command {
+        SkillCommand::Show => {
+            #[derive(Serialize)]
+            struct Text<'a> {
+                version: &'a str,
+                text: &'a str,
+            }
+            match mode {
+                Mode::Json => {
+                    let body = Text { version: &version, text: skill::SKILL };
+                    print!("{}", output::json_document(&Typed { kind: "skill", body }, None));
+                }
+                _ => print!("{}", skill::SKILL),
+            }
+            Ok(0)
+        }
+        SkillCommand::Status(args) => {
+            #[derive(Serialize)]
+            struct Status<'a> {
+                version: &'a str,
+                scope: skill::Scope,
+                targets: &'a [skill::Installed],
+            }
+            let layout = skill::Layout::new(args.scope, env, cwd)?;
+            let installed: Vec<skill::Installed> =
+                skill::status(&layout, shipped)?.into_iter().filter(|i| args.agent.covers(i.target)).collect();
+            let install = skill::command("install", &args, false, cwd);
+            let doc = views::skill_status(&installed, &version, &install);
+            let body = Status { version: &version, scope: args.scope, targets: &installed };
+            Ok(emit(mode, &doc, &Typed { kind: "skill_status", body }))
+        }
+        SkillCommand::Install(args) => {
+            let layout = skill::Layout::new(args.target.scope, env, cwd)?;
+            let writes = Writes::new(env, skill::command("install", &args.target, args.force, cwd));
+            let changes = skill::install(&layout, args.target.agent, args.force, shipped, &writes)?;
+            let body = Changes { scope: args.target.scope, changes: &changes };
+            Ok(emit(mode, &views::skill_changes(&changes), &Typed { kind: "skill_install", body }))
+        }
+        SkillCommand::Uninstall(args) => {
+            let layout = skill::Layout::new(args.scope, env, cwd)?;
+            let writes = Writes::new(env, skill::command("uninstall", &args, false, cwd));
+            let changes = skill::uninstall(&layout, args.agent, shipped, &writes)?;
+            let body = Changes { scope: args.scope, changes: &changes };
+            Ok(emit(mode, &views::skill_changes(&changes), &Typed { kind: "skill_uninstall", body }))
+        }
+    }
+}
+
 fn service_report(report: service::Report, mode: Mode) -> Result<u8, Error> {
     #[derive(Serialize)]
     struct Payload {
@@ -356,6 +414,16 @@ fn doctor(env: &Env, mode: Mode, network: bool) -> u8 {
         }
         Ok(None) => checks.push(check("engine", CheckStatus::Ok, "not running; the next command starts it".into())),
         Err(error) => checks.push(check("engine", CheckStatus::Fail, error.message)),
+    }
+    let version = env.version();
+    let shipped = skill::Shipped { text: skill::SKILL, version: &version };
+    match skill::Layout::new(skill::Scope::User, env, Path::new("/")).and_then(|l| skill::status(&l, shipped)) {
+        Ok(installed) => {
+            let (row, skill_fix) = views::skill_check(&installed);
+            checks.push(row);
+            fix = fix.or(skill_fix);
+        }
+        Err(error) => checks.push(check("skill", CheckStatus::Fail, error.message)),
     }
     checks.extend(probe::checks(&paths, settings, network));
     emit(mode, &views::doctor(&checks, fix), &Typed { kind: "doctor", body: Checks { checks: &checks } })

@@ -180,7 +180,8 @@ mod tests {
                 "tui",
                 "daemon",
                 "schema",
-                "completions"
+                "completions",
+                "skill"
             ]
         );
         let daemon = &schema()["commands"][11]["subcommands"];

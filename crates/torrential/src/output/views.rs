@@ -9,6 +9,7 @@ use torrential_core::{Job, JobStatus, Release, ReleaseId, SearchResult, Selectio
 use super::format::{self, NONE};
 use super::theme::Token;
 use super::{Body, Cell, Doc};
+use crate::skill::{Change as SkillChange, Installed, State};
 
 const SHORT_ID: usize = 6;
 const MAX_FILE_ROWS: usize = 200;
@@ -592,6 +593,75 @@ pub fn doctor(checks: &[Check], fix: Option<String>) -> Doc {
         summary: vec![format::count(problems, "problem")],
         next: fix,
     }
+}
+
+fn skill_state_cell(state: State) -> Cell {
+    let token = match state {
+        State::UpToDate => Token::Mint,
+        State::Missing => Token::Muted,
+        State::Outdated | State::Modified | State::Foreign => Token::Accent,
+    };
+    Cell::styled(state.name(), token)
+}
+
+/// `install` is the command that brings every listed copy up to date.
+pub fn skill_status(installed: &[Installed], version: &str, install: &str) -> Doc {
+    let rows = installed
+        .iter()
+        .map(|i| {
+            vec![
+                Cell::styled(i.target.name(), Token::Accent),
+                skill_state_cell(i.state),
+                Cell::new(i.version.as_deref().unwrap_or(NONE)),
+                Cell::new(i.path.display().to_string()),
+            ]
+        })
+        .collect();
+    let mut summary = vec![format!("this binary carries the skill from torrential {version}")];
+    for i in installed {
+        match i.state {
+            State::Modified => summary.push(format!("{} was edited after torrential wrote it", i.target.name())),
+            State::Foreign => summary.push(format!("{} was not written by torrential", i.target.name())),
+            _ => {}
+        }
+    }
+    let kept = installed.iter().any(|i| matches!(i.state, State::Modified | State::Foreign));
+    if kept {
+        summary.push(format!("{install} --force replaces them"));
+    }
+    let stale = installed.iter().any(|i| matches!(i.state, State::Missing | State::Outdated));
+    let next = (stale && !kept).then(|| install.to_string());
+    Doc { body: Body::Table { header: vec!["TARGET", "STATE", "VERSION", "PATH"], rows }, summary, next }
+}
+
+pub fn skill_changes(changes: &[SkillChange]) -> Doc {
+    let rows = changes
+        .iter()
+        .map(|c| {
+            vec![
+                Cell::styled(c.target.name(), Token::Accent),
+                Cell::styled(c.result, Token::Mint),
+                Cell::new(c.path.display().to_string()),
+            ]
+        })
+        .collect();
+    Doc { body: Body::Table { header: vec!["TARGET", "RESULT", "PATH"], rows }, summary: Vec::new(), next: None }
+}
+
+/// The doctor's skill row, and the command that fixes it when one does without losing edits.
+pub fn skill_check(installed: &[Installed]) -> (Check, Option<String>) {
+    let states: Vec<State> = installed.iter().map(|i| i.state).collect();
+    let detail = installed.iter().map(|i| format!("{} {}", i.target.name(), i.state.name())).collect::<Vec<_>>();
+    let status = if states.iter().all(|s| *s == State::UpToDate) {
+        CheckStatus::Ok
+    } else if states.iter().all(|s| *s == State::Missing) {
+        CheckStatus::Skipped
+    } else {
+        CheckStatus::Warn
+    };
+    let fixable = states.iter().all(|s| matches!(s, State::UpToDate | State::Missing | State::Outdated));
+    let fix = (fixable && status != CheckStatus::Ok).then(|| "torrential skill install".to_string());
+    (Check { check: "skill".into(), status, detail: detail.join(", ") }, fix)
 }
 
 #[cfg(test)]

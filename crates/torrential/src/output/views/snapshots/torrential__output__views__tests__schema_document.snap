@@ -335,6 +335,122 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
         }
       ],
       "flags": []
+    },
+    {
+      "name": "skill",
+      "about": "Install, check, or print the skill that teaches coding agents to use torrential",
+      "arguments": [],
+      "flags": [],
+      "subcommands": [
+        {
+          "name": "install",
+          "about": "Install the skill where coding agents load it",
+          "arguments": [],
+          "flags": [
+            {
+              "name": "--agent",
+              "help": "`agents` is the shared .agents/skills copy that Codex, Gemini CLI, Cursor, and others read. `claude` links .claude/skills to it",
+              "takes_value": true,
+              "repeatable": false,
+              "value_name": "AGENT",
+              "values": [
+                "agents",
+                "claude",
+                "all"
+              ],
+              "default": "all"
+            },
+            {
+              "name": "--scope",
+              "help": "`user` installs under your home folder, `project` under the current folder",
+              "takes_value": true,
+              "repeatable": false,
+              "value_name": "SCOPE",
+              "values": [
+                "user",
+                "project"
+              ],
+              "default": "user"
+            },
+            {
+              "name": "--force",
+              "help": "Replace a copy that someone edited or that torrential did not write",
+              "takes_value": false,
+              "repeatable": false
+            }
+          ]
+        },
+        {
+          "name": "status",
+          "about": "Show whether each installed copy matches this binary",
+          "arguments": [],
+          "flags": [
+            {
+              "name": "--agent",
+              "help": "`agents` is the shared .agents/skills copy that Codex, Gemini CLI, Cursor, and others read. `claude` links .claude/skills to it",
+              "takes_value": true,
+              "repeatable": false,
+              "value_name": "AGENT",
+              "values": [
+                "agents",
+                "claude",
+                "all"
+              ],
+              "default": "all"
+            },
+            {
+              "name": "--scope",
+              "help": "`user` installs under your home folder, `project` under the current folder",
+              "takes_value": true,
+              "repeatable": false,
+              "value_name": "SCOPE",
+              "values": [
+                "user",
+                "project"
+              ],
+              "default": "user"
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "about": "Print the skill this binary carries",
+          "arguments": [],
+          "flags": []
+        },
+        {
+          "name": "uninstall",
+          "about": "Remove the copies torrential wrote, and keep any that were edited",
+          "arguments": [],
+          "flags": [
+            {
+              "name": "--agent",
+              "help": "`agents` is the shared .agents/skills copy that Codex, Gemini CLI, Cursor, and others read. `claude` links .claude/skills to it",
+              "takes_value": true,
+              "repeatable": false,
+              "value_name": "AGENT",
+              "values": [
+                "agents",
+                "claude",
+                "all"
+              ],
+              "default": "all"
+            },
+            {
+              "name": "--scope",
+              "help": "`user` installs under your home folder, `project` under the current folder",
+              "takes_value": true,
+              "repeatable": false,
+              "value_name": "SCOPE",
+              "values": [
+                "user",
+                "project"
+              ],
+              "default": "user"
+            }
+          ]
+        }
+      ]
     }
   ],
   "global_flags": [

@@ -662,3 +662,40 @@ fn every_error_class() {
     }
     insta::assert_snapshot!(out);
 }
+
+#[test]
+fn skill_status_suggests_install_only_when_it_loses_no_edits() {
+    use crate::skill::{Installed, State, Target};
+    let row = |target: Target, state, version: Option<&str>| Installed {
+        target,
+        path: PathBuf::from(format!("/Users/ada/.{}/skills/torrential", target.name())),
+        state,
+        version: version.map(String::from),
+    };
+    let stale = [row(Target::Agents, State::Outdated, Some("0.0.9")), row(Target::Claude, State::Missing, None)];
+    assert_eq!(
+        skill_status(&stale, "0.1.0", "torrential skill install").plain(),
+        "TARGET\tSTATE\tVERSION\tPATH\n\
+         agents\toutdated\t0.0.9\t/Users/ada/.agents/skills/torrential\n\
+         claude\tmissing\t-\t/Users/ada/.claude/skills/torrential\n\
+         # this binary carries the skill from torrential 0.1.0\n\
+         next: torrential skill install\n"
+    );
+    let edited = [row(Target::Agents, State::Modified, Some("0.1.0")), row(Target::Claude, State::Foreign, None)];
+    assert_eq!(
+        skill_status(&edited, "0.1.0", "torrential skill install").plain(),
+        "TARGET\tSTATE\tVERSION\tPATH\n\
+         agents\tmodified\t0.1.0\t/Users/ada/.agents/skills/torrential\n\
+         claude\tforeign\t-\t/Users/ada/.claude/skills/torrential\n\
+         # this binary carries the skill from torrential 0.1.0\n\
+         # agents was edited after torrential wrote it\n\
+         # claude was not written by torrential\n\
+         # torrential skill install --force replaces them\n"
+    );
+    let check = |status, detail: &str| Check { check: "skill".into(), status, detail: detail.into() };
+    assert_eq!(
+        skill_check(&stale),
+        (check(CheckStatus::Warn, "agents outdated, claude missing"), Some("torrential skill install".into()))
+    );
+    assert_eq!(skill_check(&edited), (check(CheckStatus::Warn, "agents modified, claude foreign"), None));
+}

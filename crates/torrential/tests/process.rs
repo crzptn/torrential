@@ -304,3 +304,77 @@ fn daemon_stop_is_idempotent() {
     assert!(!alive(pid));
     assert_eq!(home.run(&["daemon", "stop"]).stdout, "result: already_stopped\n");
 }
+
+const SKILL: &str = include_str!("../../../skills/torrential/SKILL.md");
+
+impl Home {
+    fn json(&self, args: &[&str]) -> serde_json::Value {
+        let run = self.run(args);
+        assert_eq!(run.code, 0, "torrential {args:?}: {}{}", run.stdout, run.stderr);
+        serde_json::from_str(&run.stdout).unwrap()
+    }
+
+    fn skill_results(&self, args: &[&str]) -> Vec<(String, String)> {
+        let doc = self.json(args);
+        let row = |c: &serde_json::Value| (c["target"].as_str().unwrap().into(), c["result"].as_str().unwrap().into());
+        doc["changes"].as_array().unwrap().iter().map(row).collect()
+    }
+}
+
+fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+    rows.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+}
+
+#[test]
+fn skill_install_links_claude_to_the_shared_copy_and_twice_changes_nothing() {
+    let home = Home::new();
+    let installed = home.skill_results(&["skill", "install", "--json"]);
+    assert_eq!(installed, pairs(&[("agents", "installed"), ("claude", "installed")]));
+    let root = home.dir.path().display().to_string();
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(
+        home.run(&["skill", "status"]).stdout,
+        format!(
+            "TARGET\tSTATE\tVERSION\tPATH\n\
+             agents\tup_to_date\t{version}\t{root}/.agents/skills/torrential\n\
+             claude\tup_to_date\t{version}\t{root}/.claude/skills/torrential\n\
+             # this binary carries the skill from torrential {version}\n"
+        )
+    );
+    let copy = home.dir.path().join(".agents/skills/torrential");
+    let link = home.dir.path().join(".claude/skills/torrential");
+    assert_eq!(link.canonicalize().unwrap(), copy.canonicalize().unwrap());
+    assert_eq!(std::fs::read_to_string(link.join("SKILL.md")).unwrap(), SKILL);
+    let again = home.skill_results(&["skill", "install", "--json"]);
+    assert_eq!(again, pairs(&[("agents", "up_to_date"), ("claude", "up_to_date")]));
+    let removed = home.skill_results(&["skill", "uninstall", "--json"]);
+    assert_eq!(removed, pairs(&[("agents", "removed"), ("claude", "removed")]));
+    assert!(!link.exists() && !copy.exists(), "uninstall left {link:?} or {copy:?}");
+}
+
+#[test]
+fn skill_show_prints_the_embedded_skill_and_help_points_agents_at_it() {
+    let home = Home::new();
+    assert_eq!(home.run(&["skill", "show"]).stdout, SKILL);
+    let help = home.run(&["--help"]);
+    assert_eq!(
+        help.stdout.lines().last(),
+        Some("Agents: run torrential skill install to add the skill that explains torrential.")
+    );
+}
+
+#[test]
+fn doctor_reports_whether_the_skill_is_installed() {
+    let home = Home::new();
+    let skill_row = |doc: serde_json::Value| {
+        let checks = doc["checks"].as_array().unwrap().clone();
+        let row = checks.into_iter().find(|c| c["check"] == "skill").expect("a skill row");
+        (row["status"].as_str().unwrap().to_string(), row["detail"].as_str().unwrap().to_string())
+    };
+    let before = home.json(&["doctor", "--json"]);
+    assert_eq!(before["next"], "torrential skill install");
+    assert_eq!(skill_row(before), ("skipped".into(), "agents missing, claude missing".into()));
+    home.json(&["skill", "install", "--json"]);
+    let after = skill_row(home.json(&["doctor", "--json"]));
+    assert_eq!(after, ("ok".into(), "agents up_to_date, claude up_to_date".into()));
+}

@@ -7,6 +7,7 @@ mod env;
 mod output;
 mod paths;
 mod schema;
+mod skill;
 mod wire;
 
 use std::io::IsTerminal;

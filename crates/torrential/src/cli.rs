@@ -15,7 +15,7 @@ use crate::completions::complete_download_ids;
     version,
     about = "Search torrent indexes and download torrents",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  torrential search arch linux iso\n  torrential get 9b5212 --dir ~/isos\n  torrential wait 9b5212"
+    after_help = "Examples:\n  torrential search arch linux iso\n  torrential get 9b5212 --dir ~/isos\n  torrential wait 9b5212\n\nAgents: run torrential skill install to add the skill that explains torrential."
 )]
 pub struct Cli {
     /// Print JSON on stdout instead of text
@@ -70,6 +70,11 @@ pub enum Command {
     Completions {
         #[arg(value_enum)]
         shell: Shell,
+    },
+    /// Install, check, or print the skill that teaches coding agents to use torrential
+    Skill {
+        #[command(subcommand)]
+        command: crate::skill::SkillCommand,
     },
 }
 
