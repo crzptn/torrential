@@ -280,3 +280,6 @@ fn known_first_desc<T: Ord>(a: Option<T>, b: Option<T>) -> Ordering {
         (None, None) => Ordering::Equal,
     }
 }
+
+#[cfg(test)]
+mod tests;
