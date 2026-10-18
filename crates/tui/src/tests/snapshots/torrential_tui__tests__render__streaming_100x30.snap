@@ -4,10 +4,10 @@ expression: shot(&scenario(size))
 ---
 " torrential                                                                           ↓ 10.0 MiB/s  "
 "                                                                                                    "
-"     search │ night of the living dead                                   searching⠋ 2 of 6 sources  "
+"     search │ night of the living dead                               searching · 2 of 6 sources     "
 "            │                                                                                       "
-"    getting │ wikipedia-en-2026-09-text                         ━━━╸────────────   22%    30m left  "
-"     failed │ openwebtext-2019                                  ━━━━━╸──────────   36%              "
+"    getting │ wikipedia-en-2026-09-text                       ━━━╸────────────   22%      30m left  "
+"     failed │ openwebtext-2019                                ━━━━━╸──────────   36%                "
 "     paused │ 1 download                                                                            "
 "       done │ 2 downloads                                                                           "
 "            │                                                                                       "

@@ -251,12 +251,13 @@ fn search_status(state: &State, short: bool) -> Vec<(String, Style)> {
     }
     match &search.phase {
         SearchPhase::Running { pending } => {
-            let mut out = vec![("searching".into(), fg(PENCIL)), (state.spinner().into(), fg(PENCIL))];
             let (answered, asked) = (search.sources.len(), search.sources.len() + pending.len());
-            if !short && asked > 0 {
-                out.push((format!(" {answered} of {asked} sources"), fg(PENCIL)));
-            }
-            out
+            let text = match asked {
+                0 => "searching".to_string(),
+                _ if short => format!("{answered} of {asked}"),
+                _ => format!("searching · {answered} of {asked} sources"),
+            };
+            vec![(text, fg(PENCIL)), (state.spinner().into(), fg(PENCIL))]
         }
         SearchPhase::Done => {
             let found = search.releases.len();
@@ -290,7 +291,7 @@ fn download_grid(right: u16) -> Grid {
         70.. => 12,
         _ => 8,
     };
-    let tail = right - 10;
+    let tail = right - 12;
     let percent = tail - 2;
     Grid { rule: percent - 6 - rule_cells, rule_cells, percent, tail, right }
 }

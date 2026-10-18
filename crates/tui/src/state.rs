@@ -204,8 +204,11 @@ pub struct State {
     pub next_search: u64,
 }
 
-pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-pub const SPIN_EVERY: Duration = Duration::from_millis(80);
+/// An ellipsis that writes itself out after the word it follows. Every frame is three cells, so
+/// nothing after it moves.
+pub const SPINNER: [&str; 4] = ["   ", ".  ", ".. ", "..."];
+/// Four frames a second, the most any motion on the screen may use.
+pub const SPIN_EVERY: Duration = Duration::from_millis(250);
 /// How long the cursor rests on a result before its file list is fetched.
 pub const PREFETCH_AFTER: Duration = Duration::from_millis(300);
 
