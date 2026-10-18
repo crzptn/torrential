@@ -71,10 +71,12 @@ impl Ports {
             Some("roomy") => Box::new(admission::RoomyDisk),
             _ => Box::new(admission::RealDisk),
         };
+        let search =
+            torrential_search::SearchConfig { cache_dir: Some(paths.cache.join("search")), ..Default::default() };
         Ok(Self {
+            search: Arc::new(search_port::Live::new(&search)?),
             engine: Box::new(Libtorrent::start(&paths.state, network)?),
             parse: libtorrent::parse,
-            search: Arc::new(search_port::Unwired),
             disk,
         })
     }
@@ -110,6 +112,7 @@ pub fn start(
     config: OwnerConfig,
     version: String,
 ) -> Result<Running, Error> {
+    ports.search.restore(store.results(owner::now())?);
     let (events_tx, events) = mpsc::unbounded_channel();
     let (engine, thread) = engine_port::spawn(ports.engine, events_tx);
     let owner = Owner::new(store, engine.clone(), ports.parse, ports.disk, config)?;

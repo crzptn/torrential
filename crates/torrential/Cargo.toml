@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 torrential-core = { path = "../core" }
 torrential-engine = { path = "../engine" }
+torrential-search = { path = "../search" }
 torrential-tui = { path = "../tui" }
 anstream = "1"
 anstyle = "1"

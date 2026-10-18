@@ -98,7 +98,7 @@ pub struct GetCommand {
 }
 
 pub enum Command {
-    Resolve { reference: String, command: &'static str, reply: Reply<Resolved> },
+    Resolve { prefix: HexPrefix, results: Vec<Release>, command: &'static str, reply: Reply<Resolved> },
     Get { get: Box<GetCommand>, reply: Reply<GetReply> },
     Metadata { target: MetaTarget, deadline: Instant, reply: Reply<FilesInfo> },
     Cache { metainfo: Metainfo },
@@ -142,7 +142,6 @@ struct Stopping {
 pub struct Owner {
     store: Store,
     jobs: BTreeMap<TorrentId, JobEntry>,
-    results: Vec<Release>,
     tombstones: Vec<Tombstone>,
     /// Torrents in the engine only to fetch their file list for `files`.
     probes: BTreeSet<TorrentId>,
@@ -193,7 +192,6 @@ impl Owner {
         let now = now();
         let (updates, _) = broadcast::channel(256);
         let mut owner = Self {
-            results: store.results(now)?,
             tombstones: store.tombstones(now)?,
             store,
             jobs,
@@ -241,8 +239,8 @@ impl Owner {
 
     fn command(&mut self, command: Command) {
         match command {
-            Command::Resolve { reference, command, reply } => {
-                let _ = reply.send(self.resolve_any(&reference, command));
+            Command::Resolve { prefix, results, command, reply } => {
+                let _ = reply.send(self.resolve_any(&prefix, &results, command));
             }
             Command::Get { get, reply } => {
                 let _ = reply.send(self.get(*get));
@@ -329,11 +327,11 @@ impl Owner {
         self.store.alias_owners(hash).ok()?.into_iter().find(|id| self.jobs.contains_key(id))
     }
 
-    fn resolve_any(&self, reference: &str, command: &'static str) -> Result<Resolved, Error> {
-        let prefix: HexPrefix = reference.parse()?;
+    /// `results` are the recent search results the prefix matches, with their private links.
+    fn resolve_any(&self, prefix: &HexPrefix, results: &[Release], command: &'static str) -> Result<Resolved, Error> {
         let jobs: Vec<(TorrentId, Option<&str>)> =
             self.jobs.values().map(|j| (j.id(), j.record.name.as_deref())).collect();
-        match resolve::prefix(&prefix, &jobs, &self.results, Scope::DownloadsAndResults, command)? {
+        match resolve::prefix(prefix, &jobs, results, Scope::DownloadsAndResults, command)? {
             Found::Job(id) => Ok(Resolved::Job(id)),
             Found::Release(release) => {
                 let cached = match release.id {
@@ -350,14 +348,9 @@ impl Owner {
         (self.parse)(&bytes).ok().map(Arc::new)
     }
 
+    /// Saves search results as shown, for the next engine process to restore.
     fn record_results(&mut self, releases: Vec<Release>) {
-        let now = now();
-        if self.store.record_results(&releases, now).is_ok() {
-            self.results.retain(|r| !releases.iter().any(|n| n.id == r.id));
-            let mut fresh = releases;
-            fresh.append(&mut self.results);
-            self.results = fresh;
-        }
+        let _ = self.store.record_results(&releases, now());
     }
 
     fn others_remaining(&self, dir: &Path, except: TorrentId) -> u64 {

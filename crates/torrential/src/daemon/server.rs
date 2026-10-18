@@ -16,7 +16,7 @@ use super::engine_port::{EngineHandle, Metainfo, ParseTorrent};
 use super::files;
 use super::magnet;
 use super::owner::{Command, FilesInfo, GetCommand, MetaTarget, Origin, Reply, Resolved, Source, Update};
-use super::search_port::{Partial, SearchPort};
+use super::search_port::{Progress, SearchPort};
 use crate::wire;
 
 /// The largest `.torrent` file torrential reads.
@@ -97,7 +97,8 @@ async fn search(ctx: &Ctx, query: SearchQuery) -> Result<SearchResult, Error> {
     Ok(result)
 }
 
-/// Sanitizes names, and remembers the releases so `get` and `files` can resolve their IDs.
+/// Sanitizes names, and saves the releases as shown so a later engine process still resolves
+/// their IDs. This process resolves them through the search port.
 fn record(ctx: &Ctx, result: &mut SearchResult) {
     for release in &mut result.releases {
         release.name = sanitize(&release.name);
@@ -106,13 +107,13 @@ fn record(ctx: &Ctx, result: &mut SearchResult) {
 }
 
 async fn stream_search(ctx: &Ctx, query: SearchQuery, wr: &mut OwnedWriteHalf) -> std::io::Result<()> {
-    let (partials_tx, mut partials) = mpsc::unbounded_channel();
-    let search = ctx.search.search_stream(query, partials_tx);
+    let (progress_tx, mut progress) = mpsc::unbounded_channel();
+    let search = ctx.search.search_stream(query, progress_tx);
     tokio::pin!(search);
     let result = loop {
         tokio::select! {
             biased;
-            Some(Partial { mut result, pending }) = partials.recv() => {
+            Some(Progress { mut result, pending }) = progress.recv() => {
                 record(ctx, &mut result);
                 wire::write_async(wr, &Event::SearchUpdate { result, pending }).await?;
             }
@@ -162,7 +163,9 @@ async fn fetch(ctx: &Ctx, url: String) -> Result<Metainfo, Error> {
 async fn resolve(ctx: &Ctx, target: Target, command: &'static str) -> Result<Source, Error> {
     match target {
         Target::Prefix(prefix) => {
-            match ctx.owner.ask(|reply| Command::Resolve { reference: prefix, command, reply }).await? {
+            let prefix = prefix.parse()?;
+            let results = ctx.search.find(&prefix);
+            match ctx.owner.ask(|reply| Command::Resolve { prefix, results, command, reply }).await? {
                 Resolved::Job(id) => Ok(Source::Download(id)),
                 Resolved::Release { release, cached } => release_source(ctx, *release, cached).await,
             }

@@ -1,6 +1,5 @@
-//! The seam between the engine process and the search service. `torrential-search`
-//! implements [`SearchPort`] in the wiring round. Searches run in the connection's own
-//! task, never in the owner, so a slow source cannot delay a pause.
+//! The seam between the engine process and the search service. Searches run in the
+//! connection's own task, never in the owner, so a slow source cannot delay a pause.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -9,15 +8,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use torrential_core::{Error, ErrorCode, Release, SearchQuery, SearchResult, SourceOutcome, SourceReport};
+use torrential_core::{Error, ErrorCode, HexPrefix, Release, SearchQuery, SearchResult, SourceOutcome, SourceReport};
+pub use torrential_search::Progress;
+use torrential_search::{ResultCache, Search, SearchConfig};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// A streaming search's results so far, and the sources still to answer.
-pub struct Partial {
-    pub result: SearchResult,
-    pub pending: Vec<String>,
-}
 
 pub trait SearchPort: Send + Sync {
     /// Ranked results. Fails with `providers_unavailable` only when every source failed.
@@ -26,29 +21,60 @@ pub trait SearchPort: Send + Sync {
     fn search_stream(
         &self,
         query: SearchQuery,
-        partials: mpsc::UnboundedSender<Partial>,
-    ) -> BoxFuture<'_, Result<SearchResult, Error>> {
-        drop(partials);
-        self.search(query)
-    }
+        progress: mpsc::UnboundedSender<Progress>,
+    ) -> BoxFuture<'_, Result<SearchResult, Error>>;
     /// The bytes of a `.torrent` file a search result links to.
     fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>>;
+    /// Releases from recent searches whose ID starts with `prefix`, newest first. They keep the
+    /// links from private sources, which can carry an API key, so they are for downloading and
+    /// never for printing.
+    fn find(&self, prefix: &HexPrefix) -> Vec<Release>;
+    /// Remembers what an earlier engine process showed, newest first. Called once, at start.
+    fn restore(&self, releases: Vec<Release>);
 }
 
-pub struct Unwired;
-
-fn unwired() -> Error {
-    Error::internal("this build of torrential has no search service yet")
-        .with_hint("install a release build of torrential")
+/// The real search, with the one result cache the engine process owns.
+pub struct Live {
+    search: Search,
+    cache: ResultCache,
 }
 
-impl SearchPort for Unwired {
-    fn search(&self, _: SearchQuery) -> BoxFuture<'_, Result<SearchResult, Error>> {
-        Box::pin(async { Err(unwired()) })
+impl Live {
+    pub fn new(config: &SearchConfig) -> Result<Self, Error> {
+        let cache = ResultCache::new();
+        Ok(Self { search: Search::new(config, cache.clone())?, cache })
+    }
+}
+
+impl SearchPort for Live {
+    fn search(&self, query: SearchQuery) -> BoxFuture<'_, Result<SearchResult, Error>> {
+        Box::pin(async move { self.search.search(&query).await })
     }
 
-    fn fetch_torrent(&self, _: String) -> BoxFuture<'_, Result<Vec<u8>, Error>> {
-        Box::pin(async { Err(unwired()) })
+    fn search_stream(
+        &self,
+        query: SearchQuery,
+        progress: mpsc::UnboundedSender<Progress>,
+    ) -> BoxFuture<'_, Result<SearchResult, Error>> {
+        Box::pin(async move {
+            self.search
+                .search_with_progress(&query, |update| {
+                    let _ = progress.send(update);
+                })
+                .await
+        })
+    }
+
+    fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>> {
+        Box::pin(async move { self.search.fetch_torrent(&url).await })
+    }
+
+    fn find(&self, prefix: &HexPrefix) -> Vec<Release> {
+        self.cache.find(prefix)
+    }
+
+    fn restore(&self, releases: Vec<Release>) {
+        self.cache.restore(releases);
     }
 }
 
@@ -61,6 +87,8 @@ struct FakeState {
     torrents: BTreeMap<String, Vec<u8>>,
     delay: Duration,
     script: Vec<FakeSource>,
+    /// What searches returned, newest first.
+    recent: Vec<Release>,
 }
 
 /// One source of the fake search. It answers `after` a streaming search starts: with the
@@ -91,7 +119,7 @@ impl Fake {
 
     pub fn scripted(catalog: Vec<Release>, mut script: Vec<FakeSource>, torrents: BTreeMap<String, Vec<u8>>) -> Self {
         script.sort_by_key(|s| s.after);
-        Self(Arc::new(Mutex::new(FakeState { catalog, torrents, delay: Duration::ZERO, script })))
+        Self(Arc::new(Mutex::new(FakeState { catalog, torrents, delay: Duration::ZERO, script, recent: Vec::new() })))
     }
 
     #[cfg(test)]
@@ -107,6 +135,13 @@ impl Fake {
     fn parts(&self) -> (Vec<Release>, Vec<FakeSource>, Duration) {
         let state = self.0.lock().unwrap();
         (state.catalog.clone(), state.script.clone(), state.delay)
+    }
+
+    fn remember(&self, result: SearchResult) -> SearchResult {
+        let mut state = self.0.lock().unwrap();
+        state.recent.retain(|r| !result.releases.iter().any(|n| n.id == r.id));
+        state.recent.splice(0..0, result.releases.iter().cloned());
+        result
     }
 }
 
@@ -161,28 +196,28 @@ impl SearchPort for Fake {
         Box::pin(async move {
             let (catalog, script, delay) = self.parts();
             tokio::time::sleep(delay).await;
-            Ok(compose(&catalog, &script, query, delay))
+            Ok(self.remember(compose(&catalog, &script, query, delay)))
         })
     }
 
     fn search_stream(
         &self,
         query: SearchQuery,
-        partials: mpsc::UnboundedSender<Partial>,
+        progress: mpsc::UnboundedSender<Progress>,
     ) -> BoxFuture<'_, Result<SearchResult, Error>> {
         Box::pin(async move {
             let (catalog, script, _) = self.parts();
             let started = tokio::time::Instant::now();
             for answered in 1..script.len() {
                 tokio::time::sleep_until(started + script[answered - 1].after).await;
-                let result = compose(&catalog, &script[..answered], query.clone(), started.elapsed());
+                let result = self.remember(compose(&catalog, &script[..answered], query.clone(), started.elapsed()));
                 let pending = script[answered..].iter().map(|s| s.name.clone()).collect();
-                let _ = partials.send(Partial { result, pending });
+                let _ = progress.send(Progress { result, pending });
             }
             if let Some(last) = script.last() {
                 tokio::time::sleep_until(started + last.after).await;
             }
-            Ok(compose(&catalog, &script, query, started.elapsed()))
+            Ok(self.remember(compose(&catalog, &script, query, started.elapsed())))
         })
     }
 
@@ -193,5 +228,18 @@ impl SearchPort for Fake {
                     .with_hint("try the magnet link instead")
             })
         })
+    }
+
+    fn find(&self, prefix: &HexPrefix) -> Vec<Release> {
+        self.0.lock().unwrap().recent.iter().filter(|r| prefix.matches(&r.id)).cloned().collect()
+    }
+
+    fn restore(&self, releases: Vec<Release>) {
+        let mut state = self.0.lock().unwrap();
+        for release in releases {
+            if !state.recent.iter().any(|r| r.id == release.id) {
+                state.recent.push(release);
+            }
+        }
     }
 }
