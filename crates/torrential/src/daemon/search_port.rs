@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use torrential_core::{
@@ -43,6 +43,8 @@ pub trait SearchPort: Send + Sync {
     fn saved_link(&self, id: &ReleaseId) -> Option<SavedLink>;
     /// Remembers what an earlier engine process saved, newest first. Called once, at start.
     fn restore(&self, saved: Vec<(Release, Option<SavedLink>)>);
+    /// When the newest cached answer expires. `None` while no answer is cached.
+    fn answers_expire(&self) -> Option<Instant>;
 }
 
 /// The real search, with the one result cache the engine process owns.
@@ -100,6 +102,10 @@ impl SearchPort for Live {
 
     fn restore(&self, saved: Vec<(Release, Option<SavedLink>)>) {
         self.cache.restore(saved);
+    }
+
+    fn answers_expire(&self) -> Option<Instant> {
+        self.cache.expires()
     }
 }
 
@@ -288,5 +294,9 @@ impl SearchPort for Fake {
                 state.recent.push(release);
             }
         }
+    }
+
+    fn answers_expire(&self) -> Option<Instant> {
+        None
     }
 }

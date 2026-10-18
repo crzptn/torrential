@@ -150,7 +150,7 @@ The engine reads the file when it starts. To apply an edit, run `torrential daem
 
 ### Downloads outlive the command
 
-The first command that needs the engine starts it in the background. Commands talk to it over a Unix socket and return. The engine keeps downloading after the command, the agent's turn, or the session ends. It runs up to three downloads at once and queues the rest. When nothing is downloading or checking and no command is connected, it exits after 120 seconds. `torrential daemon status` shows the engine and its log, and `torrential daemon stop` saves its state and stops it.
+The first command that needs the engine starts it in the background. Commands talk to it over a Unix socket and return. The engine keeps downloading after the command, the agent's turn, or the session ends. It runs up to three downloads at once and queues the rest. When nothing is downloading or checking and no command is connected, it exits after 120 seconds, or once its newest search answer is 5 minutes old, whichever is later. A search repeated within those 5 minutes answers without asking the sources again. `torrential daemon status` shows the engine and its log, and `torrential daemon stop` saves its state and stops it.
 
 ### It never seeds
 

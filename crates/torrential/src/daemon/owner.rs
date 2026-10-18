@@ -127,7 +127,7 @@ pub enum Command {
     Watch { refs: Vec<String>, reply: Reply<(Vec<Job>, broadcast::Receiver<Update>)> },
     RecordResults(Vec<(Release, Option<SavedLink>)>),
     Connected,
-    Disconnected,
+    Disconnected { keep_until: Option<Instant> },
     Shutdown { reply: oneshot::Sender<()> },
 }
 
@@ -175,6 +175,9 @@ pub struct Owner {
     config: OwnerConfig,
     connections: usize,
     idle_since: Instant,
+    /// When the newest cached search answer expires. An idle engine stays up until then, so a
+    /// repeat search finds it.
+    keep_until: Option<Instant>,
     resume_saved_at: Instant,
 }
 
@@ -226,6 +229,7 @@ impl Owner {
             config,
             connections: 0,
             idle_since: Instant::now(),
+            keep_until: None,
             resume_saved_at: Instant::now(),
         };
         owner.schedule();
@@ -287,7 +291,10 @@ impl Owner {
             }
             Command::RecordResults(releases) => self.record_results(releases),
             Command::Connected => self.connections += 1,
-            Command::Disconnected => self.connections = self.connections.saturating_sub(1),
+            Command::Disconnected { keep_until } => {
+                self.connections = self.connections.saturating_sub(1);
+                self.keep_until = self.keep_until.max(keep_until);
+            }
             Command::Shutdown { reply } => self.begin_stop(Some(reply)),
         }
     }
@@ -1368,7 +1375,7 @@ impl Owner {
         let Some(timeout) = self.config.idle_timeout else { return };
         if self.connections > 0 || self.busy() || self.stopping.is_some() {
             self.idle_since = now;
-        } else if now.duration_since(self.idle_since) >= timeout {
+        } else if now.duration_since(self.idle_since) >= timeout && self.keep_until.is_none_or(|until| now >= until) {
             self.begin_stop(None);
         }
     }
