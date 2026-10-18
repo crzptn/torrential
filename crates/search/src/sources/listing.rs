@@ -46,7 +46,10 @@ pub(super) fn hrefs(html: &str) -> Vec<String> {
 /// The `.torrent` files in a listing, one per table row.
 pub(super) fn torrents(html: &str) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
-    for row in html.split("<tr").skip(1) {
+    // Apache and lighttpd put each file in a table row; nginx prints one per line.
+    let rows: Vec<&str> =
+        if html.contains("<tr") { html.split("<tr").skip(1).collect() } else { html.lines().collect() };
+    for row in rows {
         let Some(file) = hrefs(row).into_iter().find(|h| h.ends_with(".torrent") && !h.contains('/')) else {
             continue;
         };
@@ -106,10 +109,11 @@ pub(super) async fn fetch_all(ctx: &Ctx<'_>, dirs: Vec<Url>) -> Result<Vec<(Url,
 }
 
 /// A block page or an error page served with status 200 must not read as an
-/// empty directory. Apache's index always links its column sorts.
+/// empty directory. Apache's index links its column sorts, and nginx and lighttpd
+/// title theirs "Index of".
 pub(super) fn listing(body: &[u8]) -> Result<Vec<Entry>, Failure> {
     let html = String::from_utf8_lossy(body);
-    if !html.contains("?C=N;O=") {
+    if !html.contains("?C=N;O=") && !html.contains("Index of") {
         return Err(Failure::BadResponse("not a directory listing".into()));
     }
     Ok(torrents(&html))
@@ -169,4 +173,39 @@ async fn metainfo(ctx: &Ctx<'_>, url: &Url, deadline: Instant) -> Option<Metainf
     }
     torrents.insert(key, meta.clone());
     Some(meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FILE: &str = "debian-13.7.0-arm64-netinst.iso.torrent";
+
+    fn files(page: &str) -> Vec<String> {
+        listing(page.as_bytes()).unwrap().into_iter().map(|e| e.file).collect()
+    }
+
+    #[test]
+    fn reads_nginx_and_lighttpd_mirrors() {
+        let nginx = format!(
+            "<html>\n<head><title>Index of /debian-cd/current/arm64/bt-cd/</title></head>\n<body>\n\
+             <h1>Index of /debian-cd/current/arm64/bt-cd/</h1><hr><pre><a href=\"../\">../</a>\n\
+             <a href=\"{FILE}\">{FILE}</a>    12-Sep-2026 13:26    56588\n</pre><hr></body>\n</html>\n"
+        );
+        let lighttpd = format!(
+            "<html><head><title>Index of /bt-cd/</title></head><body><h2>Index of /bt-cd/</h2>\
+             <table summary=\"Directory Listing\"><thead><tr><th class=\"n\">Name</th></tr></thead><tbody>\
+             <tr class=\"d\"><td class=\"n\"><a href=\"../\">Parent Directory</a>/</td></tr>\
+             <tr><td class=\"n\"><a href=\"{FILE}\">{FILE}</a></td><td class=\"m\">2026-Sep-12 13:26:00</td></tr>\
+             </tbody></table></body></html>"
+        );
+        assert_eq!(files(&nginx), [FILE]);
+        assert_eq!(files(&lighttpd), [FILE]);
+    }
+
+    #[test]
+    fn a_page_that_is_no_listing_fails() {
+        let block = format!("<html><body>Access denied. <a href=\"{FILE}\">retry</a></body></html>");
+        assert_eq!(listing(block.as_bytes()), Err(Failure::BadResponse("not a directory listing".into())));
+    }
 }
