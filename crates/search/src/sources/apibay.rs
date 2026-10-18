@@ -71,15 +71,9 @@ fn observation(row: Row, trackers: &[String]) -> Option<Observation> {
     let hash = infohash(&row.info_hash)?;
     let code: u32 = row.category.trim().parse().unwrap_or(0);
     let trusted = matches!(row.status.as_str(), "vip" | "trusted");
-    let mut obs = Observation::new(
-        Identity::Hash {
-            hash,
-            torrent_url: None,
-        },
-        &row.name,
-    )?
-    .flag(Flag::Trusted, trusted)
-    .flag(Flag::Adult, (500..600).contains(&code));
+    let mut obs = Observation::new(Identity::Hash { hash, torrent_url: None }, &row.name)?
+        .flag(Flag::Trusted, trusted)
+        .flag(Flag::Adult, (500..600).contains(&code));
     obs.peers = Peers::new(count(&row.seeders), count(&row.leechers));
     obs.size = row.size.trim().parse().ok();
     obs.published = row.added.trim().parse().ok().filter(|t| *t > 0);
@@ -111,19 +105,13 @@ mod tests {
         let lts = all.iter().find(|o| o.name() == "Ubuntu 22.04 LTS").unwrap();
         assert_eq!(
             lts.identity,
-            Identity::Hash {
-                hash: infohash("2c6b6858d61da9543d4231a71db4b1c9264b0685").unwrap(),
-                torrent_url: None
-            }
+            Identity::Hash { hash: infohash("2c6b6858d61da9543d4231a71db4b1c9264b0685").unwrap(), torrent_url: None }
         );
         assert_eq!(lts.size, Some(3_654_957_056));
         assert_eq!(lts.published, Some(1_652_877_231));
         assert_eq!(lts.category, Some(Category::Software));
         assert_eq!(lts.flags.iter().collect::<Vec<_>>(), [&Flag::Trusted]);
-        assert_eq!(
-            lts.info_url.as_deref(),
-            Some("https://thepiratebay.org/description.php?id=59191690")
-        );
+        assert_eq!(lts.info_url.as_deref(), Some("https://thepiratebay.org/description.php?id=59191690"));
         assert_eq!(lts.trackers.len(), 13);
     }
 

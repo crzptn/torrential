@@ -23,15 +23,12 @@ async fn main() {
         eprintln!("usage: record <source> <query words...>");
         std::process::exit(2);
     };
-    let (outcome, bodies) = torrential_search::record(&SearchConfig::default(), &source, &query)
-        .await
-        .unwrap_or_else(|e| {
+    let (outcome, bodies) =
+        torrential_search::record(&SearchConfig::default(), &source, &query).await.unwrap_or_else(|e| {
             eprintln!("{e}");
             std::process::exit(1);
         });
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(&source);
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(&source);
     std::fs::create_dir_all(&dir).expect("create the fixture directory");
     for (url, body) in bodies {
         let body = trim_rss(body);
@@ -55,9 +52,7 @@ fn file_name(url: &str, query: &str, body: &[u8]) -> String {
     if url.query().is_some() {
         stem = format!("{stem}-{}", slug(query));
     }
-    let start = String::from_utf8_lossy(&body[..body.len().min(256)])
-        .trim_start()
-        .to_ascii_lowercase();
+    let start = String::from_utf8_lossy(&body[..body.len().min(256)]).trim_start().to_ascii_lowercase();
     let ext =
         if stem.ends_with(".torrent") || stem.ends_with(".json") || stem.ends_with(".xml") || stem.ends_with(".html") {
             ""
@@ -74,11 +69,8 @@ fn file_name(url: &str, query: &str, body: &[u8]) -> String {
 }
 
 fn slug(s: &str) -> String {
-    let words: Vec<String> = s
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect();
+    let words: Vec<String> =
+        s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect();
     words.join("-")
 }
 

@@ -73,27 +73,9 @@ const BUILTIN: [Row; 8] = [
         base: "https://academictorrents.com/",
         adapter: Adapter::AcademicTorrents,
     },
-    Row {
-        name: "knaben",
-        default_on: true,
-        lawful: false,
-        base: "https://api.knaben.org/",
-        adapter: Adapter::Knaben,
-    },
-    Row {
-        name: "apibay",
-        default_on: true,
-        lawful: false,
-        base: "https://apibay.org/",
-        adapter: Adapter::Apibay,
-    },
-    Row {
-        name: "nyaa",
-        default_on: true,
-        lawful: false,
-        base: "https://nyaa.si/",
-        adapter: Adapter::Nyaa,
-    },
+    Row { name: "knaben", default_on: true, lawful: false, base: "https://api.knaben.org/", adapter: Adapter::Knaben },
+    Row { name: "apibay", default_on: true, lawful: false, base: "https://apibay.org/", adapter: Adapter::Apibay },
+    Row { name: "nyaa", default_on: true, lawful: false, base: "https://nyaa.si/", adapter: Adapter::Nyaa },
 ];
 
 #[derive(Clone, Debug)]
@@ -171,10 +153,7 @@ pub(crate) struct Stores {
 
 impl Stores {
     pub fn new(cache_dir: Option<PathBuf>) -> Stores {
-        Stores {
-            torrents: Mutex::default(),
-            academic: academic::Catalog::new(cache_dir),
-        }
+        Stores { torrents: Mutex::default(), academic: academic::Catalog::new(cache_dir) }
     }
 }
 
@@ -214,19 +193,12 @@ pub(crate) fn registry(config: &SearchConfig) -> Result<Vec<Arc<Source>>, Error>
     let mut sources = Vec::new();
     for row in BUILTIN {
         let base = config.endpoints.get(row.name).map_or(row.base, String::as_str);
-        let meta = SourceMeta {
-            name: row.name.into(),
-            authority: 0,
-            lawful: row.lawful,
-            public: true,
-        };
+        let meta = SourceMeta { name: row.name.into(), authority: 0, lawful: row.lawful, public: true };
         sources.push((meta, row.default_on, base_url(row.name, base)?, row.adapter));
     }
     for TorznabConfig { name, url, api_key } in &config.torznab {
         let valid = !name.is_empty()
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_.".contains(&b));
+            && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_.".contains(&b));
         if !valid {
             return Err(config_error(format!(
                 "torznab source name {name:?} must be lowercase letters, digits, '-', '_', or '.'"
@@ -235,36 +207,19 @@ pub(crate) fn registry(config: &SearchConfig) -> Result<Vec<Arc<Source>>, Error>
         if sources.iter().any(|(meta, ..)| meta.name == *name) {
             return Err(config_error(format!("source name {name:?} is used twice")));
         }
-        let meta = SourceMeta {
-            name: name.clone(),
-            authority: 0,
-            lawful: false,
-            public: false,
-        };
+        let meta = SourceMeta { name: name.clone(), authority: 0, lawful: false, public: false };
         let url = url::Url::parse(url)
             .ok()
             .filter(|u| matches!(u.scheme(), "http" | "https"))
             .ok_or_else(|| config_error(format!("torznab source {name:?} needs an http or https URL")))?;
-        sources.push((
-            meta,
-            true,
-            url,
-            Adapter::Torznab {
-                api_key: api_key.clone(),
-            },
-        ));
+        sources.push((meta, true, url, Adapter::Torznab { api_key: api_key.clone() }));
     }
     Ok(sources
         .into_iter()
         .enumerate()
         .map(|(i, (mut meta, default_on, base, adapter))| {
             meta.authority = u16::try_from(i).unwrap_or(u16::MAX);
-            Arc::new(Source {
-                meta: Arc::new(meta),
-                default_on,
-                base,
-                adapter,
-            })
+            Arc::new(Source { meta: Arc::new(meta), default_on, base, adapter })
         })
         .collect())
 }

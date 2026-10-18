@@ -77,10 +77,7 @@ impl Terms {
                 }
             }
         };
-        Relevance {
-            matched: u16::try_from(matched).unwrap_or(u16::MAX),
-            year,
-        }
+        Relevance { matched: u16::try_from(matched).unwrap_or(u16::MAX), year }
     }
 
     /// True when the name matches a query word that is not a stopword, or any word
@@ -88,10 +85,7 @@ impl Terms {
     pub fn is_relevant(&self, name: &str) -> bool {
         let hits = self.matches(name, &tokens(name));
         let all_stopwords = self.words.iter().all(|w| STOPWORDS.contains(&w.as_str()));
-        self.words
-            .iter()
-            .zip(hits)
-            .any(|(word, hit)| hit && (all_stopwords || !STOPWORDS.contains(&word.as_str())))
+        self.words.iter().zip(hits).any(|(word, hit)| hit && (all_stopwords || !STOPWORDS.contains(&word.as_str())))
     }
 
     /// True when the name matches every query word. Catalogs searched locally use this.
@@ -107,13 +101,7 @@ impl Terms {
         let mut hits: Vec<bool> = self
             .words
             .iter()
-            .map(|w| {
-                if w.is_ascii() {
-                    set.contains(w.as_str())
-                } else {
-                    folded.contains(w.as_str())
-                }
-            })
+            .map(|w| if w.is_ascii() { set.contains(w.as_str()) } else { folded.contains(w.as_str()) })
             .collect();
         // Names often join words the query separates: "arch linux" in "archlinux".
         for run in 2..=3 {
@@ -128,10 +116,7 @@ impl Terms {
 }
 
 fn tokens(s: &str) -> Vec<String> {
-    s.split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .map(str::to_lowercase)
-        .collect()
+    s.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).map(str::to_lowercase).collect()
 }
 
 fn year(token: &str) -> Option<u16> {
@@ -147,13 +132,7 @@ mod tests {
     fn counts_words_and_joined_words() {
         let terms = Terms::parse("Arch Linux ISO");
         let r = terms.relevance("archlinux-2026.10.01-x86_64.iso");
-        assert_eq!(
-            r,
-            Relevance {
-                matched: 3,
-                year: YearMatch::Absent
-            }
-        );
+        assert_eq!(r, Relevance { matched: 3, year: YearMatch::Absent });
         assert!(terms.covers("archlinux-2026.10.01-x86_64.iso"));
         assert!(!terms.covers("ubuntu-24.04.5.1-desktop-amd64.iso"));
     }
@@ -164,27 +143,9 @@ mod tests {
         let same = terms.relevance("Night of the Living Dead (1968) 1080p");
         let absent = terms.relevance("Night of the Living Dead 1080p");
         let other = terms.relevance("Night of the Living Dead (1990) 1080p");
-        assert_eq!(
-            same,
-            Relevance {
-                matched: 6,
-                year: YearMatch::Same
-            }
-        );
-        assert_eq!(
-            absent,
-            Relevance {
-                matched: 5,
-                year: YearMatch::Absent
-            }
-        );
-        assert_eq!(
-            other,
-            Relevance {
-                matched: 5,
-                year: YearMatch::Other
-            }
-        );
+        assert_eq!(same, Relevance { matched: 6, year: YearMatch::Same });
+        assert_eq!(absent, Relevance { matched: 5, year: YearMatch::Absent });
+        assert_eq!(other, Relevance { matched: 5, year: YearMatch::Other });
         assert!(same > absent && absent > other);
     }
 

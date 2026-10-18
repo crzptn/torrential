@@ -78,21 +78,13 @@ mod tests {
     #[test]
     fn keeps_the_newest_point_release_of_each_image() {
         let page = String::from_utf8(fixture::read("ubuntu/24.04.html")).unwrap();
-        let kept: Vec<(String, Option<i64>)> = newest_point_releases(listing::torrents(&page))
-            .into_iter()
-            .map(|e| (e.file, e.modified))
-            .collect();
+        let kept: Vec<(String, Option<i64>)> =
+            newest_point_releases(listing::torrents(&page)).into_iter().map(|e| (e.file, e.modified)).collect();
         assert_eq!(
             kept,
             [
-                (
-                    "ubuntu-24.04.5.1-desktop-amd64.iso.torrent".to_string(),
-                    Some(1_789_499_460)
-                ),
-                (
-                    "ubuntu-24.04.5-live-server-amd64.iso.torrent".to_string(),
-                    Some(1_789_059_420)
-                ),
+                ("ubuntu-24.04.5.1-desktop-amd64.iso.torrent".to_string(), Some(1_789_499_460)),
+                ("ubuntu-24.04.5-live-server-amd64.iso.torrent".to_string(), Some(1_789_059_420)),
             ]
         );
     }

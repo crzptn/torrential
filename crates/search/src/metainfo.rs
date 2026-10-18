@@ -15,11 +15,7 @@ pub(crate) struct Metainfo {
 }
 
 pub(crate) fn parse(bytes: &[u8]) -> Result<Metainfo, String> {
-    let mut parser = Parser {
-        bytes,
-        pos: 0,
-        depth: 0,
-    };
+    let mut parser = Parser { bytes, pos: 0, depth: 0 };
     let root = parser.value()?;
     if parser.pos != bytes.len() {
         return Err("trailing bytes after the torrent".into());
@@ -34,26 +30,14 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Metainfo, String> {
     let sha1 = || -> [u8; 20] { Sha1::digest(info_bytes).into() };
     let sha256 = || -> [u8; 32] { Sha256::digest(info_bytes).into() };
     let hash = match (v1, v2) {
-        (true, true) => InfoHash::Hybrid {
-            v1: sha1(),
-            v2: sha256(),
-        },
+        (true, true) => InfoHash::Hybrid { v1: sha1(), v2: sha256() },
         (false, true) => InfoHash::V2(sha256()),
         _ => InfoHash::V1(sha1()),
     };
     let size = match (info.get(b"length"), info.get(b"files")) {
         (Some(length), _) => length.int().and_then(|n| u64::try_from(n).ok()),
-        (
-            None,
-            Some(Value {
-                kind: Kind::List(files),
-                ..
-            }),
-        ) => files.iter().try_fold(0u64, |total, f| {
-            let length = f
-                .get(b"length")
-                .and_then(Value::int)
-                .and_then(|n| u64::try_from(n).ok())?;
+        (None, Some(Value { kind: Kind::List(files), .. })) => files.iter().try_fold(0u64, |total, f| {
+            let length = f.get(b"length").and_then(Value::int).and_then(|n| u64::try_from(n).ok())?;
             total.checked_add(length)
         }),
         _ => None,
@@ -153,19 +137,12 @@ impl<'a> Parser<'a> {
             b'0'..=b'9' => Kind::Bytes(self.bytes()?),
             other => return Err(format!("unexpected byte {other:#04x} at {start}")),
         };
-        Ok(Value {
-            kind,
-            span: (start, self.pos),
-        })
+        Ok(Value { kind, span: (start, self.pos) })
     }
 
     fn bytes(&mut self) -> Result<&'a [u8], String> {
         let len = usize::try_from(self.int_until(b':')?).map_err(|_| "negative string length")?;
-        let end = self
-            .pos
-            .checked_add(len)
-            .filter(|end| *end <= self.bytes.len())
-            .ok_or("string runs past the end")?;
+        let end = self.pos.checked_add(len).filter(|end| *end <= self.bytes.len()).ok_or("string runs past the end")?;
         let out = &self.bytes[self.pos..end];
         self.pos = end;
         Ok(out)
@@ -181,10 +158,7 @@ impl<'a> Parser<'a> {
     }
 
     fn peek(&self) -> Result<u8, String> {
-        self.bytes
-            .get(self.pos)
-            .copied()
-            .ok_or_else(|| "unexpected end of torrent".into())
+        self.bytes.get(self.pos).copied().ok_or_else(|| "unexpected end of torrent".into())
     }
 }
 
@@ -195,20 +169,12 @@ mod tests {
     #[test]
     fn hashes_the_info_dictionary_bytes_exactly() {
         let info = b"d6:lengthi1024e4:name5:a.iso12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
-        let torrent = [
-            b"d8:announce39:udp://tracker.example.org:1337/announce4:info".as_slice(),
-            info,
-            b"e",
-        ]
-        .concat();
+        let torrent = [b"d8:announce39:udp://tracker.example.org:1337/announce4:info".as_slice(), info, b"e"].concat();
         let meta = parse(&torrent).unwrap();
         let expected: [u8; 20] = Sha1::digest(info).into();
         assert_eq!(meta.hash, InfoHash::V1(expected));
         assert_eq!(meta.size, Some(1024));
-        assert_eq!(
-            meta.trackers,
-            vec!["udp://tracker.example.org:1337/announce".to_string()]
-        );
+        assert_eq!(meta.trackers, vec!["udp://tracker.example.org:1337/announce".to_string()]);
     }
 
     #[test]

@@ -37,10 +37,7 @@ pub(crate) fn is_cam(name: &str, category: Option<Category>) -> bool {
     if category.is_some_and(|c| c != Category::Video) {
         return false;
     }
-    let tokens: Vec<&str> = name
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .collect();
+    let tokens: Vec<&str> = name.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).collect();
     let mut after_year = false;
     let mut previous = "";
     for token in tokens {
@@ -57,8 +54,7 @@ pub(crate) fn is_cam(name: &str, category: Option<Category>) -> bool {
 }
 
 pub(crate) fn is_adult(name: &str) -> bool {
-    name.split(|c: char| !c.is_alphanumeric())
-        .any(|t| ADULT.contains(&t.to_lowercase().as_str()))
+    name.split(|c: char| !c.is_alphanumeric()).any(|t| ADULT.contains(&t.to_lowercase().as_str()))
 }
 
 #[cfg(test)]

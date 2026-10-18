@@ -28,7 +28,9 @@ pub(crate) enum Identity {
         torrent_url: Option<String>,
     },
     /// The source links a `.torrent` file and names no infohash.
-    Locator { torrent_url: String },
+    Locator {
+        torrent_url: String,
+    },
 }
 
 /// Seeders and leechers as one source counted them at one moment, kept together so
@@ -193,10 +195,7 @@ mod tests {
     fn rejects_placeholder_and_malformed_hashes() {
         assert_eq!(infohash("0000000000000000000000000000000000000000"), None);
         assert_eq!(infohash("9b52"), None);
-        assert_eq!(
-            infohash(&ARCH.to_uppercase()).map(|h| h.id().to_hex()),
-            Some(ARCH.to_string())
-        );
+        assert_eq!(infohash(&ARCH.to_uppercase()).map(|h| h.id().to_hex()), Some(ARCH.to_string()));
     }
 
     #[test]
@@ -216,10 +215,7 @@ mod tests {
         );
         let magnet = parse_magnet(&raw).unwrap();
         assert!(matches!(magnet.hash, InfoHash::Hybrid { .. }));
-        assert_eq!(
-            magnet.trackers,
-            vec!["udp://tracker.example.org:1337/Announce".to_string()]
-        );
+        assert_eq!(magnet.trackers, vec!["udp://tracker.example.org:1337/Announce".to_string()]);
         let built = build_magnet(&magnet.hash, "Night of the Living Dead (1968)", &magnet.trackers);
         assert_eq!(
             built,

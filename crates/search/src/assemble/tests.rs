@@ -8,12 +8,7 @@ use super::*;
 use crate::observation::{Identity, Observation, Peers, infohash};
 
 fn source(name: &str, authority: u16, lawful: bool, public: bool) -> Arc<SourceMeta> {
-    Arc::new(SourceMeta {
-        name: name.into(),
-        authority,
-        lawful,
-        public,
-    })
+    Arc::new(SourceMeta { name: name.into(), authority, lawful, public })
 }
 
 fn archive() -> Arc<SourceMeta> {
@@ -27,14 +22,7 @@ fn apibay() -> Arc<SourceMeta> {
 }
 
 fn row(hash: &str, name: &str) -> Observation {
-    Observation::new(
-        Identity::Hash {
-            hash: infohash(hash).unwrap(),
-            torrent_url: None,
-        },
-        name,
-    )
-    .unwrap()
+    Observation::new(Identity::Hash { hash: infohash(hash).unwrap(), torrent_url: None }, name).unwrap()
 }
 
 fn with(mut o: Observation, seeders: Option<u32>, size: Option<u64>, published: Option<i64>) -> Observation {
@@ -45,19 +33,11 @@ fn with(mut o: Observation, seeders: Option<u32>, size: Option<u64>, published: 
 }
 
 fn fresh(source: &Arc<SourceMeta>, rows: Vec<Observation>) -> Run {
-    Run {
-        source: source.clone(),
-        answer: Answer::Fresh(Arc::new(rows)),
-        elapsed_ms: 40,
-    }
+    Run { source: source.clone(), answer: Answer::Fresh(Arc::new(rows)), elapsed_ms: 40 }
 }
 
 fn failed(source: &Arc<SourceMeta>, failure: Failure) -> Run {
-    Run {
-        source: source.clone(),
-        answer: Answer::Failed(failure),
-        elapsed_ms: 6000,
-    }
+    Run { source: source.clone(), answer: Answer::Failed(failure), elapsed_ms: 6000 }
 }
 
 fn search(query: &SearchQuery, runs: &[Run]) -> SearchResult {
@@ -75,28 +55,16 @@ fn h(byte: u8) -> String {
 #[test]
 fn merges_one_torrent_listed_by_two_sources() {
     let mut from_knaben = row(&h(0xaa), "Ubuntu 24.04 Desktop");
-    from_knaben.peers = Some(Peers {
-        seeders: 50,
-        leechers: Some(5),
-    });
+    from_knaben.peers = Some(Peers { seeders: 50, leechers: Some(5) });
     from_knaben.size = Some(100);
     from_knaben.published = Some(1000);
     from_knaben.category = Some(Category::Software);
-    from_knaben.trackers = vec![
-        "udp://a.example:1337/announce".into(),
-        "udp://b.example:1337/announce".into(),
-    ];
+    from_knaben.trackers = vec!["udp://a.example:1337/announce".into(), "udp://b.example:1337/announce".into()];
     let mut from_apibay = row(&h(0xaa).to_uppercase(), "Ubuntu 24.04 Desktop amd64 ISO").flag(Flag::Trusted, true);
-    from_apibay.peers = Some(Peers {
-        seeders: 80,
-        leechers: None,
-    });
+    from_apibay.peers = Some(Peers { seeders: 80, leechers: None });
     from_apibay.size = Some(101);
     from_apibay.published = Some(900);
-    from_apibay.trackers = vec![
-        "udp://b.example:1337/announce".into(),
-        "udp://c.example:1337/announce".into(),
-    ];
+    from_apibay.trackers = vec!["udp://b.example:1337/announce".into(), "udp://c.example:1337/announce".into()];
     from_apibay.info_url = Some("https://thepiratebay.org/description.php?id=1".into());
 
     let result = search(
@@ -135,23 +103,15 @@ fn merges_one_torrent_listed_by_two_sources() {
 fn a_v2_listing_joins_the_hybrid_listing_of_the_same_torrent() {
     let (v1, v2) = (h(0x11), "22".repeat(32));
     let hybrid = Observation::new(
-        Identity::Hash {
-            hash: InfoHash::Hybrid {
-                v1: [0x11; 20],
-                v2: [0x22; 32],
-            },
-            torrent_url: None,
-        },
+        Identity::Hash { hash: InfoHash::Hybrid { v1: [0x11; 20], v2: [0x22; 32] }, torrent_url: None },
         "ImageNet 2012",
     )
     .unwrap();
     let v2_only = row(&v2, "ImageNet 2012 train");
     let academic = source("academictorrents", 4, true, true);
 
-    let result = search(
-        &SearchQuery::new("imagenet"),
-        &[fresh(&academic, vec![hybrid]), fresh(&knaben(), vec![v2_only])],
-    );
+    let result =
+        search(&SearchQuery::new("imagenet"), &[fresh(&academic, vec![hybrid]), fresh(&knaben(), vec![v2_only])]);
 
     assert_eq!(result.releases.len(), 1);
     let release = &result.releases[0];
@@ -175,10 +135,7 @@ fn private_trackers_stay_with_their_own_listing() {
 
     let result = search(
         &SearchQuery::new("debian 13"),
-        &[
-            fresh(&knaben(), vec![public]),
-            fresh(&torznab, vec![private, private_only]),
-        ],
+        &[fresh(&knaben(), vec![public]), fresh(&torznab, vec![private, private_only])],
     );
 
     let magnets: Vec<&str> = result.releases.iter().map(|r| r.magnet.as_deref().unwrap()).collect();
@@ -200,21 +157,10 @@ fn private_trackers_stay_with_their_own_listing() {
 #[test]
 fn locator_rows_get_a_stable_u_ref() {
     let url = "http://127.0.0.1:9117/dl/privatehd/?path=def";
-    let locator = || {
-        Observation::new(
-            Identity::Locator {
-                torrent_url: url.into(),
-            },
-            "Ubuntu 26.04 LTS",
-        )
-        .unwrap()
-    };
+    let locator = || Observation::new(Identity::Locator { torrent_url: url.into() }, "Ubuntu 26.04 LTS").unwrap();
     let torznab = source("tracker", 8, false, false);
     let first = search(&SearchQuery::new("ubuntu"), &[fresh(&torznab, vec![locator()])]);
-    let again = search(
-        &SearchQuery::new("ubuntu"),
-        &[fresh(&torznab, vec![locator(), locator()])],
-    );
+    let again = search(&SearchQuery::new("ubuntu"), &[fresh(&torznab, vec![locator(), locator()])]);
     let digest: [u8; 20] = Sha1::digest(url.as_bytes()).into();
     assert_eq!(first.releases[0].id, ReleaseId::Locator(LocatorId::from_bytes(digest)));
     assert!(first.releases[0].id.to_ref().starts_with('u'));
@@ -234,52 +180,19 @@ fn the_guard_drops_a_source_that_answered_another_question() {
     ];
     assert_eq!(vet(&terms, latest), Err(Failure::Irrelevant));
 
-    let search_rows = vec![
-        row(&h(1), "Ubuntu 24.04"),
-        row(&h(2), "ubuntu-26.04-desktop"),
-        row(&h(3), "Unrelated"),
-    ];
-    let kept: Vec<String> = vet(&terms, search_rows)
-        .unwrap()
-        .iter()
-        .map(|o| o.name().to_string())
-        .collect();
+    let search_rows = vec![row(&h(1), "Ubuntu 24.04"), row(&h(2), "ubuntu-26.04-desktop"), row(&h(3), "Unrelated")];
+    let kept: Vec<String> = vet(&terms, search_rows).unwrap().iter().map(|o| o.name().to_string()).collect();
     assert_eq!(kept, ["Ubuntu 24.04", "ubuntu-26.04-desktop"]);
 }
 
 /// Five films for "night of the living dead 1968" with ties at every level.
 fn films() -> Vec<Run> {
-    let mut lawful = with(
-        row(&h(0xa1), "Night of the Living Dead (1968)"),
-        None,
-        Some(5_000),
-        Some(100),
-    );
+    let mut lawful = with(row(&h(0xa1), "Night of the Living Dead (1968)"), None, Some(5_000), Some(100));
     lawful.category = Some(Category::Video);
-    let bluray = with(
-        row(&h(0xb2), "Night of the Living Dead 1968 1080p BluRay"),
-        Some(900),
-        Some(4_000),
-        Some(500),
-    );
-    let remake = with(
-        row(&h(0xc3), "Night of the Living Dead (1990)"),
-        Some(5_000),
-        Some(1_000),
-        Some(300),
-    );
-    let partial = with(
-        row(&h(0xd4), "Living Dead Night Collection"),
-        Some(10_000),
-        Some(3_000),
-        None,
-    );
-    let mirror = with(
-        row(&h(0xe5), "Night of the Living Dead 1968"),
-        Some(900),
-        Some(2_000),
-        Some(500),
-    );
+    let bluray = with(row(&h(0xb2), "Night of the Living Dead 1968 1080p BluRay"), Some(900), Some(4_000), Some(500));
+    let remake = with(row(&h(0xc3), "Night of the Living Dead (1990)"), Some(5_000), Some(1_000), Some(300));
+    let partial = with(row(&h(0xd4), "Living Dead Night Collection"), Some(10_000), Some(3_000), None);
+    let mirror = with(row(&h(0xe5), "Night of the Living Dead 1968"), Some(900), Some(2_000), Some(500));
     vec![
         fresh(&archive(), vec![lawful]),
         fresh(&knaben(), vec![bluray, remake, partial]),
@@ -307,10 +220,7 @@ fn alternate_sorts_keep_the_same_tie_breaks() {
     let sorted = |sort| {
         let mut q = SearchQuery::new("night of the living dead 1968");
         q.sort = sort;
-        names(&search(&q, &films()))
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>()
+        names(&search(&q, &films())).into_iter().map(str::to_string).collect::<Vec<_>>()
     };
     assert_eq!(
         sorted(Sort::Seeds),
@@ -350,23 +260,14 @@ fn filters_exclude_unknown_values_and_count_before_the_limit() {
     let mut runs = films();
     runs.push(fresh(
         &source("nyaa", 7, false, true),
-        vec![with(
-            row(&h(0xf6), "Night of the Living Dead 1968 REMUX"),
-            Some(40),
-            None,
-            None,
-        )],
+        vec![with(row(&h(0xf6), "Night of the Living Dead 1968 REMUX"), Some(40), None, None)],
     ));
 
     q.max_size = Some(3_000);
     let small = search(&q, &runs);
     assert_eq!(
         names(&small),
-        [
-            "Night of the Living Dead 1968",
-            "Night of the Living Dead (1990)",
-            "Living Dead Night Collection"
-        ]
+        ["Night of the Living Dead 1968", "Night of the Living Dead (1990)", "Living Dead Night Collection"]
     );
 
     q.max_size = None;
@@ -398,12 +299,8 @@ fn hides_adult_releases_without_eating_lookalike_titles() {
     let mut q = SearchQuery::new("xxx 2002 sex education");
     q.adult = true;
     let shown = search(&q, &runs);
-    let adult: Vec<&str> = shown
-        .releases
-        .iter()
-        .filter(|r| r.flags.contains(&Flag::Adult))
-        .map(|r| r.name.as_str())
-        .collect();
+    let adult: Vec<&str> =
+        shown.releases.iter().filter(|r| r.flags.contains(&Flag::Adult)).map(|r| r.name.as_str()).collect();
     assert_eq!(adult, ["xXx 2002 scene pack", "Brazzers xXx 2002"]);
     assert_eq!((shown.total, shown.hidden_adult), (4, 0));
 }
@@ -430,21 +327,9 @@ fn every_source_failing_is_an_error_not_an_empty_list() {
     assert_eq!(
         err.details,
         Some(Details::Sources(vec![
-            SourceReport {
-                source: "archive.org".into(),
-                outcome: SourceOutcome::Irrelevant,
-                elapsed_ms: 6000
-            },
-            SourceReport {
-                source: "knaben".into(),
-                outcome: SourceOutcome::Timeout,
-                elapsed_ms: 6000
-            },
-            SourceReport {
-                source: "apibay".into(),
-                outcome: SourceOutcome::Http { status: 503 },
-                elapsed_ms: 6000
-            },
+            SourceReport { source: "archive.org".into(), outcome: SourceOutcome::Irrelevant, elapsed_ms: 6000 },
+            SourceReport { source: "knaben".into(), outcome: SourceOutcome::Timeout, elapsed_ms: 6000 },
+            SourceReport { source: "apibay".into(), outcome: SourceOutcome::Http { status: 503 }, elapsed_ms: 6000 },
         ]))
     );
 }
@@ -457,16 +342,8 @@ fn one_empty_answer_is_a_successful_search_with_no_results() {
     assert_eq!(
         result.sources,
         [
-            SourceReport {
-                source: "knaben".into(),
-                outcome: SourceOutcome::Ok { results: 0 },
-                elapsed_ms: 40
-            },
-            SourceReport {
-                source: "apibay".into(),
-                outcome: SourceOutcome::Http { status: 503 },
-                elapsed_ms: 6000
-            },
+            SourceReport { source: "knaben".into(), outcome: SourceOutcome::Ok { results: 0 }, elapsed_ms: 40 },
+            SourceReport { source: "apibay".into(), outcome: SourceOutcome::Http { status: 503 }, elapsed_ms: 6000 },
         ]
     );
 }
@@ -505,51 +382,29 @@ fn crowded() -> Vec<(Arc<SourceMeta>, Vec<Observation>)> {
     for i in 0..60u32 {
         let id = u8::try_from(i % 23 + 1).unwrap();
         let mut o = row(&h(id), titles[i as usize % titles.len()]);
-        o.peers = [
-            None,
-            Some(Peers {
-                seeders: 10,
-                leechers: Some(1),
-            }),
-            Some(Peers {
-                seeders: 10,
-                leechers: None,
-            }),
-        ][i as usize % 3];
+        o.peers = [None, Some(Peers { seeders: 10, leechers: Some(1) }), Some(Peers { seeders: 10, leechers: None })]
+            [i as usize % 3];
         o.size = [None, Some(700), Some(700), Some(1400)][i as usize % 4];
         o.published = [None, Some(50), Some(50)][i as usize % 3];
         o.trackers = vec![format!("udp://t{}.example:80/announce", i % 5)];
         if i % 11 == 0 {
-            o.identity = Identity::Locator {
-                torrent_url: format!("https://example.org/{}.torrent", i % 2),
-            };
+            o.identity = Identity::Locator { torrent_url: format!("https://example.org/{}.torrent", i % 2) };
         }
         by_source[i as usize % sources.len()].1.push(o);
     }
     let hybrid = Observation::new(
-        Identity::Hash {
-            hash: InfoHash::Hybrid {
-                v1: [0x01; 20],
-                v2: [0xfe; 32],
-            },
-            torrent_url: None,
-        },
+        Identity::Hash { hash: InfoHash::Hybrid { v1: [0x01; 20], v2: [0xfe; 32] }, torrent_url: None },
         "Night of the Living Dead 1968 hybrid",
     )
     .unwrap();
     by_source[0].1.push(hybrid);
-    by_source[1]
-        .1
-        .push(row(&"fe".repeat(32), "Night of the Living Dead 1968"));
+    by_source[1].1.push(row(&"fe".repeat(32), "Night of the Living Dead 1968"));
     by_source
 }
 
 #[test]
 fn a_thousand_shuffles_give_one_order() {
-    let query = SearchQuery {
-        limit: 100,
-        ..SearchQuery::new("night of the living dead 1968")
-    };
+    let query = SearchQuery { limit: 100, ..SearchQuery::new("night of the living dead 1968") };
     let terms = Terms::parse(&query.text);
     let base = crowded();
     let runs_from = |groups: &[(Arc<SourceMeta>, Vec<Observation>)]| -> Vec<Run> {
@@ -561,13 +416,7 @@ fn a_thousand_shuffles_give_one_order() {
     let hybrid = expected.releases.iter().find(|r| r.id.to_ref() == h(0x01)).unwrap();
     assert_eq!(hybrid.name, "Night of the Living Dead (1968) 1080p");
     assert_eq!(hybrid.sources, ["archive.org", "knaben", "apibay", "tracker"]);
-    assert!(
-        hybrid
-            .magnet
-            .as_deref()
-            .unwrap()
-            .contains(&format!("xt=urn:btmh:1220{}", "fe".repeat(32)))
-    );
+    assert!(hybrid.magnet.as_deref().unwrap().contains(&format!("xt=urn:btmh:1220{}", "fe".repeat(32))));
 
     let mut rng = XorShift(0x9e37_79b9_7f4a_7c15);
     for _ in 0..1000 {

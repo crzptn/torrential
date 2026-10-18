@@ -35,10 +35,7 @@ fn parse(body: &[u8]) -> Result<Vec<Observation>, String> {
             let torrent_url = item.get("link").and_then(web_url);
             let mut obs = Observation::new(Identity::Hash { hash, torrent_url }, item.get("title")?)?
                 .flag(Flag::Trusted, item.get("trusted") == Some("Yes"));
-            obs.peers = Peers::new(
-                item.get("seeders").and_then(count),
-                item.get("leechers").and_then(count),
-            );
+            obs.peers = Peers::new(item.get("seeders").and_then(count), item.get("leechers").and_then(count));
             obs.size = item.get("size").and_then(torrential_core::units::parse_size);
             obs.published = item.get("pubDate").and_then(crate::dates::rfc2822);
             obs.category = item.get("categoryId").and_then(category);
@@ -71,10 +68,7 @@ mod tests {
     fn reads_the_nyaa_namespace() {
         let all = parse(&fixture::read("nyaa/index-linux.xml")).unwrap();
         let epub = all.iter().find(|o| o.name().starts_with("EPUBShelf")).unwrap();
-        assert_eq!(
-            epub.name(),
-            "EPUBShelf v2.0.0 [A light novel manager][Linux, Windows, macOS]"
-        );
+        assert_eq!(epub.name(), "EPUBShelf v2.0.0 [A light novel manager][Linux, Windows, macOS]");
         assert_eq!(
             epub.identity,
             Identity::Hash {
@@ -82,13 +76,7 @@ mod tests {
                 torrent_url: Some("https://nyaa.si/download/2174277.torrent".into()),
             }
         );
-        assert_eq!(
-            epub.peers,
-            Some(Peers {
-                seeders: 4,
-                leechers: Some(5)
-            })
-        );
+        assert_eq!(epub.peers, Some(Peers { seeders: 4, leechers: Some(5) }));
         assert_eq!(epub.size, Some(433_376_461));
         assert_eq!(epub.published, Some(1_792_072_832));
         assert_eq!(epub.category, Some(Category::Software));

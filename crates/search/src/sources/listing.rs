@@ -47,10 +47,7 @@ pub(super) fn hrefs(html: &str) -> Vec<String> {
 pub(super) fn torrents(html: &str) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
     for row in html.split("<tr").skip(1) {
-        let Some(file) = hrefs(row)
-            .into_iter()
-            .find(|h| h.ends_with(".torrent") && !h.contains('/'))
-        else {
+        let Some(file) = hrefs(row).into_iter().find(|h| h.ends_with(".torrent") && !h.contains('/')) else {
             continue;
         };
         if out.iter().any(|e| e.file == file) {
@@ -109,17 +106,11 @@ pub(super) async fn fetch_all(ctx: &Ctx<'_>, dirs: Vec<Url>) -> Result<Vec<(Url,
 pub(super) async fn resolve(ctx: &Ctx<'_>, files: Vec<(Url, Entry)>) -> Vec<Observation> {
     const CONCURRENT: usize = 3;
     // Leaves time to return the locators when the torrents are slow.
-    let deadline = ctx
-        .deadline
-        .checked_sub(Duration::from_millis(300))
-        .unwrap_or(ctx.deadline);
+    let deadline = ctx.deadline.checked_sub(Duration::from_millis(300)).unwrap_or(ctx.deadline);
     stream::iter(files)
         .map(|(dir, entry)| async move {
             let url = super::at(&dir, &entry.file);
-            let meta = tokio::time::timeout_at(deadline, metainfo(ctx, &url, deadline))
-                .await
-                .ok()
-                .flatten();
+            let meta = tokio::time::timeout_at(deadline, metainfo(ctx, &url, deadline)).await.ok().flatten();
             official(entry, &dir, url, meta)
         })
         .buffer_unordered(CONCURRENT)
@@ -131,14 +122,9 @@ pub(super) async fn resolve(ctx: &Ctx<'_>, files: Vec<(Url, Entry)>) -> Vec<Obse
 fn official(entry: Entry, dir: &Url, url: Url, meta: Option<Metainfo>) -> Option<Observation> {
     let torrent_url = url.to_string();
     let (identity, size, trackers) = match meta {
-        Some(Metainfo { hash, size, trackers }) => (
-            Identity::Hash {
-                hash,
-                torrent_url: Some(torrent_url),
-            },
-            size,
-            trackers,
-        ),
+        Some(Metainfo { hash, size, trackers }) => {
+            (Identity::Hash { hash, torrent_url: Some(torrent_url) }, size, trackers)
+        }
         None => (Identity::Locator { torrent_url }, None, Vec::new()),
     };
     let mut obs = Observation::new(identity, entry.name())?.flag(Flag::Official, true);

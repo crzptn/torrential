@@ -32,10 +32,7 @@ struct Torrent {
 }
 
 pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>, Failure> {
-    let body = ctx
-        .http
-        .get(&at(base, "releng/releases/json/"), 2 << 20, ctx.deadline)
-        .await?;
+    let body = ctx.http.get(&at(base, "releng/releases/json/"), 2 << 20, ctx.deadline).await?;
     let all = parse(&body, base).map_err(Failure::BadResponse)?;
     Ok(all.into_iter().filter(|o| ctx.terms.covers(o.name())).collect())
 }
@@ -50,14 +47,10 @@ fn parse(body: &[u8], base: &Url) -> Result<Vec<Observation>, String> {
         .filter_map(|r| {
             let magnet = r.magnet_uri.as_deref().and_then(parse_magnet);
             let torrent = r.torrent.as_ref();
-            let hash = torrent
-                .and_then(|t| t.info_hash.as_deref())
-                .and_then(infohash)
-                .or(magnet.as_ref().map(|m| m.hash))?;
-            let torrent_url = r
-                .torrent_url
-                .as_deref()
-                .and_then(|p| web_url(at(base, p.trim_start_matches('/')).as_str()));
+            let hash =
+                torrent.and_then(|t| t.info_hash.as_deref()).and_then(infohash).or(magnet.as_ref().map(|m| m.hash))?;
+            let torrent_url =
+                r.torrent_url.as_deref().and_then(|p| web_url(at(base, p.trim_start_matches('/')).as_str()));
             let default_name = format!("archlinux-{}-x86_64.iso", r.version);
             let name = torrent.and_then(|t| t.file_name.as_deref()).unwrap_or(&default_name);
             let mut obs = Observation::new(Identity::Hash { hash, torrent_url }, name)?.flag(Flag::Official, true);
@@ -84,11 +77,7 @@ mod tests {
         let names: Vec<&str> = all.iter().map(Observation::name).collect();
         assert_eq!(
             names,
-            [
-                "archlinux-2026.10.01-x86_64.iso",
-                "archlinux-2026.09.01-x86_64.iso",
-                "archlinux-2026.08.01-x86_64.iso"
-            ]
+            ["archlinux-2026.10.01-x86_64.iso", "archlinux-2026.09.01-x86_64.iso", "archlinux-2026.08.01-x86_64.iso"]
         );
         let newest = &all[0];
         assert_eq!(
@@ -102,9 +91,6 @@ mod tests {
         assert_eq!(newest.peers, None::<Peers>);
         assert_eq!(newest.published, Some(1_790_812_800));
         assert_eq!(newest.flags.iter().collect::<Vec<_>>(), [&Flag::Official]);
-        assert_eq!(
-            newest.info_url.as_deref(),
-            Some("https://archlinux.org/releng/releases/2026.10.01/")
-        );
+        assert_eq!(newest.info_url.as_deref(), Some("https://archlinux.org/releng/releases/2026.10.01/"));
     }
 }

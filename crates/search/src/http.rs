@@ -45,10 +45,7 @@ impl Http {
             .brotli(true)
             .connect_timeout(Duration::from_secs(5))
             .build()?;
-        Ok(Http {
-            client,
-            recorded: record.then(Mutex::default),
-        })
+        Ok(Http { client, recorded: record.then(Mutex::default) })
     }
 
     /// GETs `url`, giving up at `deadline`. A timeout or a 5xx is retried once when
@@ -69,10 +66,7 @@ impl Http {
             other => other,
         }?;
         if let Some(recorded) = &self.recorded {
-            recorded
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push((url.to_string(), body.clone()));
+            recorded.lock().unwrap_or_else(|e| e.into_inner()).push((url.to_string(), body.clone()));
         }
         Ok(body)
     }
@@ -124,9 +118,5 @@ fn classify(err: reqwest::Error) -> FetchError {
         cause = e.source();
     }
     let reason = torrential_core::text::truncate(&torrential_core::text::sanitize(&parts.join(": ")), 160);
-    if decode {
-        FetchError::Decode(reason)
-    } else {
-        FetchError::Connect(reason)
-    }
+    if decode { FetchError::Decode(reason) } else { FetchError::Connect(reason) }
 }

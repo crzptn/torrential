@@ -100,11 +100,7 @@ impl Search {
         self.inner
             .sources
             .iter()
-            .map(|s| SourceInfo {
-                name: s.meta.name.clone(),
-                default_on: s.default_on,
-                lawful: s.meta.lawful,
-            })
+            .map(|s| SourceInfo { name: s.meta.name.clone(), default_on: s.default_on, lawful: s.meta.lawful })
             .collect()
     }
 
@@ -124,19 +120,12 @@ impl Search {
         let mut tasks = JoinSet::new();
         let mut pending = HashMap::new();
         for source in self.select(&query.sources)? {
-            let key = AnswerKey {
-                source: source.meta.name.clone(),
-                text: terms.text().to_string(),
-                adult: query.adult,
-            };
+            let key =
+                AnswerKey { source: source.meta.name.clone(), text: terms.text().to_string(), adult: query.adult };
             if !query.fresh
                 && let Some(rows) = self.inner.cache.answer(&key, std::time::Instant::now())
             {
-                runs.push(Run {
-                    source: source.meta.clone(),
-                    answer: Answer::Cached(rows),
-                    elapsed_ms: 0,
-                });
+                runs.push(Run { source: source.meta.clone(), answer: Answer::Cached(rows), elapsed_ms: 0 });
                 continue;
             }
             let meta = source.meta.clone();
@@ -148,10 +137,7 @@ impl Search {
             let (id, answer) = match joined {
                 Ok((id, answer)) => (id, answer),
                 // A parser bug on hostile input costs that source, not the search.
-                Err(e) => (
-                    e.id(),
-                    Answer::Failed(Failure::BadResponse("the source adapter crashed".into())),
-                ),
+                Err(e) => (e.id(), Answer::Failed(Failure::BadResponse("the source adapter crashed".into()))),
             };
             let Some((meta, key)) = pending.remove(&id) else {
                 continue;
@@ -159,11 +145,7 @@ impl Search {
             if let Answer::Fresh(rows) = &answer {
                 self.inner.cache.store(key, rows.clone(), std::time::Instant::now());
             }
-            runs.push(Run {
-                source: meta,
-                answer,
-                elapsed_ms: millis(started.elapsed()),
-            });
+            runs.push(Run { source: meta, answer, elapsed_ms: millis(started.elapsed()) });
         }
         let result = assemble(query, &terms, &runs, millis(started.elapsed()))?;
         self.inner.cache.remember(&result.releases);
@@ -194,25 +176,12 @@ impl Inner {
     fn new(config: &SearchConfig, cache: ResultCache, record: bool) -> Result<Inner, Error> {
         let http = Http::new(record).map_err(|e| Error::internal(format!("cannot build the HTTP client: {e}")))?;
         let sources = sources::registry(config)?;
-        Ok(Inner {
-            http,
-            sources,
-            stores: Stores::new(config.cache_dir.clone()),
-            cache,
-        })
+        Ok(Inner { http, sources, stores: Stores::new(config.cache_dir.clone()), cache })
     }
 
     async fn run(&self, source: &Source, terms: &Terms, adult: bool, deadline: Instant) -> Answer {
-        let ctx = Ctx {
-            http: &self.http,
-            stores: &self.stores,
-            terms,
-            adult,
-            deadline,
-        };
-        let rows = timeout_at(deadline, source.search(&ctx))
-            .await
-            .unwrap_or(Err(Failure::Timeout));
+        let ctx = Ctx { http: &self.http, stores: &self.stores, terms, adult, deadline };
+        let rows = timeout_at(deadline, source.search(&ctx)).await.unwrap_or(Err(Failure::Timeout));
         match rows.and_then(|rows| vet(terms, rows)) {
             Ok(rows) => Answer::Fresh(Arc::new(rows)),
             Err(failure) => Answer::Failed(failure),

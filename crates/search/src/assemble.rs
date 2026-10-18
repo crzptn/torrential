@@ -37,11 +37,7 @@ pub(crate) enum Answer {
 pub(crate) fn vet(terms: &Terms, rows: Vec<Observation>) -> Result<Vec<Observation>, Failure> {
     let total = rows.len();
     let kept: Vec<Observation> = rows.into_iter().filter(|o| terms.is_relevant(o.name())).collect();
-    if (total - kept.len()) * 2 > total {
-        Err(Failure::Irrelevant)
-    } else {
-        Ok(kept)
-    }
+    if (total - kept.len()) * 2 > total { Err(Failure::Irrelevant) } else { Ok(kept) }
 }
 
 /// Fails with `providers_unavailable` when no source answered. An answer with no
@@ -86,21 +82,14 @@ fn report(run: &Run) -> SourceReport {
         Answer::Cached(rows) => torrential_core::SourceOutcome::Cached { results: count(rows) },
         Answer::Failed(failure) => failure.outcome(),
     };
-    SourceReport {
-        source: run.source.name.clone(),
-        outcome,
-        elapsed_ms: run.elapsed_ms,
-    }
+    SourceReport { source: run.source.name.clone(), outcome, elapsed_ms: run.elapsed_ms }
 }
 
 fn all_failed(sources: Vec<SourceReport>) -> Error {
     let names: Vec<&str> = sources.iter().map(|r| r.source.as_str()).collect();
-    Error::new(
-        ErrorCode::ProvidersUnavailable,
-        format!("no source answered ({})", names.join(", ")),
-    )
-    .with_hint("check the network connection, or retry with a longer --timeout")
-    .with_details(Details::Sources(sources))
+    Error::new(ErrorCode::ProvidersUnavailable, format!("no source answered ({})", names.join(", ")))
+        .with_hint("check the network connection, or retry with a longer --timeout")
+        .with_details(Details::Sources(sources))
 }
 
 /// A merged release, with what ranking needs that `Release` does not carry.
@@ -119,10 +108,9 @@ fn merge<'a>(sightings: impl Iterator<Item = Sighting<'a>>, terms: &Terms) -> Ve
     let aliases: HashMap<TorrentId, TorrentId> = sightings
         .iter()
         .filter_map(|(_, o)| match o.identity {
-            Identity::Hash {
-                hash: InfoHash::Hybrid { v1, v2 },
-                ..
-            } => Some((InfoHash::V2(v2).id(), TorrentId::from_bytes(v1))),
+            Identity::Hash { hash: InfoHash::Hybrid { v1, v2 }, .. } => {
+                Some((InfoHash::V2(v2).id(), TorrentId::from_bytes(v1)))
+            }
             _ => None,
         })
         .collect();
@@ -139,10 +127,7 @@ fn merge<'a>(sightings: impl Iterator<Item = Sighting<'a>>, terms: &Terms) -> Ve
         };
         groups.entry(id).or_default().push(sighting);
     }
-    groups
-        .into_iter()
-        .map(|(id, group)| combine(id, &group, terms))
-        .collect()
+    groups.into_iter().map(|(id, group)| combine(id, &group, terms)).collect()
 }
 
 /// Each field comes from a rule that depends only on the set of listings, never on
@@ -150,11 +135,7 @@ fn merge<'a>(sightings: impl Iterator<Item = Sighting<'a>>, terms: &Terms) -> Ve
 /// to comparing values.
 fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     fn first<T: Ord + Clone>(group: &[Sighting<'_>], field: impl Fn(&Observation) -> Option<T>) -> Option<T> {
-        group
-            .iter()
-            .filter_map(|(s, o)| field(o).map(|v| (s.authority, v)))
-            .min()
-            .map(|(_, v)| v)
+        group.iter().filter_map(|(s, o)| field(o).map(|v| (s.authority, v))).min().map(|(_, v)| v)
     }
     let name = group
         .iter()
@@ -175,18 +156,11 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     authorities.sort();
     authorities.dedup();
     let any_public = group.iter().any(|(s, _)| s.public);
-    let trackers: BTreeSet<&String> = group
-        .iter()
-        .filter(|(s, _)| s.public || !any_public)
-        .flat_map(|(_, o)| &o.trackers)
-        .collect();
+    let trackers: BTreeSet<&String> =
+        group.iter().filter(|(s, _)| s.public || !any_public).flat_map(|(_, o)| &o.trackers).collect();
     let trackers: Vec<String> = trackers.into_iter().take(MAX_TRACKERS).cloned().collect();
     let hash = combined_hash(group);
-    let relevance = group
-        .iter()
-        .map(|(_, o)| terms.relevance(o.name()))
-        .max()
-        .unwrap_or(terms.relevance(""));
+    let relevance = group.iter().map(|(_, o)| terms.relevance(o.name())).max().unwrap_or(terms.relevance(""));
     Candidate {
         release: Release {
             id,
@@ -265,11 +239,7 @@ fn rank(candidates: &mut [Candidate], sort: Sort) {
 }
 
 fn standing(c: &Candidate) -> u8 {
-    if c.release.flags.contains(&Flag::Official) {
-        2
-    } else {
-        u8::from(c.lawful)
-    }
+    if c.release.flags.contains(&Flag::Official) { 2 } else { u8::from(c.lawful) }
 }
 
 fn known_first_desc<T: Ord>(a: Option<T>, b: Option<T>) -> Ordering {

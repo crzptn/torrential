@@ -19,11 +19,7 @@ impl Item {
     }
 
     pub fn all<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> {
-        self.fields
-            .iter()
-            .filter(move |(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
-            .filter(|v| !v.is_empty())
+        self.fields.iter().filter(move |(k, _)| k == name).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty())
     }
 
     pub fn attr<'a>(&'a self, name: &'a str) -> Option<&'a str> {
@@ -31,10 +27,7 @@ impl Item {
     }
 
     pub fn attrs<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> {
-        self.attrs
-            .iter()
-            .filter(move |(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
+        self.attrs.iter().filter(move |(k, _)| k == name).map(|(_, v)| v.as_str())
     }
 }
 
@@ -154,10 +147,7 @@ mod tests {
     fn rejects_error_documents_and_html() {
         let error = br#"<?xml version="1.0"?><error code="100" description="Invalid API Key"/>"#;
         assert_eq!(items(error).unwrap_err(), "indexer error 100: Invalid API Key");
-        assert_eq!(
-            items(b"<html><body>Just a moment</body></html>").unwrap_err(),
-            "expected an RSS feed, got <html>"
-        );
+        assert_eq!(items(b"<html><body>Just a moment</body></html>").unwrap_err(), "expected an RSS feed, got <html>");
         assert_eq!(items(b"").unwrap_err(), "empty document");
     }
 }

@@ -46,11 +46,7 @@ fn parse(body: &[u8]) -> Result<Vec<Observation>, String> {
 
 fn observation(hit: Hit) -> Option<Observation> {
     let magnet = hit.magnet_url.as_deref().and_then(parse_magnet);
-    let hash = hit
-        .hash
-        .as_deref()
-        .and_then(infohash)
-        .or(magnet.as_ref().map(|m| m.hash));
+    let hash = hit.hash.as_deref().and_then(infohash).or(magnet.as_ref().map(|m| m.hash));
     let torrent_url = hit.link.as_deref().and_then(web_url);
     // RuTracker rows come with a `.torrent` link through Knaben and no hash.
     let identity = match (hash, torrent_url) {
@@ -109,28 +105,16 @@ mod tests {
         assert_eq!(desktop.name(), "ubuntu-26.04-desktop-amd64.iso");
         assert_eq!(
             desktop.identity,
-            Identity::Hash {
-                hash: infohash("dafc8c076ca2f3ed376eeae7c76a0d6be2415c45").unwrap(),
-                torrent_url: None
-            }
+            Identity::Hash { hash: infohash("dafc8c076ca2f3ed376eeae7c76a0d6be2415c45").unwrap(), torrent_url: None }
         );
         assert_eq!(desktop.size, Some(6_517_612_871));
-        assert_eq!(
-            desktop.peers,
-            Some(Peers {
-                seeders: 143,
-                leechers: Some(32)
-            })
-        );
+        assert_eq!(desktop.peers, Some(Peers { seeders: 143, leechers: Some(32) }));
         assert_eq!(desktop.category, Some(Category::Software));
         assert_eq!(desktop.trackers.len(), 18);
         assert_eq!(desktop.trackers[0], "http://p4p.arenabg.com:1337/announce");
         assert!(desktop.flags.is_empty());
 
-        let pack = all
-            .iter()
-            .find(|o| o.name() == "[amd64] Ubuntu*Pack 24.04.1 GNOME (июль 2026)")
-            .unwrap();
+        let pack = all.iter().find(|o| o.name() == "[amd64] Ubuntu*Pack 24.04.1 GNOME (июль 2026)").unwrap();
         assert!(
             matches!(&pack.identity, Identity::Locator { torrent_url } if torrent_url.starts_with("https://knaben.org/live/dl/rutracker/"))
         );

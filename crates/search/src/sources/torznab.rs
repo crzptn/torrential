@@ -32,42 +32,26 @@ fn observation(item: rss::Item) -> Option<Observation> {
         .chain(item.enclosure.as_deref())
         .chain(item.get("link"))
         .find_map(parse_magnet);
-    let torrent_url = item
-        .enclosure
-        .as_deref()
-        .into_iter()
-        .chain(item.get("link"))
-        .find_map(web_url);
-    let hash = item
-        .attr("infohash")
-        .and_then(infohash)
-        .or(magnet.as_ref().map(|m| m.hash));
+    let torrent_url = item.enclosure.as_deref().into_iter().chain(item.get("link")).find_map(web_url);
+    let hash = item.attr("infohash").and_then(infohash).or(magnet.as_ref().map(|m| m.hash));
     let identity = match (hash, torrent_url) {
         (Some(hash), torrent_url) => Identity::Hash { hash, torrent_url },
         (None, Some(torrent_url)) => Identity::Locator { torrent_url },
         (None, None) => return None,
     };
-    let ids: Vec<u32> = item
-        .attrs("category")
-        .chain(item.all("category"))
-        .filter_map(|c| c.trim().parse().ok())
-        .collect();
+    let ids: Vec<u32> =
+        item.attrs("category").chain(item.all("category")).filter_map(|c| c.trim().parse().ok()).collect();
     // Scan every category: an adult one can follow a harmless one.
     let adult = ids.iter().any(|id| (6000..7000).contains(id));
     let mut obs = Observation::new(identity, item.get("title")?)?.flag(Flag::Adult, adult);
     let seeders = item.attr("seeders").and_then(count);
     // Torznab's `peers` counts seeders and leechers together.
-    let leechers = item.attr("leechers").and_then(count).or_else(|| {
-        item.attr("peers")
-            .and_then(count)
-            .zip(seeders)
-            .and_then(|(p, s)| p.checked_sub(s))
-    });
+    let leechers = item
+        .attr("leechers")
+        .and_then(count)
+        .or_else(|| item.attr("peers").and_then(count).zip(seeders).and_then(|(p, s)| p.checked_sub(s)));
     obs.peers = Peers::new(seeders, leechers);
-    obs.size = item
-        .attr("size")
-        .or(item.get("size"))
-        .and_then(|s| s.trim().parse().ok());
+    obs.size = item.attr("size").or(item.get("size")).and_then(|s| s.trim().parse().ok());
     obs.published = item.get("pubDate").and_then(crate::dates::rfc2822);
     obs.category = ids.iter().find_map(|id| category(*id));
     obs.trackers = magnet.map(|m| m.trackers).unwrap_or_default();
@@ -110,19 +94,10 @@ mod tests {
                 ),
             }
         );
-        assert_eq!(
-            hashed.peers,
-            Some(Peers {
-                seeders: 140,
-                leechers: Some(25)
-            })
-        );
+        assert_eq!(hashed.peers, Some(Peers { seeders: 140, leechers: Some(25) }));
         assert_eq!(hashed.size, Some(6_517_612_871));
         assert_eq!(hashed.category, Some(Category::Software));
-        assert_eq!(
-            hashed.trackers,
-            vec!["udp://tracker.opentrackr.org:1337/announce".to_string()]
-        );
+        assert_eq!(hashed.trackers, vec!["udp://tracker.opentrackr.org:1337/announce".to_string()]);
 
         let locator = &all[1];
         assert_eq!(
@@ -131,13 +106,7 @@ mod tests {
                 torrent_url: "http://127.0.0.1:9117/dl/privatehd/?jackett_apikey=k3y&path=def&file=ubuntu".into()
             }
         );
-        assert_eq!(
-            locator.peers,
-            Some(Peers {
-                seeders: 3,
-                leechers: None
-            })
-        );
+        assert_eq!(locator.peers, Some(Peers { seeders: 3, leechers: None }));
 
         let adult = &all[2];
         assert_eq!(adult.flags.iter().collect::<Vec<_>>(), [&Flag::Adult]);

@@ -28,20 +28,12 @@ struct Loaded {
 
 pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>, Failure> {
     let items = ctx.stores.academic.items(ctx, base).await?;
-    Ok(items
-        .iter()
-        .filter(|o| ctx.terms.covers(o.name()))
-        .take(MAX_RESULTS)
-        .cloned()
-        .collect())
+    Ok(items.iter().filter(|o| ctx.terms.covers(o.name())).take(MAX_RESULTS).cloned().collect())
 }
 
 impl Catalog {
     pub fn new(dir: Option<PathBuf>) -> Catalog {
-        Catalog {
-            dir,
-            loaded: tokio::sync::Mutex::new(None),
-        }
+        Catalog { dir, loaded: tokio::sync::Mutex::new(None) }
     }
 
     /// A stale catalog is served when a refresh fails: it changes slowly, and an old
@@ -58,19 +50,14 @@ impl Catalog {
             return Ok(l.items.clone());
         }
         let fetched = match ctx.http.get(&at(base, "database.xml"), CAP, ctx.deadline).await {
-            Ok(body) => parse(&body, base)
-                .map(|items| (body, items))
-                .map_err(Failure::BadResponse),
+            Ok(body) => parse(&body, base).map(|items| (body, items)).map_err(Failure::BadResponse),
             Err(e) => Err(e.into()),
         };
         match fetched {
             Ok((body, items)) => {
                 self.write_disk(&body).await;
                 let items = Arc::new(items);
-                *loaded = Some(Loaded {
-                    fetched: now,
-                    items: items.clone(),
-                });
+                *loaded = Some(Loaded { fetched: now, items: items.clone() });
                 Ok(items)
             }
             Err(failure) => loaded.as_ref().map(|l| l.items.clone()).ok_or(failure),
@@ -81,10 +68,7 @@ impl Catalog {
         let path = self.dir.as_ref()?.join(FILE);
         let fetched = tokio::fs::metadata(&path).await.ok()?.modified().ok()?;
         let body = tokio::fs::read(&path).await.ok()?;
-        Some(Loaded {
-            fetched,
-            items: Arc::new(parse(&body, base).ok()?),
-        })
+        Some(Loaded { fetched, items: Arc::new(parse(&body, base).ok()?) })
     }
 
     /// Best effort: a read-only cache directory only costs a download per process.

@@ -62,16 +62,10 @@ impl ResultCache {
     pub(crate) fn store(&self, key: AnswerKey, rows: Arc<Vec<Observation>>, now: Instant) {
         let mut state = self.lock();
         if state.answers.len() >= MAX_ANSWERS {
-            state
-                .answers
-                .retain(|_, (at, _)| now.saturating_duration_since(*at) < TTL);
+            state.answers.retain(|_, (at, _)| now.saturating_duration_since(*at) < TTL);
         }
         if state.answers.len() >= MAX_ANSWERS
-            && let Some(oldest) = state
-                .answers
-                .iter()
-                .min_by_key(|(_, (at, _))| *at)
-                .map(|(k, _)| k.clone())
+            && let Some(oldest) = state.answers.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| k.clone())
         {
             state.answers.remove(&oldest);
         }
@@ -105,31 +99,16 @@ mod tests {
 
     fn rows(name: &str) -> Arc<Vec<Observation>> {
         let hash = crate::observation::infohash(&"ab".repeat(20)).unwrap();
-        Arc::new(vec![
-            Observation::new(
-                Identity::Hash {
-                    hash,
-                    torrent_url: None,
-                },
-                name,
-            )
-            .unwrap(),
-        ])
+        Arc::new(vec![Observation::new(Identity::Hash { hash, torrent_url: None }, name).unwrap()])
     }
 
     #[test]
     fn answers_expire_after_five_minutes() {
         let cache = ResultCache::new();
-        let key = AnswerKey {
-            source: "knaben".into(),
-            text: "ubuntu".into(),
-            adult: false,
-        };
+        let key = AnswerKey { source: "knaben".into(), text: "ubuntu".into(), adult: false };
         let t0 = Instant::now();
         cache.store(key.clone(), rows("Ubuntu 24.04"), t0);
-        let hit = cache
-            .answer(&key, t0 + Duration::from_secs(299))
-            .map(|r| r[0].name().to_string());
+        let hit = cache.answer(&key, t0 + Duration::from_secs(299)).map(|r| r[0].name().to_string());
         assert_eq!(hit.as_deref(), Some("Ubuntu 24.04"));
         assert!(cache.answer(&key, t0 + Duration::from_secs(301)).is_none());
         let adult = AnswerKey { adult: true, ..key };
