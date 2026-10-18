@@ -1,5 +1,3 @@
-//! Just enough bencode to identify a `.torrent` file: its infohashes, size, and trackers.
-
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use torrential_core::InfoHash;
@@ -9,7 +7,6 @@ use crate::observation::tracker;
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Metainfo {
     pub hash: InfoHash,
-    /// Total bytes of a v1 file list. `None` for v2-only torrents.
     pub size: Option<u64>,
     pub trackers: Vec<String>,
 }

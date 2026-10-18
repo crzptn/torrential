@@ -1,14 +1,3 @@
-//! Records the raw responses one source returns for a query, as test fixtures.
-//!
-//! ```text
-//! cargo run -p torrential-search --example record -- <source> <query words...>
-//! ```
-//!
-//! Each body lands in `tests/fixtures/<source>/`, named after its URL path, with
-//! the query appended for URLs that carry one. Bodies over 256 KiB are skipped,
-//! except RSS feeds, which keep their first 40 items so the Academic Torrents
-//! catalog fits.
-
 use std::path::Path;
 
 use torrential_search::SearchConfig;

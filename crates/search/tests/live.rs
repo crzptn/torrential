@@ -1,5 +1,3 @@
-//! Searches the real sources. Run with `cargo test -p torrential-search -- --ignored --nocapture`.
-
 use torrential_core::{SearchQuery, SourceOutcome};
 use torrential_search::{ResultCache, Search, SearchConfig};
 

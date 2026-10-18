@@ -1,6 +1,3 @@
-//! Official `.torrent` files listed in Apache directory indexes, as
-//! releases.ubuntu.com and cdimage.debian.org serve them.
-
 use std::time::Duration;
 
 use futures_util::{StreamExt, stream};
@@ -21,7 +18,6 @@ const HASH_REST_WITHIN: Duration = Duration::from_secs(60);
 #[derive(Clone, PartialEq, Debug)]
 pub(super) struct Entry {
     pub file: String,
-    /// Unix seconds, from the listing's "Last modified" column.
     pub modified: Option<i64>,
 }
 
@@ -31,7 +27,6 @@ impl Entry {
     }
 }
 
-/// Relative links in a listing, in page order.
 pub(super) fn hrefs(html: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = html;
@@ -47,7 +42,6 @@ pub(super) fn hrefs(html: &str) -> Vec<String> {
     out
 }
 
-/// The `.torrent` files in a listing, one per table row.
 pub(super) fn torrents(html: &str) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
     // Apache and lighttpd put each file in a table row; nginx prints one per line.
@@ -84,8 +78,6 @@ fn cells(row: &str) -> impl Iterator<Item = String> + '_ {
     })
 }
 
-/// Fetches every listing in `dirs` at once. Fails only when all of them fail, and
-/// marks the answer partial when some do.
 pub(super) async fn fetch_all(ctx: &Ctx<'_>, dirs: Vec<Url>) -> Result<Vec<(Url, Vec<Entry>)>, Failure> {
     let pages = futures_util::future::join_all(dirs.into_iter().map(|dir| async move {
         let page = ctx.stores.pages.get(ctx, &dir, LISTING_CAP, |body| listing(body).is_ok()).await;
@@ -123,13 +115,8 @@ pub(super) fn listing(body: &[u8]) -> Result<Vec<Entry>, Failure> {
     Ok(torrents(&html))
 }
 
-/// Turns the listed files the query covers into official releases. Each `.torrent` is
-/// fetched and hashed so the release gets a real ID; one that cannot be read in time
-/// keeps its URL as a locator. The other files are hashed after the search, so a later
-/// search that covers them does not wait on their `.torrent` files.
 pub(super) async fn resolve(ctx: &Ctx<'_>, files: Vec<(Url, Entry)>) -> Vec<Observation> {
     let (covered, rest): (Vec<_>, Vec<_>) = files.into_iter().partition(|(_, entry)| ctx.terms.covers(entry.name()));
-    // Leaves time to return the locators when the torrents are slow.
     let deadline = ctx.deadline.checked_sub(Duration::from_millis(300)).unwrap_or(ctx.deadline);
     let found = stream::iter(covered)
         .map(|(dir, entry)| async move {

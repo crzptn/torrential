@@ -42,7 +42,6 @@ fn observation(item: rss::Item) -> Option<Observation> {
     };
     let ids: Vec<u32> =
         item.attrs("category").chain(item.all("category")).filter_map(|c| c.trim().parse().ok()).collect();
-    // Scan every category: an adult one can follow a harmless one.
     let adult = ids.iter().any(|id| (6000..7000).contains(id));
     let mut obs = Observation::new(identity, item.get("title")?)?.flag(Flag::Adult, adult);
     let seeders = item.attr("seeders").and_then(count);

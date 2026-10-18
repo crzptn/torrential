@@ -36,8 +36,6 @@ impl Catalog {
         Catalog { dir, loaded: tokio::sync::Mutex::new(None) }
     }
 
-    /// A stale catalog is served when a refresh fails: it changes slowly, and an old
-    /// copy beats no answer.
     async fn items(&self, ctx: &Ctx<'_>, base: &Url) -> Result<Arc<Vec<Observation>>, Failure> {
         let mut loaded = self.loaded.lock().await;
         if loaded.is_none() {
@@ -75,7 +73,6 @@ impl Catalog {
         Some(Loaded { fetched, items: Arc::new(parse(&body, base).ok()?) })
     }
 
-    /// Best effort: a read-only cache directory only costs a download per process.
     async fn write_disk(&self, body: &[u8]) {
         let Some(dir) = &self.dir else { return };
         let tmp = dir.join(format!("{FILE}.{}.tmp", std::process::id()));

@@ -99,7 +99,6 @@ pub struct Search {
 
 struct Inner {
     http: Http,
-    /// The enabled sources.
     sources: Vec<Arc<Source>>,
     disabled: Vec<String>,
     stores: Stores,
@@ -165,7 +164,6 @@ impl Search {
                 let (answer, complete) = AssertUnwindSafe(self.inner.run(&source, terms, query, deadline))
                     .catch_unwind()
                     .await
-                    // A parser bug on hostile input costs that source, not the search.
                     .unwrap_or_else(|_| {
                         (Answer::Failed(Failure::BadResponse("the source adapter crashed".into())), false)
                     });
@@ -297,8 +295,6 @@ impl Inner {
         Ok(Inner { http, sources, disabled, stores: Stores::new(config.cache_dir.clone()), cache })
     }
 
-    /// Each release with its private `.torrent` link as an engine saves it: without the key of the
-    /// source that issued it.
     fn saved_links(&self, linked: Vec<Linked>) -> Vec<(Release, Option<SavedLink>)> {
         linked
             .into_iter()
@@ -312,7 +308,6 @@ impl Inner {
             .collect()
     }
 
-    /// Also says whether the answer is complete enough to cache.
     async fn run(&self, source: &Source, terms: &Terms, query: &SearchQuery, deadline: Instant) -> (Answer, bool) {
         let ctx = Ctx {
             http: &self.http,

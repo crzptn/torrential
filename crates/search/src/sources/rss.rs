@@ -1,7 +1,3 @@
-//! RSS items as flat lists of child elements, which is all Nyaa, Torznab, and the
-//! Academic Torrents catalog need. Element names are matched without their
-//! namespace prefix, so `nyaa:seeders` is `seeders`.
-
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 
@@ -31,8 +27,6 @@ impl Item {
     }
 }
 
-/// Fails on a document whose root is not `<rss>`, such as an anti-bot HTML page, and
-/// on a Torznab `<error>` document, whose description becomes the reason.
 pub(crate) fn items(body: &[u8]) -> Result<Vec<Item>, String> {
     let text = String::from_utf8_lossy(body);
     // Not `trim_text`: it trims around entity references, so "Tom &amp; Jerry"

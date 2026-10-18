@@ -1,6 +1,3 @@
-//! Every source torrential can search. Adding a built-in source means one row in
-//! `BUILTIN`, one `Adapter` variant, and one module with a pure parser.
-
 mod academic;
 mod apibay;
 mod archive_org;
@@ -34,13 +31,11 @@ use crate::{SearchConfig, TorznabConfig};
 struct Row {
     name: &'static str,
     default_on: bool,
-    /// A catalog of content its publishers may share. Ranks ahead of general indexes on ties.
     lawful: bool,
     base: &'static str,
     adapter: Adapter,
 }
 
-/// Most authoritative first: this order breaks ties in merging and ranking.
 const BUILTIN: [Row; 8] = [
     Row {
         name: "archlinux",
@@ -82,7 +77,6 @@ const BUILTIN: [Row; 8] = [
     Row { name: "nyaa", default_on: true, lawful: false, base: "https://nyaa.si/", adapter: Adapter::Nyaa },
 ];
 
-/// Not `Debug`: the Torznab variant holds the user's API key.
 pub(crate) enum Adapter {
     Archlinux,
     Ubuntu,
@@ -98,7 +92,6 @@ pub(crate) enum Adapter {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct SourceMeta {
     pub name: String,
-    /// Position in the registry. Lower is more authoritative.
     pub authority: u16,
     pub lawful: bool,
     /// A private tracker's announce URLs carry the user's passkey, so only trackers
@@ -136,7 +129,6 @@ pub(crate) enum Failure {
 }
 
 impl Failure {
-    /// Reasons quote the server, so they are sanitized here, where they leave the crate.
     pub fn outcome(&self) -> SourceOutcome {
         let clean = |reason: &str| text::truncate(&text::sanitize(reason), 160);
         match self {
@@ -161,8 +153,6 @@ impl From<FetchError> for Failure {
     }
 }
 
-/// State that outlives one search: hashed `.torrent` files, the Academic Torrents
-/// catalog, and the official listing pages.
 pub(crate) struct Stores {
     hashes: Arc<hashes::Hashes>,
     academic: academic::Catalog,
@@ -178,7 +168,6 @@ impl Stores {
         }
     }
 
-    /// Writes what this search hashed, outside any source's deadline.
     pub async fn save(&self) {
         self.hashes.save().await;
     }
@@ -189,10 +178,8 @@ pub(crate) struct Ctx<'a> {
     pub stores: &'a Stores,
     pub terms: &'a Terms,
     pub adult: bool,
-    /// Fetch listing pages even when the copy on disk is new.
     pub fresh: bool,
     pub deadline: Instant,
-    /// Set when part of an answer failed or is out of date, so it is shown but not cached.
     pub partial: AtomicBool,
 }
 
@@ -203,8 +190,6 @@ impl Ctx<'_> {
 }
 
 impl Source {
-    /// What a cached answer depends on besides the query: the endpoint, and for
-    /// Torznab the API key, because links issued under an old key stop working.
     pub fn scope(&self) -> String {
         match &self.adapter {
             Adapter::Torznab { api_key: Some(key) } => {
@@ -214,8 +199,6 @@ impl Source {
         }
     }
 
-    /// `url`, a `.torrent` link this Torznab source issued, without its API key. `None` for
-    /// another kind of source, and when the key is also somewhere no query parameter carries it.
     pub fn save_link(&self, url: &str) -> Option<SavedLink> {
         let Adapter::Torznab { api_key } = &self.adapter else { return None };
         let mut url = Url::parse(url).ok()?;
@@ -230,7 +213,6 @@ impl Source {
             }
             let query = kept.join("&");
             url.set_query((!query.is_empty()).then_some(query.as_str()));
-            // Decoding the whole link finds the key in a path segment or another parameter's value.
             if form_urlencoded::parse(url.as_str().as_bytes()).any(|(a, b)| a.contains(key) || b.contains(key)) {
                 return None;
             }
@@ -238,8 +220,6 @@ impl Source {
         Some(SavedLink { source: self.meta.name.clone(), url: url.into(), key_params })
     }
 
-    /// `saved` with this source's API key in each of its key parameters. `None` when the link
-    /// needs a key and this source has none.
     pub fn link(&self, saved: &SavedLink) -> Option<String> {
         let mut url = Url::parse(&saved.url).ok()?;
         if !saved.key_params.is_empty() {
@@ -275,8 +255,6 @@ impl Source {
     }
 }
 
-/// Builds the registry: the built-in rows, then the configured Torznab endpoints,
-/// less the disabled sources.
 pub(crate) fn registry(config: &SearchConfig) -> Result<Vec<Arc<Source>>, Error> {
     for name in config.endpoints.keys() {
         if !BUILTIN.iter().any(|row| row.name == name) {
@@ -337,7 +315,6 @@ fn config_error(message: String) -> Error {
     Error::new(ErrorCode::Usage, message).with_hint("fix the sources section of the torrential config")
 }
 
-/// Joins a fixed relative path onto a validated `http(s)` base, which cannot fail.
 fn at(base: &Url, path: &str) -> Url {
     base.join(path).expect("an http base accepts a relative path")
 }

@@ -31,7 +31,6 @@ struct State {
     seq: u64,
 }
 
-/// A release a search returned, and its private `.torrent` link as an engine saves it.
 struct Recent {
     seq: u64,
     release: Release,
@@ -57,7 +56,6 @@ impl State {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct AnswerKey {
     pub source: String,
-    /// A `Search` rebuilt with a new endpoint or key for the source must not reuse old answers.
     pub scope: String,
     pub text: String,
     pub adult: bool,

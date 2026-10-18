@@ -1,6 +1,3 @@
-//! Internet Archive items that have a torrent, through the advancedsearch JSON API, and the
-//! servers that hold an item, through the metadata API.
-
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -46,7 +43,6 @@ const VIDEO_FORMATS: [&str; 14] = [
 pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>, Failure> {
     let mut url = at(base, "advancedsearch.php");
     {
-        // Query words are letters and digits only, so they cannot form Lucene syntax.
         let q = format!("title:({}) AND btih:* AND NOT mediatype:collection", ctx.terms.words().join(" "));
         let mut pairs = url.query_pairs_mut();
         pairs.append_pair("q", &q);
@@ -80,7 +76,6 @@ struct Doc {
     licenseurl: Option<Text>,
     mediatype: Option<Text>,
     color: Option<Text>,
-    /// The formats of the item's files.
     format: Option<Text>,
 }
 
@@ -143,10 +138,6 @@ fn category(doc: &Doc) -> Option<Category> {
     let video = || doc.format.as_ref().is_some_and(|f| f.all().iter().any(|f| VIDEO_FORMATS.contains(&f.as_str())));
     Some(match doc.mediatype.as_ref().and_then(Text::first)? {
         "movies" => Category::Video,
-        // Only pictures have a color. An audio item that records one and holds a video
-        // file is a film filed as audio, as the Blender Foundation's Big Buck Bunny is.
-        // Without the color, a video file in an audio item is usually one stray clip
-        // among an album's tracks.
         "audio" if doc.color.is_some() && video() => Category::Video,
         "audio" | "etree" => Category::Audio,
         "software" => Category::Software,
@@ -160,7 +151,6 @@ fn category(doc: &Doc) -> Option<Category> {
 pub(crate) struct Item {
     identifier: String,
     metadata: Url,
-    /// The scheme of the archive.org endpoint, for the item's servers too.
     scheme: String,
 }
 

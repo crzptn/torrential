@@ -82,7 +82,6 @@ fn merges_one_torrent_listed_by_two_sources() {
             id: ReleaseId::Torrent(id.parse().unwrap()),
             name: "Ubuntu 24.04 Desktop amd64 ISO".into(),
             size: Some(100),
-            // Both counts come from apibay's one observation, never knaben's leechers.
             seeders: Some(80),
             leechers: None,
             published: Some(1000),
@@ -246,7 +245,6 @@ fn the_guard_drops_a_source_that_answered_another_question() {
     assert_eq!(kept, ["Ubuntu 24.04", "ubuntu-26.04-desktop"]);
 }
 
-/// Five films for "night of the living dead 1968" with ties at every level.
 fn films() -> Vec<Run> {
     let mut lawful = with(row(&h(0xa1), "Night of the Living Dead (1968)"), None, Some(5_000), Some(100));
     lawful.category = Some(Category::Video);
@@ -278,7 +276,6 @@ fn ranks_relevance_before_popularity_then_lawful_seeders_extra_words() {
 
 const GB: u64 = 1_000_000_000;
 
-/// One film in every quality, each name matching the query as well as the others.
 fn remasters() -> Vec<Run> {
     let film = |byte, tags: &str, seeders, size| {
         let mut o =
@@ -309,7 +306,6 @@ fn machine(locale: &str, display: Option<Display>, arch: Arch) -> Machine {
     Machine { os: Os::Macos, display, arch: Some(arch), language: Language::from_locale(locale) }
 }
 
-/// This MacBook Pro: a 3024x1964 XDR panel, arm64, and English.
 fn mac() -> Profile {
     let panel = Display { width: 3024, height: 1964, hdr: true };
     Profile { detected: Some(machine("en-IN", Some(panel), Arch::Arm64)), ..Profile::default() }
@@ -319,7 +315,6 @@ fn preferring(preferences: Preferences) -> Profile {
     Profile { preferences, ..Profile::default() }
 }
 
-/// The tags after the title, in rank order, for this profile.
 fn ranked(profile: Profile) -> Vec<String> {
     let q = SearchQuery { profile, ..SearchQuery::new("night of the living dead 1968") };
     names(&search(&q, &remasters()))
@@ -492,7 +487,6 @@ fn a_tagged_trailer_ranks_after_the_film_on_a_screen() {
 
 #[test]
 fn a_screen_leaves_releases_that_are_not_video_to_seeders() {
-    // Names from knaben/v2-search-ubuntu.json.
     let mut episode = with(
         row(&h(0x50), "Celtics City S01E08 Chapter VIII Ubuntu 1080p AMZN WEB-DL DDP5 1 H 264-Kits"),
         Some(1),
@@ -514,7 +508,6 @@ fn a_screen_leaves_releases_that_are_not_video_to_seeders() {
 
 #[test]
 fn the_machines_architecture_breaks_a_tie_before_seeders() {
-    // Names from debian/debian-cd-current-*-bt-cd.html.
     let runs = [fresh(
         &knaben(),
         vec![
@@ -544,7 +537,6 @@ fn the_machines_architecture_breaks_a_tie_before_seeders() {
 
 #[test]
 fn the_system_language_breaks_a_tie_before_seeders() {
-    // Names from archive.org/advancedsearch.php-night-of-the-living-dead-1968.json.
     let runs = [fresh(
         &archive(),
         vec![
@@ -582,14 +574,12 @@ fn a_file_too_small_for_its_tag_ranks_as_untagged_on_a_screen() {
         names(&search(&q, &[fresh(&knaben(), rows)])).iter().map(|n| n.to_string()).collect::<Vec<_>>()
     };
     let sized = |byte, name, size| with(row(&h(byte), name), Some(40), Some(size), None);
-    // From the recorded archive.org results for the film.
     let clip = sized(0x22, "Night of the Living Dead |1968| WebRip US (HD 1080p)", 8_690_000);
     let film = sized(0x23, "Night of the Living Dead (1968)", GB);
     assert_eq!(
         ranked("night of the living dead 1968", vec![clip, film]),
         ["Night of the Living Dead (1968)", "Night of the Living Dead |1968| WebRip US (HD 1080p)"]
     );
-    // The smallest whole x265 episodes that knaben listed in October 2026 keep their tags.
     let episodes = vec![
         sized(0x24, "Bobs Burgers S16E03", 300_000_000),
         sized(0x25, "Bobs Burgers S16E03 1080p HEVC x265-MeGusta", 112_500_000),
@@ -738,7 +728,6 @@ fn one_empty_answer_is_a_successful_search_with_no_results() {
     );
 }
 
-/// A tiny deterministic generator, so the shuffles are the same on every run.
 struct XorShift(u64);
 
 impl XorShift {
@@ -756,8 +745,6 @@ impl XorShift {
     }
 }
 
-/// Sixty listings with ties in relevance, seeders, and size, the same torrent from
-/// several sources and twice from one source, a hybrid pair, and locators.
 fn crowded() -> Vec<(Arc<SourceMeta>, Vec<Observation>)> {
     let titles = [
         "Night of the Living Dead 1968",
@@ -802,7 +789,6 @@ fn a_thousand_shuffles_give_one_order() {
     };
     let (expected, expected_linked) = assemble(&query, Profile::default(), &terms, &runs_from(&base), 0).unwrap();
     assert_eq!(expected.releases.len(), 25);
-    // The hybrid's group joins its v2 listing and keeps its longest listing name.
     let hybrid = expected.releases.iter().find(|r| r.id.to_ref() == h(0x01)).unwrap();
     assert_eq!(hybrid.name, "Night of the Living Dead (1968) 1080p");
     assert_eq!(hybrid.sources, ["archive.org", "knaben", "apibay", "tracker"]);

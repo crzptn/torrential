@@ -1,15 +1,11 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::HashSet;
 
-/// Words that say little on their own. They count toward coverage, but a row that
-/// matches only these is not evidence that a source searched for the query.
 const STOPWORDS: &[&str] = &[
     "a", "an", "and", "at", "by", "de", "der", "die", "das", "el", "for", "in", "la", "le", "of", "on", "or", "the",
     "to", "with",
 ];
 
-/// A query split into lowercase words, never with words dropped, so "The Office"
-/// keeps "the".
 #[derive(Clone, Debug)]
 pub(crate) struct Terms {
     text: String,
@@ -17,18 +13,13 @@ pub(crate) struct Terms {
     year: Option<u16>,
 }
 
-/// How a name relates to the year in the query. The derived `Ord` relies on the
-/// variants running worst to best.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum YearMatch {
-    /// The name carries a different year.
     Other,
-    /// The name carries no year, or the query has none.
     Absent,
     Same,
 }
 
-/// Compared field by field: more query words first, then the year.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) struct Relevance {
     pub matched: u16,
@@ -48,7 +39,6 @@ impl Terms {
         Terms { text, words, year }
     }
 
-    /// The query as sent to sources, and the cache key: sanitized and lowercased.
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -80,36 +70,27 @@ impl Terms {
         Relevance { matched: u16::try_from(matched).unwrap_or(u16::MAX), year }
     }
 
-    /// Words in the name beyond one for each query word it matches, so a remaster's
-    /// "4k Remaster" counts two that the plain title does not.
     pub fn extra_words(&self, name: &str) -> u16 {
         let name_tokens = tokens(name);
         let matched = self.matches(name, &name_tokens).iter().filter(|hit| **hit).count();
         u16::try_from(name_tokens.len().saturating_sub(matched)).unwrap_or(u16::MAX)
     }
 
-    /// True when the name matches a query word that is not a stopword, or any word
-    /// when the query is only stopwords.
     pub fn is_relevant(&self, name: &str) -> bool {
         let hits = self.matches(name, &tokens(name));
         let all_stopwords = self.words.iter().all(|w| STOPWORDS.contains(&w.as_str()));
         self.words.iter().zip(hits).any(|(word, hit)| hit && (all_stopwords || !STOPWORDS.contains(&word.as_str())))
     }
 
-    /// True when the name matches every query word. Catalogs searched locally use this.
     pub fn covers(&self, name: &str) -> bool {
         !self.words.is_empty() && self.matches(name, &tokens(name)).iter().all(|hit| *hit)
     }
 
     fn matches(&self, name: &str, name_tokens: &[String]) -> Vec<bool> {
-        // Joining runs on both sides lets "arch linux" match "archlinux" and
-        // "spiderman" match "Spider-Man".
         let mut set: HashSet<String> = name_tokens.iter().cloned().collect();
         for run in 2..=3 {
             set.extend(name_tokens.windows(run).filter(|w| joinable(w)).map(|w| w.concat()));
         }
-        // Scripts written without spaces never split into whole words, so a
-        // non-ASCII word matches anywhere in the name.
         let folded = name.to_lowercase();
         let mut hits: Vec<bool> = self
             .words
@@ -127,9 +108,6 @@ impl Terms {
     }
 }
 
-/// Orders names word by word without case, with numbers before other words and the
-/// higher number first. Of two releases that match a query equally well, the newer
-/// one leads: the 2026-09-30 dump before the 2026-06-30 one, 13.7 before 13.6.
 pub(crate) fn newer_first(a: &str, b: &str) -> Ordering {
     #[derive(PartialEq, Eq, PartialOrd, Ord)]
     enum Word {
@@ -142,8 +120,6 @@ pub(crate) fn newer_first(a: &str, b: &str) -> Ordering {
     words(a).cmp(&words(b))
 }
 
-/// Two numbers side by side are a version or a channel count, as in "5.1", not
-/// one word: joined, "DD 5.1" would match a query for "area 51".
 fn joinable(run: &[String]) -> bool {
     let number = |t: &String| t.bytes().all(|b| b.is_ascii_digit());
     run.windows(2).all(|pair| !(number(&pair[0]) && number(&pair[1])))

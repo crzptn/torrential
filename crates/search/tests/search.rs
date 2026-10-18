@@ -1,6 +1,3 @@
-//! `Search` driven the way the engine drives it, against a local HTTP server that
-//! serves recorded responses.
-
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -16,11 +13,8 @@ use torrential_search::{Progress, ResultCache, SavedLink, Search, SearchConfig, 
 struct Reply {
     status: u16,
     body: Vec<u8>,
-    /// Before the response starts.
     delay: Duration,
-    /// Between the headers and the body.
     stall: Duration,
-    /// Without a Content-Length the client learns the size only while reading.
     content_length: bool,
 }
 
@@ -36,7 +30,6 @@ fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)).unwrap()
 }
 
-/// Answers each path prefix with its replies in order, repeating the last one.
 struct Server {
     base: String,
     hits: Arc<Mutex<HashMap<&'static str, usize>>>,
@@ -91,7 +84,6 @@ impl Server {
         self.hits.lock().unwrap().get(prefix).copied().unwrap_or(0)
     }
 
-    /// Points each named source at `/<name>/` on this server.
     fn config(&self, sources: &[&str]) -> SearchConfig {
         let endpoints: BTreeMap<String, String> =
             sources.iter().map(|s| (s.to_string(), format!("{}/{s}/", self.base))).collect();
@@ -124,7 +116,6 @@ async fn merges_two_indexes_into_one_ranked_list() {
         outcomes(&result),
         [("knaben".into(), SourceOutcome::Ok { results: 98 }), ("apibay".into(), SourceOutcome::Ok { results: 100 })]
     );
-    // Knaben lists c426b415 twice, from two origin trackers.
     assert_eq!(result.total, 158);
     let lts = result.releases.iter().find(|r| r.name == "Ubuntu 22.04 LTS").unwrap();
     assert_eq!(lts.id.to_ref(), "2c6b6858d61da9543d4231a71db4b1c9264b0685");
@@ -337,7 +328,6 @@ async fn a_repeat_search_is_served_from_the_cache_unless_fresh() {
     let seeded: Vec<(&str, Option<u32>)> = second.releases.iter().map(|r| (r.name.as_str(), r.seeders)).collect();
     assert_eq!(seeded, [("ubuntu-24.04.1-desktop-amd64.iso", Some(51)), ("Ubuntu 22.04 LTS", Some(37))]);
     assert_eq!(outcomes(&fresh)[1], ("apibay".into(), SourceOutcome::Ok { results: 100 }));
-    // The failing source is asked again every time rather than cached.
     assert_eq!((server.hits("/apibay/"), server.hits("/knaben/")), (2, 6));
 }
 
@@ -653,7 +643,6 @@ async fn progress_shows_each_answer_and_the_final_ranking_is_unchanged() {
 }
 
 const UBUNTU_TORRENT: &str = "/ubuntu/24.04/ubuntu-24.04.5-live-server-amd64.iso.torrent";
-/// The index, then each series it lists.
 const UBUNTU_PAGES: [(&str, &str); 6] = [
     ("/ubuntu/26.10/", "ubuntu/26.10.html"),
     ("/ubuntu/26.04/", "ubuntu/26.04.html"),
@@ -663,7 +652,6 @@ const UBUNTU_PAGES: [(&str, &str); 6] = [
     ("/ubuntu/", "ubuntu/index.html"),
 ];
 
-/// One-file torrents named after each file a series page lists, so each hashes to its own ID.
 async fn ubuntu_server() -> Server {
     let mut routes = vec![(UBUNTU_TORRENT, vec![ok(netinst())])];
     for (path, page) in &UBUNTU_PAGES[..5] {

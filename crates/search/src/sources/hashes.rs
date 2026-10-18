@@ -1,8 +1,3 @@
-//! Official `.torrent` files already fetched and hashed, kept in the cache
-//! directory so a later engine process skips the fetch. A file is known by its URL
-//! and the modification time its listing shows, so a file replaced in place is
-//! fetched again.
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -19,17 +14,14 @@ const KEEP: usize = 256;
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Key {
     pub url: String,
-    /// Unix seconds, from the listing.
     pub modified: Option<i64>,
 }
 
 pub(crate) struct Hashes {
     dir: Option<PathBuf>,
     known: Mutex<HashMap<Key, Metainfo>>,
-    /// Files claimed for a background hash. Each is fetched once per process, even when that fails.
     claimed: Mutex<HashSet<Key>>,
     unsaved: AtomicBool,
-    /// One save at a time, so the newest snapshot is the one left on disk.
     saving: tokio::sync::Mutex<()>,
 }
 
@@ -54,7 +46,6 @@ impl Hashes {
         }
     }
 
-    /// Whether `key` is unknown and not yet claimed for a background hash. Claims it.
     pub fn claim(&self, key: &Key) -> bool {
         !self.lock().contains_key(key) && self.claimed.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone())
     }
@@ -70,8 +61,6 @@ impl Hashes {
         self.unsaved.store(true, Ordering::Relaxed);
     }
 
-    /// Best effort, like the Academic Torrents catalog: a read-only cache directory
-    /// only costs fetches. Keeps what another process saved in the meantime.
     pub async fn save(&self) {
         let Some(dir) = &self.dir else { return };
         let _one = self.saving.lock().await;
@@ -104,7 +93,6 @@ impl Hashes {
     }
 }
 
-/// A damaged file is a cold cache, not an error.
 fn parse(body: &[u8]) -> HashMap<Key, Metainfo> {
     let stored: Vec<Stored> = serde_json::from_slice(body).unwrap_or_default();
     stored
@@ -115,7 +103,6 @@ fn parse(body: &[u8]) -> HashMap<Key, Metainfo> {
         .collect()
 }
 
-/// Keeps the most recently modified files.
 fn trim(known: &mut HashMap<Key, Metainfo>) {
     if known.len() > KEEP {
         let mut keys: Vec<Key> = known.keys().cloned().collect();

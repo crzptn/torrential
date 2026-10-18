@@ -1,5 +1,3 @@
-//! Official Arch Linux ISOs from the releng JSON, matched locally.
-
 use serde::Deserialize;
 use torrential_core::{Category, Flag};
 use url::Url;
@@ -38,7 +36,6 @@ pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>
     Ok(all.into_iter().filter(|o| ctx.terms.covers(o.name())).collect())
 }
 
-/// Only releases still on the mirrors, with a published SHA-256, are listed.
 fn parse(body: &[u8], base: &Url) -> Result<Vec<Observation>, String> {
     let feed: Feed = serde_json::from_slice(body).map_err(|e| format!("releng JSON: {e}"))?;
     Ok(feed

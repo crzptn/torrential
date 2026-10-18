@@ -1,6 +1,3 @@
-//! From what each source answered to one ranked `SearchResult`. Pure, and
-//! independent of answer and row order, so a human and an agent get the same list.
-
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -31,21 +28,14 @@ pub(crate) enum Answer {
     Failed(Failure),
 }
 
-/// Keeps the rows whose name matches a query word. When most rows match none, the
-/// source answered something other than the query, such as its latest uploads, and
-/// none of its rows are kept.
 pub(crate) fn vet(terms: &Terms, rows: Vec<Observation>) -> Result<Vec<Observation>, Failure> {
     let total = rows.len();
     let kept: Vec<Observation> = rows.into_iter().filter(|o| terms.is_relevant(o.name())).collect();
     if (total - kept.len()) * 2 > total { Err(Failure::Irrelevant) } else { Ok(kept) }
 }
 
-/// A release with every link, and the private source whose `.torrent` link it carries, if any.
 pub(crate) type Linked = (Release, Option<String>);
 
-/// Fails with `providers_unavailable` when no source answered. An answer with no
-/// rows is still an answer. Also returns the shown releases with every link, for
-/// resolving their IDs later.
 pub(crate) fn assemble(
     query: &SearchQuery,
     profile: Profile,
@@ -60,8 +50,6 @@ pub(crate) fn assemble(
     Ok((result, linked))
 }
 
-/// What the answers add up to, even when none succeeded, as a search still
-/// waiting on other sources shows them. The result's query carries `profile`.
 pub(crate) fn merged(
     query: &SearchQuery,
     profile: Profile,
@@ -106,9 +94,7 @@ fn all_failed(sources: Vec<SourceReport>) -> Error {
         .with_details(Details::Sources(sources))
 }
 
-/// A merged release, with what ranking needs that `Release` does not carry.
 pub(crate) struct Candidate {
-    /// Every link, for the engine to download from.
     pub release: Release,
     hash: Option<InfoHash>,
     /// The private source the `.torrent` URL came from, which may have put an API key in it.
@@ -118,23 +104,16 @@ pub(crate) struct Candidate {
     /// The page link came from a private source, which may put a passkey in it.
     private_info: bool,
     relevance: Relevance,
-    /// Words in the shown name beyond the query.
     extra_words: u16,
     downloads: Option<u64>,
     lawful: bool,
-    /// Read from the shown name, so ranking and output agree.
     quality: Quality,
-    /// The resolution ranking goes by: the name's, unless the release is a trailer or sample
-    /// or too small to hold the film at it.
     resolution: Option<Resolution>,
-    /// CPU architectures and languages the shown name marks.
     arches: Vec<Arch>,
     languages: Vec<Language>,
 }
 
 impl Candidate {
-    /// The release as a search result shows it, without links that came only from
-    /// private sources. Agents and people refer to it by ID instead.
     fn shown(&self) -> Release {
         let mut release = self.release.clone();
         if self.private_url.is_some() {
@@ -152,15 +131,11 @@ impl Candidate {
 
 type Sighting<'a> = (&'a SourceMeta, &'a Observation);
 
-/// Groups listings by torrent. A hybrid listing ties its v2 ID to its v1 ID, so a
-/// listing that only knows the v2 hash joins the same release.
 fn merge<'a>(sightings: impl Iterator<Item = Sighting<'a>>, terms: &Terms) -> Vec<Candidate> {
     let sightings: Vec<Sighting<'a>> = sightings.collect();
     let mut aliases: HashMap<TorrentId, TorrentId> = HashMap::new();
     for (_, o) in &sightings {
         if let Identity::Hash { hash: InfoHash::Hybrid { v1, v2 }, .. } = o.identity {
-            // Two hybrids claiming one v2 hash is bad data; picking the smaller v1
-            // keeps the result independent of row order.
             let v1 = TorrentId::from_bytes(v1);
             aliases.entry(InfoHash::V2(v2).id()).and_modify(|known| *known = (*known).min(v1)).or_insert(v1);
         }
@@ -181,9 +156,6 @@ fn merge<'a>(sightings: impl Iterator<Item = Sighting<'a>>, terms: &Terms) -> Ve
     groups.into_iter().map(|(id, group)| combine(id, &group, terms)).collect()
 }
 
-/// Each field comes from a rule that depends only on the set of listings, never on
-/// their order: the most authoritative source wins, and equal authority falls back
-/// to comparing values.
 fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     fn first<T: Ord + Clone>(group: &[Sighting<'_>], field: impl Fn(&Observation) -> Option<T>) -> Option<T> {
         group.iter().filter_map(|(s, o)| field(o).map(|v| (s.authority, v))).min().map(|(_, v)| v)
@@ -272,9 +244,6 @@ fn combined_hash(group: &[Sighting<'_>]) -> Option<InfoHash> {
     }
 }
 
-/// Filters are strict: a release with an unknown size or seeder count fails a
-/// `max_size` or `min_seeds` filter. Adult releases are hidden last, so
-/// `hidden_adult` counts only those every other filter let through.
 fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) {
     let mut hidden_adult = 0;
     let kept = candidates
@@ -294,16 +263,6 @@ fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) 
     (kept, hidden_adult)
 }
 
-/// One total order. `relevance` sorts by query relevance, then releases that fit the
-/// profile's sizes and player, then official and lawful sources, then the resolution
-/// closest to the screen, then the machine's CPU architecture, then the system language,
-/// then seeders, then names with fewer words beyond the query, then downloads, then newer
-/// names, then ID. The resolution of a trailer, or of a file too small to hold the film at
-/// it, is unknown. Closeness counts only when most results are video, so the ISOs of a
-/// software search never rank below the episodes it also finds. With an empty profile
-/// every release fits and ties on the screen, architecture, and language. Above that
-/// floor a bigger file is no closer a match, so size never breaks a tie. The
-/// other sorts put their key first and fall back to that order. Unknown values sort last.
 fn rank(candidates: &mut [Candidate], sort: Sort, profile: &Profile) {
     let fits = |c: &Candidate| profile.fits(c.release.size, c.quality);
     let is_video = |c: &Candidate| c.release.category == Some(Category::Video) || c.quality.resolution.is_some();

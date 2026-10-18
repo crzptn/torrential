@@ -4,8 +4,6 @@ use super::listing::{self, Entry};
 use super::{Ctx, Failure, at, pages};
 use crate::observation::Observation;
 
-/// The newest release series kept on the site: every supported LTS and interim
-/// release fits in five, and older ones are past standard support.
 const SERIES: usize = 5;
 
 pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>, Failure> {
@@ -23,7 +21,6 @@ pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>
     Ok(listing::resolve(ctx, files).await)
 }
 
-/// Series directories such as `24.04/`, newest first.
 fn current_series(index: &str) -> Vec<String> {
     let mut series: Vec<(Vec<u32>, String)> = listing::hrefs(index)
         .into_iter()
@@ -37,9 +34,6 @@ fn current_series(index: &str) -> Vec<String> {
     series.into_iter().take(SERIES).map(|(_, name)| name).collect()
 }
 
-/// A series directory keeps every point release, and the betas before them. Only
-/// the newest final build of each image (`desktop-amd64`, `live-server-amd64`) is
-/// worth offering, or its beta while no final build exists.
 fn newest_point_releases(entries: Vec<Entry>) -> Vec<Entry> {
     let mut newest: Vec<(String, (Vec<u32>, bool), Entry)> = Vec::new();
     for entry in entries {

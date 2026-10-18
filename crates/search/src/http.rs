@@ -10,7 +10,6 @@ pub type Recorded = Vec<(String, Vec<u8>)>;
 
 pub(crate) struct Http {
     client: reqwest::Client,
-    /// `Some` only while recording fixtures.
     recorded: Option<Mutex<Recorded>>,
 }
 
@@ -19,15 +18,12 @@ pub(crate) enum FetchError {
     Timeout,
     Status(u16),
     Connect(String),
-    /// The body passed the cap. Reported as an error, never parsed truncated.
     TooLarge(usize),
     Decode(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Retry {
-    /// A request with no response by three fifths of the time left is joined by a
-    /// second one, and a 5xx is asked once more.
     Once,
     /// Asking twice can cost twice: a Torznab search fans out to the user's
     /// private trackers.
@@ -45,7 +41,6 @@ impl Http {
         Ok(Http { client, recorded: record.then(Mutex::default) })
     }
 
-    /// The same client, for a request that outlives the search that started it. Never records.
     pub fn detached(&self) -> Http {
         Http { client: self.client.clone(), recorded: None }
     }
@@ -54,7 +49,6 @@ impl Http {
         self.fetch(url, cap, deadline, Retry::Once).await
     }
 
-    /// GETs `url`, giving up at `deadline`.
     pub async fn fetch(&self, url: &Url, cap: usize, deadline: Instant, retry: Retry) -> Result<Vec<u8>, FetchError> {
         let body =
             timeout_at(deadline, self.fetch_by(url, cap, deadline, retry)).await.unwrap_or(Err(FetchError::Timeout))?;
@@ -79,7 +73,6 @@ impl Http {
         let can_join = retry == Retry::Once && left() * 2 / 5 > MIN_RETRY;
         let first = self.respond(url);
         tokio::pin!(first);
-        // The first request is never abandoned: a slow server may still answer it.
         let (response, retried) = tokio::select! {
             response = &mut first => (response, false),
             _ = tokio::time::sleep_until(join_at), if can_join => (first_ok(first, self.respond(url)).await, true),
@@ -96,7 +89,6 @@ impl Http {
         read(response, cap).await
     }
 
-    /// Resolves once a successful response has started.
     async fn respond(&self, url: &Url) -> Result<reqwest::Response, FetchError> {
         let response = self.client.get(url.clone()).send().await.map_err(classify)?;
         let status = response.status();
@@ -121,7 +113,6 @@ async fn read(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>, Fe
     Ok(body)
 }
 
-/// The first of two attempts to succeed, or the last error when both fail.
 async fn first_ok<T, E>(a: impl Future<Output = Result<T, E>>, b: impl Future<Output = Result<T, E>>) -> Result<T, E> {
     tokio::pin!(a, b);
     tokio::select! {

@@ -2,16 +2,9 @@ use torrential_core::{Category, Resolution};
 
 use crate::terms::Terms;
 
-/// No ordinary title contains these, so any case counts.
 const CAM_ANY_CASE: &[&str] = &["hdcam", "camrip", "hdcamrip", "telesync", "telecine", "hdts", "hdtc"];
-/// Short tokens that collide with ordinary words ("Cam Newton", "TS Eliot") and file
-/// types (MPEG-TS). They count only in capitals and after the release year, where
-/// release groups put the source.
 const CAM_AFTER_YEAR: &[&str] = &["CAM", "TS"];
 
-/// Brands and terms that do not occur in ordinary titles. Bare "xxx", "sex", and
-/// "hentai" are left out because they collide with "xXx (2002)", "Sex Education",
-/// and "Hentai Kamen"; a source's adult category catches those listings instead.
 const ADULT: &[&str] = &[
     "bangbros",
     "brazzers",
@@ -52,8 +45,6 @@ pub(crate) fn is_cam(name: &str, category: Option<Category>) -> bool {
     false
 }
 
-/// A trailer, teaser, or sample that the query does not ask for, so its resolution says
-/// nothing about a copy of the film.
 pub(crate) fn is_extra(name: &str, terms: &Terms) -> bool {
     const EXTRAS: [&str; 4] = ["trailer", "trailers", "teaser", "sample"];
     name.split(|c: char| !c.is_alphanumeric())
@@ -61,10 +52,6 @@ pub(crate) fn is_extra(name: &str, terms: &Terms) -> bool {
         .any(|t| EXTRAS.contains(&t.as_str()) && !terms.words().contains(&t))
 }
 
-/// Too small to hold a whole film or episode at its resolution, like an 8 MB clip tagged
-/// 1080p, so the tag says nothing about a copy of the film either. The floors sit below the
-/// smallest whole episodes found on knaben and apibay in October 2026, x265 TV episodes of
-/// 81 MB at 720p, 71 MB at 1080p, and 1.2 GB at 2160p.
 pub(crate) fn is_too_small(size: Option<u64>, resolution: Resolution) -> bool {
     let floor = match resolution {
         Resolution::Sd => 0,

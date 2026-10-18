@@ -1,5 +1,3 @@
-//! One source's claim about one torrent, validated where it enters the crate.
-
 use std::collections::BTreeSet;
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -12,13 +10,9 @@ pub(crate) struct Observation {
     name: String,
     pub size: Option<u64>,
     pub peers: Option<Peers>,
-    /// How many times the source says the item was downloaded. Archive.org counts
-    /// these and no seeders.
     pub downloads: Option<u64>,
-    /// Unix seconds.
     pub published: Option<i64>,
     pub category: Option<Category>,
-    /// What the source asserts: `official`, `trusted`, `pd`, `cc`, or `adult` by category.
     pub flags: BTreeSet<Flag>,
     pub trackers: Vec<String>,
     pub info_url: Option<String>,
@@ -26,18 +20,10 @@ pub(crate) struct Observation {
 
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Identity {
-    Hash {
-        hash: InfoHash,
-        torrent_url: Option<String>,
-    },
-    /// The source links a `.torrent` file and names no infohash.
-    Locator {
-        torrent_url: String,
-    },
+    Hash { hash: InfoHash, torrent_url: Option<String> },
+    Locator { torrent_url: String },
 }
 
-/// Seeders and leechers as one source counted them at one moment, kept together so
-/// a merged release never pairs one source's seeders with another's leechers.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) struct Peers {
     pub seeders: u32,
@@ -45,7 +31,6 @@ pub(crate) struct Peers {
 }
 
 impl Observation {
-    /// `None` when the name is empty once sanitized.
     pub fn new(identity: Identity, raw_name: &str) -> Option<Observation> {
         let name = torrential_core::text::sanitize(raw_name);
         (!name.is_empty()).then(|| Observation {
@@ -87,27 +72,21 @@ impl Peers {
     }
 }
 
-/// A 40-hex, 32-base32, or 64-hex infohash. All-zero digests are placeholders, as in
-/// apibay's "No results returned" row, not torrents.
 pub(crate) fn infohash(s: &str) -> Option<InfoHash> {
     let hash = parse_full_infohash(s.trim())?;
     let zero = hash.v1().is_some_and(|h| h == [0; 20]) || hash.v2().is_some_and(|h| h == [0; 32]);
     (!zero).then_some(hash)
 }
 
-/// A count that a source reported. Text that is not a non-negative integer is unknown.
 pub(crate) fn count(s: &str) -> Option<u32> {
     s.trim().parse().ok()
 }
 
-/// An absolute `http` or `https` URL, normalized.
 pub(crate) fn web_url(raw: &str) -> Option<String> {
     let url = url::Url::parse(raw.trim()).ok()?;
     (matches!(url.scheme(), "http" | "https") && url.host().is_some()).then(|| url.to_string())
 }
 
-/// An announce URL, normalized so that case differences in the scheme and host do
-/// not count as different trackers. Paths keep their case.
 pub(crate) fn tracker(raw: &str) -> Option<String> {
     const MAX_LEN: usize = 512;
     let raw = raw.trim();
