@@ -112,6 +112,7 @@ pub(crate) struct Candidate {
     relevance: Relevance,
     /// Words in the shown name beyond the query.
     extra_words: u16,
+    downloads: Option<u64>,
     lawful: bool,
 }
 
@@ -220,6 +221,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
         },
         relevance,
         extra_words,
+        downloads: group.iter().filter_map(|(_, o)| o.downloads).max(),
         lawful: group.iter().any(|(s, _)| s.lawful),
     }
 }
@@ -261,10 +263,10 @@ fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) 
 }
 
 /// One total order. `relevance` sorts by query relevance, then official and lawful
-/// sources, then seeders, then names with fewer words beyond the query, then newer
-/// names, then ID. A bigger file is no closer a match, so size never breaks a tie.
-/// The other sorts put their key first and fall back to that order. Unknown values
-/// sort last.
+/// sources, then seeders, then names with fewer words beyond the query, then
+/// downloads, then newer names, then ID. A bigger file is no closer a match, so size
+/// never breaks a tie. The other sorts put their key first and fall back to that
+/// order. Unknown values sort last.
 fn rank(candidates: &mut [Candidate], sort: Sort) {
     candidates.sort_by(|a, b| {
         let (ra, rb) = (&a.release, &b.release);
@@ -279,6 +281,7 @@ fn rank(candidates: &mut [Candidate], sort: Sort) {
             .then_with(|| standing(b).cmp(&standing(a)))
             .then_with(|| known_first_desc(ra.seeders, rb.seeders))
             .then_with(|| a.extra_words.cmp(&b.extra_words))
+            .then_with(|| known_first_desc(a.downloads, b.downloads))
             .then_with(|| terms::newer_first(&ra.name, &rb.name))
             .then_with(|| ra.id.to_ref().cmp(&rb.id.to_ref()))
     });

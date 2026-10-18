@@ -553,10 +553,10 @@ async fn a_plain_title_outranks_bigger_remasters() {
     assert_eq!(
         top,
         [
-            ("Night Of The Living Dead 1968", Some(599_397_613)),
-            ("Night Of The Living Dead 1968", Some(253_292_883)),
-            ("NIGHT OF THE LIVING DEAD - 1968", Some(3_605_425_312)),
+            ("Night of the Living Dead (1968)", Some(1_173_905_628)),
             ("Night of the Living Dead (1968)", Some(1_173_905_516)),
+            ("Night of the Living Dead (1968)", Some(553_635_842)),
+            ("Night of the Living Dead (1968)", Some(1_965_163_851)),
         ]
     );
 }

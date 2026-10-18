@@ -70,6 +70,7 @@ struct Doc {
     title: Option<Text>,
     btih: Option<Text>,
     item_size: Option<u64>,
+    downloads: Option<u64>,
     publicdate: Option<Text>,
     licenseurl: Option<Text>,
     mediatype: Option<Text>,
@@ -120,6 +121,7 @@ fn observation(doc: Doc, base: &Url) -> Option<Observation> {
             !license.contains("publicdomain") && license.contains("creativecommons.org/licenses"),
         );
     obs.size = doc.item_size;
+    obs.downloads = doc.downloads;
     obs.published = doc.publicdate.as_ref().and_then(Text::first).and_then(crate::dates::rfc3339);
     obs.category = category(&doc);
     obs.info_url = web_url(at(base, &format!("details/{id}")).as_str());
@@ -168,7 +170,7 @@ mod tests {
             }
         );
         assert_eq!(dvd.size, Some(5_003_733_941));
-        assert_eq!(dvd.peers, None);
+        assert_eq!((dvd.peers, dvd.downloads), (None, Some(305_139)));
         assert_eq!(dvd.category, Some(Category::Video));
         assert_eq!(dvd.flags.iter().collect::<Vec<_>>(), [&Flag::PublicDomain]);
         assert_eq!(dvd.published, Some(1_177_371_285));

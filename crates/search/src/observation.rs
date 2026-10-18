@@ -12,6 +12,9 @@ pub(crate) struct Observation {
     name: String,
     pub size: Option<u64>,
     pub peers: Option<Peers>,
+    /// How many times the source says the item was downloaded. Archive.org counts
+    /// these and no seeders.
+    pub downloads: Option<u64>,
     /// Unix seconds.
     pub published: Option<i64>,
     pub category: Option<Category>,
@@ -50,6 +53,7 @@ impl Observation {
             name,
             size: None,
             peers: None,
+            downloads: None,
             published: None,
             category: None,
             flags: BTreeSet::new(),
