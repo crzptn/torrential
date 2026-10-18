@@ -152,6 +152,7 @@ fn search(mut conn: Conn, args: SearchArgs, mode: Mode) -> Result<u8, Error> {
         timeout_ms: args.timeout.as_millis().min(u128::from(u32::MAX)) as u32,
         adult: args.adult,
         fresh: args.fresh,
+        preferences: None,
     };
     let within = args.timeout + Duration::from_secs(10);
     match answer(conn.call_within(&Request::Search { query, stream: false }, within)?)? {

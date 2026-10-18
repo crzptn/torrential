@@ -40,6 +40,32 @@ pub fn format_size(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
+/// A limit as people type it: `8 GB` or `50 GiB` when it is a whole number of one unit,
+/// and otherwise like [`format_size`].
+pub fn format_limit(bytes: u64) -> String {
+    whole_units(bytes).map_or_else(|| format_size(bytes), |(n, unit)| format!("{n} {unit}"))
+}
+
+/// A size that [`parse_size`] reads back exactly: `8GB`, `50GiB`, or a byte count.
+pub fn size_text(bytes: u64) -> String {
+    whole_units(bytes).map_or_else(|| bytes.to_string(), |(n, unit)| format!("{n}{unit}"))
+}
+
+fn whole_units(bytes: u64) -> Option<(u64, &'static str)> {
+    const UNITS: [(&str, u64); 6] = [
+        ("TiB", 1 << 40),
+        ("TB", 1_000_000_000_000),
+        ("GiB", 1 << 30),
+        ("GB", 1_000_000_000),
+        ("MiB", 1 << 20),
+        ("MB", 1_000_000),
+    ];
+    UNITS
+        .iter()
+        .find(|(_, unit)| bytes >= *unit && bytes.is_multiple_of(*unit))
+        .map(|(name, unit)| (bytes / unit, *name))
+}
+
 pub fn format_rate(bytes_per_sec: u64) -> String {
     format!("{}/s", format_size(bytes_per_sec))
 }
@@ -122,6 +148,14 @@ mod tests {
         assert_eq!(format_size(1_640_497_152), "1.5 GiB");
         assert_eq!(format_size(596_399_542), "568.8 MiB");
         assert_eq!(format_rate(40_265_318), "38.4 MiB/s");
+    }
+
+    #[test]
+    fn limits_read_as_typed_and_round_trip() {
+        let sizes = [8_000_000_000, 50 << 30, 1_500_000_000, 1_234_567];
+        assert_eq!(sizes.map(format_limit), ["8 GB", "50 GiB", "1500 MB", "1.2 MiB"]);
+        assert_eq!(sizes.map(size_text), ["8GB", "50GiB", "1500MB", "1234567"]);
+        assert_eq!(sizes.map(|s| parse_size(&size_text(s))), sizes.map(Some));
     }
 
     #[test]

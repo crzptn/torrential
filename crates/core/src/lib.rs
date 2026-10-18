@@ -4,6 +4,7 @@
 pub mod error;
 pub mod id;
 pub mod job;
+pub mod preferences;
 pub mod protocol;
 pub mod quality;
 pub mod release;
@@ -13,5 +14,6 @@ pub mod units;
 pub use error::{Error, ErrorCode};
 pub use id::{HexPrefix, InfoHash, LocatorId, ReleaseId, Target, TorrentId};
 pub use job::{Eighths, FileRisk, Job, JobStatus, PieceMap, Progress, Selection, Slice, TorrentFile};
+pub use preferences::{Playback, Preferences, Screen};
 pub use quality::{Codec, Quality, Resolution};
 pub use release::{Category, Flag, Release, SearchQuery, SearchResult, Sort, SourceOutcome, SourceReport};

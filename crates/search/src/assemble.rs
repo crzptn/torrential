@@ -8,8 +8,8 @@ use std::sync::Arc;
 use sha1::{Digest, Sha1};
 use torrential_core::error::Details;
 use torrential_core::{
-    Error, ErrorCode, Flag, InfoHash, LocatorId, Release, ReleaseId, SearchQuery, SearchResult, Sort, SourceReport,
-    TorrentId,
+    Error, ErrorCode, Flag, InfoHash, LocatorId, Preferences, Quality, Release, ReleaseId, SearchQuery, SearchResult,
+    Sort, SourceReport, TorrentId,
 };
 
 use crate::classify;
@@ -75,7 +75,7 @@ pub(crate) fn merged(
         rows.iter().map(|row| (&*run.source, row))
     });
     let (mut kept, hidden_adult) = filter(merge(sightings, terms), query);
-    rank(&mut kept, query.sort);
+    rank(&mut kept, query.sort, query.preferences.unwrap_or_default());
     let total = u32::try_from(kept.len()).unwrap_or(u32::MAX);
     kept.truncate(query.limit.into());
     let releases = kept.iter().map(Candidate::shown).collect();
@@ -114,6 +114,8 @@ pub(crate) struct Candidate {
     extra_words: u16,
     downloads: Option<u64>,
     lawful: bool,
+    /// Read from the shown name, so ranking and output agree.
+    quality: Quality,
 }
 
 impl Candidate {
@@ -201,6 +203,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     let link = group.iter().filter_map(|(s, o)| o.torrent_url().map(|url| (s.authority, !s.public, url))).min();
     let relevance = group.iter().map(|(_, o)| terms.relevance(o.name())).max().unwrap_or(terms.relevance(""));
     let extra_words = terms.extra_words(&name);
+    let quality = Quality::parse(&name);
     Candidate {
         hash,
         private_url: link.is_some_and(|(_, private, _)| private),
@@ -223,6 +226,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
         extra_words,
         downloads: group.iter().filter_map(|(_, o)| o.downloads).max(),
         lawful: group.iter().any(|(s, _)| s.lawful),
+        quality,
     }
 }
 
@@ -262,12 +266,16 @@ fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) 
     (kept, hidden_adult)
 }
 
-/// One total order. `relevance` sorts by query relevance, then official and lawful
-/// sources, then seeders, then names with fewer words beyond the query, then
-/// downloads, then newer names, then ID. A bigger file is no closer a match, so size
-/// never breaks a tie. The other sorts put their key first and fall back to that
-/// order. Unknown values sort last.
-fn rank(candidates: &mut [Candidate], sort: Sort) {
+/// One total order. `relevance` sorts by query relevance, then releases that fit the
+/// user's preferences, then official and lawful sources, then resolution closest to
+/// the user's screen, then seeders, then names with fewer words beyond the query, then
+/// downloads, then newer names, then ID. Without preferences every release fits and
+/// every resolution is as close. A bigger file is no closer a match, so size never
+/// breaks a tie. The other sorts put their key first and fall back to that order.
+/// Unknown values sort last.
+fn rank(candidates: &mut [Candidate], sort: Sort, preferences: Preferences) {
+    let fits = |c: &Candidate| preferences.fits(c.release.size, c.quality);
+    let closeness = |c: &Candidate| preferences.closeness(c.quality.resolution);
     candidates.sort_by(|a, b| {
         let (ra, rb) = (&a.release, &b.release);
         let primary = match sort {
@@ -278,7 +286,9 @@ fn rank(candidates: &mut [Candidate], sort: Sort) {
         };
         primary
             .then_with(|| b.relevance.cmp(&a.relevance))
+            .then_with(|| fits(b).cmp(&fits(a)))
             .then_with(|| standing(b).cmp(&standing(a)))
+            .then_with(|| closeness(a).cmp(&closeness(b)))
             .then_with(|| known_first_desc(ra.seeders, rb.seeders))
             .then_with(|| a.extra_words.cmp(&b.extra_words))
             .then_with(|| known_first_desc(a.downloads, b.downloads))

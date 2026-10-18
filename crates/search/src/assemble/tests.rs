@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use torrential_core::error::Details;
-use torrential_core::{Category, ErrorCode, Flag, Release, ReleaseId, SearchQuery, Sort, SourceOutcome, SourceReport};
+use torrential_core::{
+    Category, ErrorCode, Flag, Playback, Preferences, Release, ReleaseId, Screen, SearchQuery, Sort, SourceOutcome,
+    SourceReport,
+};
 
 use super::*;
 use crate::observation::{Identity, Observation, Peers, infohash};
@@ -261,6 +264,170 @@ fn ranks_relevance_before_popularity_then_lawful_seeders_extra_words() {
             "Night of the Living Dead 1968 1080p BluRay",
             "Night of the Living Dead (1990)",
             "Living Dead Night Collection",
+        ]
+    );
+}
+
+const GB: u64 = 1_000_000_000;
+
+/// One film in every quality, each name matching the query as well as the others.
+fn remasters() -> Vec<Run> {
+    let film = |byte, tags: &str, seeders, size| {
+        with(row(&h(byte), &format!("Night of the Living Dead 1968 {tags}")), Some(seeders), Some(size), None)
+    };
+    let mut lawful = with(row(&h(0x10), "Night of the Living Dead 1968 4K Remaster"), None, Some(58 * GB), None);
+    lawful.category = Some(Category::Video);
+    vec![
+        fresh(&archive(), vec![lawful]),
+        fresh(
+            &knaben(),
+            vec![
+                film(0x11, "2160p UHD BluRay HDR10 x265", 500, 20 * GB),
+                film(0x12, "2160p WEB x265", 300, 9 * GB),
+                film(0x13, "1080p BluRay x264", 200, 8 * GB),
+                film(0x14, "1080p WEB x265", 150, 2 * GB),
+                film(0x15, "720p BluRay x264", 100, 1_500_000_000),
+                film(0x16, "DVDRip", 80, 700_000_000),
+                film(0x17, "Restored", 600, GB),
+            ],
+        ),
+    ]
+}
+
+/// The tags after the title, in rank order, for these preferences.
+fn ranked(preferences: Option<Preferences>) -> Vec<String> {
+    let q = SearchQuery { preferences, ..SearchQuery::new("night of the living dead 1968") };
+    names(&search(&q, &remasters()))
+        .iter()
+        .map(|n| n.trim_start_matches("Night of the Living Dead 1968 ").to_string())
+        .collect()
+}
+
+#[test]
+fn without_preferences_lawful_sources_then_seeders_lead() {
+    let expected = [
+        "4K Remaster",
+        "Restored",
+        "2160p UHD BluRay HDR10 x265",
+        "2160p WEB x265",
+        "1080p BluRay x264",
+        "1080p WEB x265",
+        "720p BluRay x264",
+        "DVDRip",
+    ];
+    assert_eq!(ranked(None), expected);
+    assert_eq!(ranked(Some(Preferences::default())), expected);
+}
+
+#[test]
+fn a_screen_ranks_its_resolution_first_and_unknown_resolutions_last() {
+    let for_screen = |screen| ranked(Some(Preferences { screen: Some(screen), ..Preferences::default() }));
+    assert_eq!(
+        for_screen(Screen::Tv4k),
+        [
+            "4K Remaster",
+            "2160p UHD BluRay HDR10 x265",
+            "2160p WEB x265",
+            "1080p BluRay x264",
+            "1080p WEB x265",
+            "720p BluRay x264",
+            "DVDRip",
+            "Restored",
+        ]
+    );
+    assert_eq!(
+        for_screen(Screen::Laptop),
+        [
+            "4K Remaster",
+            "1080p BluRay x264",
+            "1080p WEB x265",
+            "720p BluRay x264",
+            "2160p UHD BluRay HDR10 x265",
+            "2160p WEB x265",
+            "DVDRip",
+            "Restored",
+        ]
+    );
+    // A phone takes 720p as readily as 1080p, so seeders decide between them.
+    assert_eq!(
+        for_screen(Screen::Phone),
+        [
+            "4K Remaster",
+            "1080p BluRay x264",
+            "1080p WEB x265",
+            "720p BluRay x264",
+            "DVDRip",
+            "2160p UHD BluRay HDR10 x265",
+            "2160p WEB x265",
+            "Restored",
+        ]
+    );
+}
+
+#[test]
+fn a_size_cap_ranks_what_fits_first_even_before_lawful_sources() {
+    let capped = ranked(Some(Preferences { max_size: Some(8 * GB), ..Preferences::default() }));
+    assert_eq!(
+        capped,
+        [
+            "Restored",
+            "1080p BluRay x264",
+            "1080p WEB x265",
+            "720p BluRay x264",
+            "DVDRip",
+            "4K Remaster",
+            "2160p UHD BluRay HDR10 x265",
+            "2160p WEB x265",
+        ]
+    );
+}
+
+#[test]
+fn a_player_ranks_what_it_may_not_play_last() {
+    let for_player = |playback| ranked(Some(Preferences { playback: Some(playback), ..Preferences::default() }));
+    assert_eq!(for_player(Playback::HevcHdr), ranked(None));
+    assert_eq!(
+        for_player(Playback::Hevc),
+        [
+            "4K Remaster",
+            "Restored",
+            "2160p WEB x265",
+            "1080p BluRay x264",
+            "1080p WEB x265",
+            "720p BluRay x264",
+            "DVDRip",
+            "2160p UHD BluRay HDR10 x265",
+        ]
+    );
+    assert_eq!(
+        for_player(Playback::H264),
+        [
+            "4K Remaster",
+            "Restored",
+            "1080p BluRay x264",
+            "720p BluRay x264",
+            "DVDRip",
+            "2160p UHD BluRay HDR10 x265",
+            "2160p WEB x265",
+            "1080p WEB x265",
+        ]
+    );
+}
+
+#[test]
+fn every_answer_together_ranks_fit_then_lawful_then_screen() {
+    let laptop = Preferences { screen: Some(Screen::Laptop), max_size: Some(2 * GB), playback: Some(Playback::H264) };
+    assert_eq!(
+        ranked(Some(laptop)),
+        [
+            "720p BluRay x264",
+            "DVDRip",
+            "Restored",
+            "4K Remaster",
+            "1080p BluRay x264",
+            "1080p WEB x265",
+            "2160p UHD BluRay HDR10 x265",
+            "2160p WEB x265",
         ]
     );
 }

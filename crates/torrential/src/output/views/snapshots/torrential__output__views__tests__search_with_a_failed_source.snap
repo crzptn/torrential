@@ -25,7 +25,8 @@ next: torrential files <ID> · torrential get <ID>
       "limit": 10,
       "timeout_ms": 6000,
       "adult": false,
-      "fresh": false
+      "fresh": false,
+      "preferences": null
     },
     "releases": [
       {
