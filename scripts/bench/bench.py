@@ -8,6 +8,7 @@ Suites:
   cold        The first command when no engine runs, and where that time goes.
   startup     Process start of torrential --version against floor binaries given by --floor.
   search      Live search with --fresh, spread over time, then the cached repeat.
+  search-words  A search for words the engine has not searched, without --fresh, spread over time.
   cache-idle  Whether a search is still cached after the engine sat idle.
   rest        Engine CPU, wakeups, and memory with nothing to do.
   tui-download  TUI CPU in tmux while the real engine downloads --torrent.
@@ -360,6 +361,45 @@ def suite_search(a, record):
                 ok=rc == 0 and set(s["source"] for s in hit_sources) - set(cached) <= set(failed),
                 cached_sources=len(cached),
                 refetched=[s["source"] for s in hit_sources if s["outcome"] != "cached"],
+            )
+            if i + 1 < a.start + a.runs:
+                time.sleep(max(0, a.gap - (time.time() - began)))
+    finally:
+        home.remove()
+
+
+WORDS = [
+    f"ubuntu {version}{image}"
+    for image in ("", " desktop", " server")
+    for version in ("24.04", "22.04", "26.04", "25.10", "26.10")
+]
+
+
+def suite_search_words(a, record):
+    """A search for words this engine has not searched yet, so no answer is cached, without --fresh."""
+    home = Home(a.bin, a.out, "search-words")
+    try:
+        for i in range(a.start, a.start + a.runs):
+            began = time.time()
+            words = WORDS[i % len(WORDS)].split()
+            ensure_ms, _, _ = home.run("--json", "status")
+            wall_ms, rc, out = home.run("--json", "search", *words)
+            result, sources = search_report(out) if rc == 0 else ({}, [])
+            slowest = max(sources, key=lambda s: s["elapsed_ms"]) if sources else {}
+            record(
+                "search-new-words",
+                run=i,
+                store="cold" if i == a.start else "warm",
+                words=" ".join(words),
+                wall_ms=round(wall_ms, 1),
+                engine_elapsed_ms=result.get("elapsed_ms"),
+                ensure_engine_ms=round(ensure_ms, 1),
+                # A cached source would mean the words were not new to this engine.
+                ok=rc == 0 and len(result.get("releases", [])) > 0 and all(s["outcome"] != "cached" for s in sources),
+                failed_sources=[s["source"] for s in sources if s["outcome"] != "ok"],
+                slowest=slowest.get("source"),
+                slowest_ms=slowest.get("elapsed_ms"),
+                sources=sources,
             )
             if i + 1 < a.start + a.runs:
                 time.sleep(max(0, a.gap - (time.time() - began)))
@@ -736,14 +776,17 @@ def main():
     p.add_argument(
         "suite",
         choices=[
-            "cli", "cold", "startup", "search", "cache-idle", "rest", "tui-download", "download", "http", "summary",
+            "cli", "cold", "startup", "search", "search-words", "cache-idle", "rest", "tui-download", "download",
+            "http", "summary",
         ],
     )
     p.add_argument("--bin", default="target/release/torrential")
     p.add_argument("--out", required=True)
     p.add_argument("--runs", type=int, default=5)
-    p.add_argument("--start", type=int, default=0, help="download, search: index of the first run, to extend a set")
-    p.add_argument("--gap", type=float, default=90, help="search: seconds between live searches")
+    p.add_argument(
+        "--start", type=int, default=0, help="download, search, search-words: index of the first run, to extend a set"
+    )
+    p.add_argument("--gap", type=float, default=90, help="search, search-words: seconds between live searches")
     p.add_argument("--idle", type=float, default=150, help="cache-idle: seconds to leave the engine alone")
     p.add_argument("--settle", type=float, default=5, help="rest, tui-download: seconds after start before measuring")
     p.add_argument("--seconds", type=float, default=60, help="rest, tui-download: measurement window")
