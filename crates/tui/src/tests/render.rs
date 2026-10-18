@@ -148,3 +148,16 @@ fn a_dialog_dims_the_screen_behind_it() {
     state.update(ctrl('p'));
     assert_eq!(render(&state)[(x, y)].fg, ratatui::style::Color::Rgb(0x69, 0x69, 0x69));
 }
+
+#[test]
+fn an_unreachable_engine_says_so_with_its_hint() {
+    let mut state = app((100, 30));
+    let error = Error::new(ErrorCode::DaemonUnavailable, "the engine did not start within 10s")
+        .with_hint("see ~/.local/state/torrential/engine.log");
+    state.update(Msg::WatchLost(error));
+    let screen = shot(&state);
+    assert!(screen.contains("✗ engine unreachable"), "{screen}");
+    assert!(screen.contains("✗ Cannot reach the engine."), "{screen}");
+    assert!(screen.contains("see ~/.local/state/torrential/engine.log"), "{screen}");
+    assert!(screen.contains("Cannot reach the engine: the engine did not start within 10s"), "{screen}");
+}

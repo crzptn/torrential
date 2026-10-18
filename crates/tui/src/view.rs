@@ -712,6 +712,12 @@ fn file_tree(buf: &mut Buffer, state: &State, tree: &Tree, x: u16, right: u16, y
 
 fn empty(buf: &mut Buffer, state: &State, x: u16, right: u16, y: u16) {
     let (tx, room) = (x + 10, right.saturating_sub(x + 11));
+    if let (Engine::Unreachable(error), None) = (&state.engine, &state.search) {
+        put(buf, tx, y + 1, room, "✗ Cannot reach the engine.", fg(ERROR));
+        let why = error.hint.as_deref().unwrap_or("Downloads run in the engine, so this screen needs it.");
+        put(buf, tx, y + 2, room, why, fg(DIM));
+        return;
+    }
     let Some(search) = &state.search else {
         put(buf, tx, y + 1, room, "Search catalogs and indexes without leaving this list.", fg(MUTED));
         hints(buf, tx, y + 2, room, &[("/", "search"), ("ctrl+p", "commands")]);

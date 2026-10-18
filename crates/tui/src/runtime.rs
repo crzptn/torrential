@@ -58,10 +58,13 @@ fn unix_now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
-/// When a message should reach the screen.
-fn urgency(msg: &Msg) -> Option<Duration> {
+/// How soon a message should reach the screen. A download whose state is unchanged brings
+/// only new numbers, which wait for the next 500 ms slot.
+fn urgency(state: &State, msg: &Msg) -> Option<Duration> {
     match msg {
-        Msg::Watch(Event::Job { .. }) => Some(NUMBERS_EVERY),
+        Msg::Watch(Event::Job { job }) if state.job(job.id).is_some_and(|j| j.status == job.status) => {
+            Some(NUMBERS_EVERY)
+        }
         Msg::Watch(Event::Heartbeat { .. }) => None,
         _ => Some(Duration::ZERO),
     }
@@ -94,7 +97,7 @@ fn run_loop<B: Backend>(
         while let Some(msg) = next {
             state.now = Instant::now();
             state.clock = unix_now();
-            if let Some(after) = urgency(&msg) {
+            if let Some(after) = urgency(state, &msg) {
                 let at = if after.is_zero() { state.now } else { (drawn + after).max(state.now) };
                 due = Some(due.map_or(at, |d| d.min(at)));
             }
