@@ -817,7 +817,7 @@ impl Owner {
             }
             EngineEvent::Stats { id, stats } => {
                 if let Some(job) = self.jobs.get_mut(&id) {
-                    job.stats = stats;
+                    job.sample(stats, Instant::now());
                     self.publish(id);
                 }
             }

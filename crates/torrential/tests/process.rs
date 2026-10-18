@@ -195,7 +195,8 @@ fn wait_times_out_with_exit_8_while_the_download_runs() {
     let lines: Vec<&str> = wait.stdout.lines().collect();
     assert_eq!(lines[0], "ELAPSED\tID\tSTATE\tPROGRESS\tSIZE\tDOWN\tPEERS\tETA\tNAME");
     assert!(lines[1].starts_with("0s\t9b5212\t"), "{}", wait.stdout);
-    assert!(lines[lines.len() - 2].starts_with("# still running after 1s · eta "), "{}", wait.stdout);
+    // A second of downloading is too soon for an ETA.
+    assert_eq!(lines[lines.len() - 2], "# still running after 1s", "{}", wait.stdout);
     assert_eq!(lines[lines.len() - 1], "next: torrential wait 9b5212");
     let json = home.run(&["wait", "9b5212", "--timeout", "1s", "--json"]);
     assert_eq!(json.code, 8);

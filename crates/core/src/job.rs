@@ -78,7 +78,8 @@ pub struct Progress {
     pub up_rate: u64,
     pub peers: u32,
     pub seeds: u32,
-    /// Seconds to completion at the current rate.
+    /// Seconds to completion at the current rate. `None` until the rate has stayed
+    /// above zero for ten seconds.
     pub eta: Option<u64>,
 }
 

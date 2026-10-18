@@ -4,11 +4,17 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use torrential_core::{Error, InfoHash, Job, JobStatus, Progress, Selection, TorrentId};
 
 use super::engine_port::{Metainfo, Stats};
 use super::files;
+
+/// How long the download rate must stay above zero before an ETA shows. A transfer
+/// starts well below the rate its swarm settles at. In one download, wait showed
+/// 1.3 MiB/s and 23m left at 0.3%, then 10.1 MiB/s and 1m a minute later.
+const ETA_AFTER: Duration = Duration::from_secs(10);
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Intent {
@@ -97,12 +103,30 @@ pub struct JobEntry {
     pub metainfo: Option<Arc<Metainfo>>,
     pub observed: Observed,
     pub stats: Stats,
+    /// Since when the download rate has stayed above zero, as of the last sample.
+    receiving_since: Option<Instant>,
+    /// The rate had stayed above zero for `ETA_AFTER` at the last sample.
+    rate_settled: bool,
     pub verify: Option<Verify>,
 }
 
 impl JobEntry {
     pub fn new(record: JobRecord, metainfo: Option<Arc<Metainfo>>, observed: Observed) -> Self {
-        Self { record, metainfo, observed, stats: Stats::default(), verify: None }
+        Self {
+            record,
+            metainfo,
+            observed,
+            stats: Stats::default(),
+            receiving_since: None,
+            rate_settled: false,
+            verify: None,
+        }
+    }
+
+    pub fn sample(&mut self, stats: Stats, at: Instant) {
+        self.receiving_since = if stats.down_rate > 0 { self.receiving_since.or(Some(at)) } else { None };
+        self.rate_settled = self.receiving_since.is_some_and(|since| at - since >= ETA_AFTER);
+        self.stats = stats;
     }
 
     pub fn id(&self) -> TorrentId {
@@ -141,7 +165,9 @@ impl JobEntry {
         let verified = self.verified();
         let s = if transferring { self.stats } else { Stats::default() };
         let eta = match size {
-            Some(size) if s.down_rate > 0 => Some(size.saturating_sub(verified).div_ceil(s.down_rate)),
+            Some(size) if s.down_rate > 0 && self.rate_settled => {
+                Some(size.saturating_sub(verified).div_ceil(s.down_rate))
+            }
             _ => None,
         };
         Job {
@@ -185,6 +211,7 @@ pub fn to_start<'a>(jobs: impl Iterator<Item = &'a JobEntry>, max_active: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::engine_port::MetaFile;
     use torrential_core::ErrorCode;
 
     #[test]
@@ -235,6 +262,22 @@ mod tests {
             verified: 0,
         };
         JobEntry::new(record, None, observed)
+    }
+
+    #[test]
+    fn an_eta_waits_until_the_rate_has_held_for_ten_seconds() {
+        let mut job = entry(1, 0, Intent::Running, Observed::InEngine(Phase::Downloading));
+        let film = MetaFile { path: "film.mp4".into(), size: 600 << 20 };
+        let metainfo = Metainfo::new(job.record.info_hash, "film.mp4".into(), vec![film], true, Vec::new()).unwrap();
+        job.metainfo = Some(Arc::new(metainfo));
+        let start = Instant::now();
+        let mut etas = Vec::new();
+        for (second, down_rate) in [(0, 1 << 20), (9, 2 << 20), (10, 10 << 20), (11, 0), (12, 10 << 20), (22, 10 << 20)]
+        {
+            job.sample(Stats { down_rate, ..Stats::default() }, start + Duration::from_secs(second));
+            etas.push(job.view().progress.eta);
+        }
+        assert_eq!(etas, [None, None, Some(60), None, None, Some(60)]);
     }
 
     #[test]
