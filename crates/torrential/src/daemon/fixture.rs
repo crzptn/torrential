@@ -12,7 +12,7 @@ use torrential_core::{
 
 use super::admission::DEFAULT_MAX_SIZE;
 use super::book::{Intent, JobRecord};
-use super::engine_port::{FakeTorrentFile, Swarm};
+use super::engine_port::{FakeTorrentFile, Swarm, fake_piece_map};
 use super::search_port::{self, FakeSource};
 use super::store::Store;
 
@@ -341,6 +341,8 @@ pub fn seed(store: &mut Store, downloads: &Path, now: i64) -> Result<(), Error> 
     for seed in seeds {
         let size: u64 = seed.torrent.files.iter().map(|(_, size)| size).sum();
         let verified = size / 100 * seed.done_percent;
+        let metainfo = seed.torrent.metainfo()?;
+        let piece_map = fake_piece_map(&metainfo, &vec![true; metainfo.files.len()], verified);
         let id = seed.torrent.info_hash.id();
         let added_at = now - seed.added_days_ago * DAY - 3_600;
         let record = JobRecord {
@@ -354,10 +356,56 @@ pub fn seed(store: &mut Store, downloads: &Path, now: i64) -> Result<(), Error> 
             added_at,
             intent: seed.intent,
             verified,
-            piece_map: None,
+            piece_map,
         };
         store.insert(&record, Some(&seed.torrent.bytes()), added_at)?;
-        store.save_resume(id, verified.to_string().as_bytes(), verified, None, added_at)?;
+        store.save_resume(id, verified.to_string().as_bytes(), verified, piece_map, added_at)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::daemon::book::{JobEntry, Observed};
+    use crate::daemon::engine_port::parse_fake;
+    use torrential_core::{PieceMap, Slice};
+
+    /// The share of the selected runs that the map draws as filled.
+    fn filled(map: PieceMap) -> f64 {
+        let wanted: Vec<u8> = map
+            .slices()
+            .iter()
+            .filter_map(|s| match s {
+                Slice::Wanted(eighths) => Some(eighths.get()),
+                Slice::Unwanted => None,
+            })
+            .collect();
+        wanted.iter().map(|e| f64::from(*e)).sum::<f64>() / (8.0 * wanted.len() as f64)
+    }
+
+    #[test]
+    fn each_unfinished_seed_draws_its_progress_with_pieces_out_of_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("state.db")).unwrap();
+        seed(&mut store, dir.path(), 0).unwrap();
+        let mut mapped = Vec::new();
+        for stored in store.jobs().unwrap() {
+            let metainfo = parse_fake(&stored.metainfo.unwrap()).unwrap();
+            let job = JobEntry::new(stored.record, Some(Arc::new(metainfo)), Observed::Absent).view();
+            let name = job.name.unwrap();
+            let Some(map) = job.progress.piece_map else {
+                assert_eq!(job.status.name(), "done", "{name} has no map");
+                continue;
+            };
+            let progress = job.progress.verified as f64 / job.progress.size.unwrap() as f64;
+            assert!((filled(map) - progress).abs() < 0.005, "{name} draws {map} for {progress:.3}");
+            let text = map.to_string();
+            assert!(text.as_bytes().windows(2).any(|w| w[0] < w[1]), "{text} does not fill from the start");
+            mapped.push(name);
+        }
+        assert_eq!(mapped, ["stackexchange", "openwebtext-2019", "wikipedia-en-2026-09-text"]);
+    }
 }

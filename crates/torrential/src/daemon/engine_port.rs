@@ -6,13 +6,14 @@
 //! call, comes back to the owner as an [`EngineEvent`].
 
 use std::collections::{BTreeMap, VecDeque};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
-use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, TorrentId};
+use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, Slice, TorrentId};
 
 /// A torrent's file list. Only [`Metainfo::new`] builds one, so every path in it stays
 /// inside the torrent's folder. A port that receives a hostile file list reports the
@@ -334,6 +335,10 @@ struct FakeTorrent {
 }
 
 impl FakeTorrent {
+    fn piece_map(&self) -> Option<PieceMap> {
+        fake_piece_map(self.metainfo.as_ref()?, self.wanted.as_deref()?, self.verified as u64)
+    }
+
     fn wanted_size(&self) -> Option<u64> {
         let (m, wanted) = (self.metainfo.as_ref()?, self.wanted.as_ref()?);
         Some(m.files.iter().zip(wanted).filter(|(_, w)| **w).map(|(f, _)| f.size).sum())
@@ -424,7 +429,7 @@ impl EnginePort for Fake {
         let t = self.torrent(id)?;
         t.paused = true;
         t.stop_downloading();
-        let stats = Stats { verified: t.verified as u64, ..Stats::default() };
+        let stats = Stats { verified: t.verified as u64, piece_map: t.piece_map(), ..Stats::default() };
         self.events.push_back(EngineEvent::Stats { id, stats });
         self.events.push_back(EngineEvent::Paused { id });
         Ok(())
@@ -442,17 +447,17 @@ impl EnginePort for Fake {
         let t = self.torrent(id)?;
         t.verified = (t.verified - f64::from(damaged) * 16_384.0).max(0.0);
         t.stop_downloading();
-        let verified = t.verified as u64;
+        let (verified, piece_map) = (t.verified as u64, t.piece_map());
         self.events.push_back(EngineEvent::Activity { id, activity: Activity::Checking });
-        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged, verified, piece_map: None });
+        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged, verified, piece_map });
         Ok(())
     }
 
     fn save_resume_data(&mut self, id: TorrentId) -> Result<(), Error> {
         let t = self.torrent(id)?;
         t.saved = t.verified;
-        let (data, verified) = (t.verified.to_string().into_bytes(), Some(t.verified as u64));
-        self.events.push_back(EngineEvent::ResumeData { id, data, verified, piece_map: None });
+        let (data, verified, piece_map) = (t.verified.to_string().into_bytes(), Some(t.verified as u64), t.piece_map());
+        self.events.push_back(EngineEvent::ResumeData { id, data, verified, piece_map });
         Ok(())
     }
 
@@ -506,8 +511,8 @@ impl EnginePort for Fake {
             let done = t.verified as u64 >= size;
             if stats_due || done {
                 let down_rate = if done { 0 } else { rate };
-                let stats =
-                    Stats { verified: t.verified as u64, piece_map: None, down_rate, up_rate: 0, peers: 3, seeds: 2 };
+                let piece_map = t.piece_map();
+                let stats = Stats { verified: t.verified as u64, piece_map, down_rate, up_rate: 0, peers: 3, seeds: 2 };
                 self.events.push_back(EngineEvent::Stats { id, stats });
             }
             if done {
@@ -519,9 +524,87 @@ impl EnginePort for Fake {
     }
 }
 
+/// The fake engine's torrents have about this many pieces, whatever their size.
+const FAKE_PIECES: u64 = 1024;
+/// Pieces arrive in runs this long, a quarter of a slice, at shuffled places.
+const FAKE_RUN: usize = 4;
+
+/// Where a fake torrent's data has arrived. Runs of pieces arrive in an order shuffled by the info
+/// hash, the way a swarm scatters them, so a slice only ever fills and the same progress always
+/// draws the same map. The share of wanted pieces that arrived is the share of wanted bytes in
+/// `verified`.
+pub fn fake_piece_map(metainfo: &Metainfo, wanted: &[bool], verified: u64) -> Option<PieceMap> {
+    let total = metainfo.total();
+    if total == 0 {
+        return None;
+    }
+    let piece = total.div_ceil(FAKE_PIECES);
+    let pieces = total.div_ceil(piece) as usize;
+    let mut want = vec![false; pieces];
+    let (mut start, mut wanted_bytes) = (0, 0);
+    for (file, &w) in metainfo.files.iter().zip(wanted) {
+        if w && file.size > 0 {
+            want[(start / piece) as usize..=((start + file.size - 1) / piece) as usize].fill(true);
+            wanted_bytes += file.size;
+        }
+        start += file.size;
+    }
+    let wanted_pieces = want.iter().filter(|w| **w).count() as u64;
+    let mut left = (wanted_pieces * verified.min(wanted_bytes)).checked_div(wanted_bytes).unwrap_or(0);
+    let mut runs: Vec<usize> = (0..pieces.div_ceil(FAKE_RUN)).collect();
+    let mut seed = u64::from_le_bytes(metainfo.info_hash.id().as_bytes()[..8].try_into().expect("an ID has 20 bytes"));
+    for i in (1..runs.len()).rev() {
+        runs.swap(i, (splitmix(&mut seed) % (i as u64 + 1)) as usize);
+    }
+    let mut have = vec![false; pieces];
+    for p in runs.iter().flat_map(|run| run * FAKE_RUN..((run + 1) * FAKE_RUN).min(pieces)) {
+        if left > 0 && want[p] {
+            have[p] = true;
+            left -= 1;
+        }
+    }
+    let count = |set: &[bool], range: Range<usize>| set[range].iter().filter(|b| **b).count() as u32;
+    Some(PieceMap::new(std::array::from_fn(|s| {
+        let begin = s * pieces / PieceMap::SLICES;
+        let end = (begin + 1).max((s + 1) * pieces / PieceMap::SLICES);
+        Slice::of(count(&have, begin..end), count(&want, begin..end))
+    })))
+}
+
+/// SplitMix64, so the shuffle needs no random-number crate.
+fn splitmix(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fake_map_fills_out_of_order_and_leaves_skipped_files_unwanted() {
+        let set = FakeTorrentFile {
+            info_hash: InfoHash::V1([7; 20]),
+            name: "set".into(),
+            files: vec![("a.bin".into(), 1 << 30), ("b.bin".into(), 1 << 30)],
+        };
+        let metainfo = set.metainfo().unwrap();
+        let map = |percent: u64| fake_piece_map(&metainfo, &[true, false], (1 << 30) * percent / 100).unwrap();
+        let half = map(50).to_string();
+        assert_eq!(half[32..], "-".repeat(32), "b.bin is skipped");
+        assert!(half.as_bytes()[..32].windows(2).any(|w| w[0] < w[1]), "{half} does not fill from the start");
+        let eighths: u32 = half[..32].bytes().map(|b| u32::from(b - b'0')).sum();
+        assert_eq!(eighths, 32 * 4, "{half} holds half of a.bin");
+        let maps: Vec<String> = (0..=100).step_by(10).map(|percent| map(percent).to_string()).collect();
+        for pair in maps.windows(2) {
+            assert!(pair[0].bytes().zip(pair[1].bytes()).all(|(a, b)| a <= b), "a slice emptied: {pair:?}");
+        }
+        assert_eq!(maps[0], format!("{}{}", "0".repeat(32), "-".repeat(32)));
+        assert_eq!(maps[10], format!("{}{}", "8".repeat(32), "-".repeat(32)));
+    }
 
     #[test]
     fn paths_that_leave_the_folder_are_refused() {

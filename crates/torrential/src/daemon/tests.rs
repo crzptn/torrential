@@ -477,6 +477,26 @@ async fn a_crash_keeps_the_progress_of_the_last_periodic_save() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_crash_keeps_the_piece_map_of_the_last_save_and_done_drops_it() {
+    let h = Harness::new();
+    h.swarm.set_rate(GIB / 2);
+    let set = torrent(31, "set", &[("a.bin", GIB), ("b.bin", GIB)]);
+    h.get(h.torrent_file(&set), &["a.bin"]).await.unwrap();
+    h.until("a quarter is verified", |jobs| jobs[0].progress.verified >= GIB / 4).await;
+    h.swarm.set_rate(0);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let map = h.status().await[0].progress.piece_map.expect("a running download has a piece map").to_string();
+    assert_eq!(map[32..], "-".repeat(32), "b.bin is not selected");
+    let h = h.crash_and_restart().await;
+    let jobs = h.status().await;
+    assert_eq!((jobs[0].status.name(), jobs[0].progress.piece_map.map(|m| m.to_string())), ("interrupted", Some(map)));
+    h.swarm.set_rate(100 * GIB);
+    h.changes(Request::Resume { refs: vec![prefix(&set)], all: false }).await.unwrap();
+    let jobs = h.until("done", |jobs| jobs[0].status.name() == "done").await;
+    assert_eq!(jobs[0].progress.piece_map, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_result_with_only_a_torrent_url_is_fetched_once_found() {
     let iso = torrent(27, "debian.iso", &[("debian.iso", GIB)]);
     let url = "https://cdimage.example/debian.iso.torrent";
