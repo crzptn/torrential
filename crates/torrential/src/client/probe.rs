@@ -16,13 +16,12 @@ const PROBE: &str = "linux";
 
 pub fn checks(paths: &Paths, settings: Result<Config, Error>, network: bool) -> Vec<Check> {
     let check = |check: &str, status, detail: String| Check { check: check.into(), status, detail };
-    let path = config::path(paths);
     let search = settings.and_then(|settings| {
         let config = SearchConfig { cache_dir: Some(paths.cache.join("search")), ..settings.search };
-        Search::new(&config, ResultCache::new())
+        Search::new(&config, ResultCache::new()).map(|search| (search, settings.file))
     });
-    let search = match search {
-        Ok(search) => search,
+    let (search, file) = match search {
+        Ok(found) => found,
         Err(error) => {
             return vec![
                 check("config", CheckStatus::Fail, error.message),
@@ -30,10 +29,9 @@ pub fn checks(paths: &Paths, settings: Result<Config, Error>, network: bool) -> 
             ];
         }
     };
-    let detail = if path.exists() {
-        path.display().to_string()
-    } else {
-        format!("no {}, so the defaults apply", path.display())
+    let detail = match file {
+        Some(file) => file.display().to_string(),
+        None => format!("no {}, so the defaults apply", config::path(paths).display()),
     };
     let mut checks = vec![check("config", CheckStatus::Ok, detail)];
     let enabled: Vec<String> = search.sources().into_iter().filter(|s| s.default_on).map(|s| s.name).collect();

@@ -31,6 +31,8 @@ pub struct Config {
     pub downloads: Option<PathBuf>,
     /// The sources, with Torznab API keys read from the environment, and no cache folder.
     pub search: SearchConfig,
+    /// The file these settings came from. `None` when there is none and the defaults apply.
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Default)]
@@ -65,26 +67,45 @@ struct Torznab {
 /// A problem in the file, on a line when one is known.
 type Problem = (Option<u64>, String);
 
+/// Where the config file goes. `config.yml` is read when it is the only one.
 pub fn path(paths: &Paths) -> PathBuf {
     paths.config.join("config.yaml")
 }
 
 impl Config {
-    /// The defaults when the file does not exist.
+    /// The defaults when there is no file.
     pub fn load(paths: &Paths, env: &Env) -> Result<Config, Error> {
-        let path = path(paths);
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(invalid(&path, None, &format!("cannot be read: {e}"))),
+        let mut config = match read(paths)? {
+            None => Config::default(),
+            Some((path, text)) => {
+                let config = parse(&text, env).map_err(|(line, message)| invalid(&path, line, &message))?;
+                Config { file: Some(path), ..config }
+            }
         };
-        let mut config = parse(&text, env).map_err(|(line, message)| invalid(&path, line, &message))?;
         config.search.endpoints = test_endpoints(env)?;
         Ok(config)
     }
 
     pub fn downloads_dir(&self, paths: &Paths) -> PathBuf {
         self.downloads.clone().unwrap_or_else(|| paths.downloads.clone())
+    }
+}
+
+/// The file and its text. Both names at once is an error, since either could be the one the
+/// user edits.
+fn read(paths: &Paths) -> Result<Option<(PathBuf, String)>, Error> {
+    let try_read = |path: PathBuf| match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some((path, text))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(invalid(&path, None, &format!("cannot be read: {e}"))),
+    };
+    match (try_read(path(paths))?, try_read(paths.config.join("config.yml"))?) {
+        (Some((yaml, _)), Some((yml, _))) => Err(Error::new(
+            ErrorCode::Usage,
+            format!("{} and {} both exist, so torrential cannot tell which to read", yaml.display(), yml.display()),
+        )
+        .with_hint("move what you want to keep into one file and delete the other")),
+        (found, None) | (None, found) => Ok(found),
     }
 }
 
@@ -131,7 +152,7 @@ fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
         })
         .collect::<Result<_, _>>()?;
     let search = SearchConfig { torznab, disabled: file.sources.disabled, ..SearchConfig::default() };
-    Ok(Config { downloads, search })
+    Ok(Config { downloads, search, file: None })
 }
 
 /// The message without the line, which `invalid` adds, and without the excerpt of the file.
@@ -176,16 +197,23 @@ mod tests {
     }
 
     fn load(text: &str) -> Result<Config, Error> {
+        load_files(&[("config.yaml", text)])
+    }
+
+    /// Loads with each named file in the config folder, which reads as `$TORRENTIAL_HOME/config`.
+    fn load_files(files: &[(&str, &str)]) -> Result<Config, Error> {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().display().to_string();
         let env = Env::from_pairs([("HOME", "/Users/ada"), ("TORRENTIAL_HOME", home.as_str())]);
         let paths = Paths::resolve(&env, 501, None).unwrap();
         std::fs::create_dir_all(&paths.config).unwrap();
-        std::fs::write(path(&paths), text).unwrap();
-        Config::load(&paths, &env).map_err(|mut e| {
-            e.message = e.message.replace(&home, "$TORRENTIAL_HOME");
-            e
-        })
+        for (name, text) in files {
+            std::fs::write(paths.config.join(name), text).unwrap();
+        }
+        let relative = |text: String| text.replace(&home, "$TORRENTIAL_HOME");
+        Config::load(&paths, &env)
+            .map(|config| Config { file: config.file.map(|f| relative(f.display().to_string()).into()), ..config })
+            .map_err(|e| Error { message: relative(e.message), ..e })
     }
 
     #[test]
@@ -213,6 +241,33 @@ sources:
         );
         assert_eq!(parse("", &env()).unwrap(), Config::default());
         assert_eq!(parse("# nothing yet\n", &env()).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn reads_config_yml_only_when_config_yaml_is_absent() {
+        let text = "sources:\n  disabled: [nyaa]\n";
+        let yaml = load_files(&[("config.yaml", text)]).unwrap();
+        let yml = load_files(&[("config.yml", text)]).unwrap();
+        let neither = load_files(&[]).unwrap();
+        let both = load_files(&[("config.yaml", text), ("config.yml", text)]).unwrap_err();
+
+        assert_eq!(
+            [yaml, yml].map(|c| (c.file.unwrap().display().to_string(), c.search.disabled)),
+            [
+                ("$TORRENTIAL_HOME/config/config.yaml".to_string(), vec!["nyaa".to_string()]),
+                ("$TORRENTIAL_HOME/config/config.yml".to_string(), vec!["nyaa".to_string()]),
+            ]
+        );
+        assert_eq!(neither, Config::default());
+        assert_eq!(
+            (both.code, both.message.as_str(), both.hint.as_deref()),
+            (
+                ErrorCode::Usage,
+                "$TORRENTIAL_HOME/config/config.yaml and $TORRENTIAL_HOME/config/config.yml both exist, so torrential \
+                 cannot tell which to read",
+                Some("move what you want to keep into one file and delete the other")
+            )
+        );
     }
 
     #[test]

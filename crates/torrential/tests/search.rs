@@ -401,13 +401,19 @@ fn the_engine_refuses_a_config_that_does_not_parse() {
     let doctor = home.run(&["doctor", "--json"]).json();
     home.write_config("sources:\n  disabled: [nyaa]\n");
     let fixed = home.run(&["status"]);
+    let fixed_doctor = home.run(&["doctor", "--json"]).json();
 
-    let message = format!("{} line 3: expected sequence start", home.path("th/config/config.yaml").display());
+    let file = home.path("th/config/config.yaml").display().to_string();
+    let message = format!("{file} line 3: expected sequence start");
     assert_eq!(refused.code, 2, "{}{}", refused.stdout, refused.stderr);
     assert!(refused.stderr.contains(&message), "{}", refused.stderr);
-    let config = doctor["checks"].as_array().unwrap().iter().find(|c| c["check"] == "config").unwrap();
-    assert_eq!((config["status"].as_str(), config["detail"].as_str()), (Some("fail"), Some(message.as_str())));
+    let config = |doctor: &Value| {
+        let check = doctor["checks"].as_array().unwrap().iter().find(|c| c["check"] == "config").unwrap();
+        (check["status"].as_str().unwrap().to_string(), check["detail"].as_str().unwrap().to_string())
+    };
+    assert_eq!(config(&doctor), ("fail".to_string(), message));
     assert_eq!(fixed.code, 0, "{}", fixed.stderr);
+    assert_eq!(config(&fixed_doctor), ("ok".to_string(), file));
 }
 
 #[test]
