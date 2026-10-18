@@ -270,6 +270,36 @@ impl Store {
         })
     }
 
+    /// Records a check that found damage, in one transaction. The stored resume data describes
+    /// the download before the check, so it goes too: until the engine saves the check's own,
+    /// the next add hashes the files rather than trusting it.
+    pub fn record_failed_check(
+        &mut self,
+        id: TorrentId,
+        intent: &Intent,
+        verified: u64,
+        piece_map: Option<PieceMap>,
+        files: &[u64],
+    ) -> Result<(), Error> {
+        let (intent, finished_at, error) = intent_columns(intent);
+        self.write(|tx| {
+            tx.execute(
+                "UPDATE jobs SET intent = ?2, finished_at = ?3, error = ?4, verified = ?5, piece_map = ?6, \
+                 files_verified = ?7 WHERE id = ?1",
+                params![
+                    id.to_hex(),
+                    intent,
+                    finished_at,
+                    error,
+                    verified as i64,
+                    piece_map.map(|m| m.to_string()),
+                    json(&files)
+                ],
+            )?;
+            tx.execute("DELETE FROM resume WHERE job = ?1", [id.to_hex()]).map(drop)
+        })
+    }
+
     pub fn set_selection(&mut self, id: TorrentId, selection: &Selection) -> Result<(), Error> {
         self.write(|tx| {
             tx.execute("UPDATE jobs SET selection = ?2 WHERE id = ?1", params![id.to_hex(), json(selection)]).map(drop)
@@ -548,6 +578,21 @@ mod tests {
         let saved = JobRecord { verified: 9, piece_map: Some(map), files_verified: Some(vec![4, 5]), ..record(5) };
         assert_eq!(jobs[2].record, saved);
         assert_eq!(store.resume(TorrentId::from_bytes([3; 20])).unwrap().as_deref(), Some(&b"resume"[..]));
+    }
+
+    #[test]
+    fn a_failed_check_replaces_the_progress_and_drops_the_resume_data_it_contradicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("state.db")).unwrap();
+        let id = TorrentId::from_bytes([6; 20]);
+        store.insert(&record(6), None, 100).unwrap();
+        store.finish(id, 200, b"every piece", 42).unwrap();
+        let failed = Intent::Failed { error: Error::new(ErrorCode::VerificationFailed, "1 damaged piece") };
+        store.record_failed_check(id, &failed, 30, None, &[20, 10]).unwrap();
+        let jobs = store.jobs().unwrap();
+        let checked = JobRecord { intent: failed, verified: 30, files_verified: Some(vec![20, 10]), ..record(6) };
+        assert_eq!(jobs[0].record, checked);
+        assert_eq!(store.resume(id).unwrap(), None);
     }
 
     #[test]

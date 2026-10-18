@@ -145,8 +145,9 @@ impl JobEntry {
     }
 
     /// How long the connected peers and web seeds have had none of the pieces still missing.
+    /// `None` while nothing is connected, so only a source that is there to ask can end it.
     pub fn unsourced_for(&self, at: Instant) -> Option<Duration> {
-        self.unsourced_since.map(|since| at - since)
+        self.unsourced_since.filter(|_| self.stats.peers > 0).map(|since| at - since)
     }
 
     /// The download left the engine, so its next run judges its sources afresh.
@@ -336,11 +337,9 @@ mod tests {
         assert_eq!(job.unsourced_for(at(1)), None, "a peer has one of the pieces");
         sample(&mut job, 2, 2, 2);
         sample(&mut job, 3, 0, 2);
-        assert_eq!(
-            job.unsourced_for(at(9)),
-            Some(Duration::from_secs(7)),
-            "a gap with nothing connected keeps the clock"
-        );
+        assert_eq!(job.unsourced_for(at(9)), None, "nothing connected to ask");
+        sample(&mut job, 9, 1, 2);
+        assert_eq!(job.unsourced_for(at(9)), Some(Duration::from_secs(7)), "the gap kept the clock");
         job.observed = Observed::InEngine(Phase::Pausing);
         sample(&mut job, 10, 2, 2);
         assert_eq!(job.unsourced_for(at(10)), None, "only downloading counts");

@@ -240,7 +240,7 @@ async fn files(ctx: &Ctx, target: Target, timeout: Duration) -> Result<FilesRepl
     let m = &info.metainfo;
     let verified: Vec<u64> = match info.download.as_ref().map(|d| &d.verified) {
         Some(FileBytes::Known(bytes)) => bytes.clone(),
-        Some(FileBytes::Engine) => ctx.engine.file_progress(info.id).await.unwrap_or_default(),
+        Some(FileBytes::Engine { saved }) => ctx.engine.file_progress(info.id).await.unwrap_or_else(|_| saved.clone()),
         None => Vec::new(),
     };
     let risks = files::risks(m);

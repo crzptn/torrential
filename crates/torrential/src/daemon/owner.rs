@@ -92,8 +92,9 @@ pub struct DownloadFiles {
 pub enum FileBytes {
     /// From a finished download's sizes, or the last save. Empty before the first save.
     Known(Vec<u64>),
-    /// The engine has the download, so it counts them now.
-    Engine,
+    /// The engine has the download, so it counts them now. The last save's count answers if the
+    /// download leaves the engine before it is asked.
+    Engine { saved: Vec<u64> },
 }
 
 #[derive(Clone, Debug)]
@@ -584,7 +585,9 @@ impl Owner {
             (Intent::Done { .. }, _) => {
                 FileBytes::Known(metainfo.files.iter().zip(&wanted).map(|(f, w)| if *w { f.size } else { 0 }).collect())
             }
-            (_, Observed::InEngine(_)) => FileBytes::Engine,
+            (_, Observed::InEngine(_)) => {
+                FileBytes::Engine { saved: job.record.files_verified.clone().unwrap_or_default() }
+            }
             _ => FileBytes::Known(job.record.files_verified.clone().unwrap_or_default()),
         };
         let download = DownloadFiles { wanted, verified };
@@ -1122,10 +1125,10 @@ impl Owner {
                 )
                 .with_hint(format!("torrential verify {short} --repair downloads them again"));
                 let failed = Intent::Failed { error };
-                let _ = self.store.set_intent(id, &failed);
+                let files = job.record.files_verified.as_deref().unwrap_or_default();
+                let _ = self.store.record_failed_check(id, &failed, verified, piece_map, files);
                 job.record.intent = failed;
-                // The check's resume data must reach the store before the torrent leaves, or a
-                // restart would trust the resume data of the finished download.
+                // Held until the engine saves the check's resume data, so a restart resumes from it.
                 job.observed = Observed::InEngine(Phase::Paused);
             }
         }
