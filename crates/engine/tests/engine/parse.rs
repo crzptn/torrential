@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 use torrential_engine::{
-    AddTorrent, Config, Dht, DhtState, ErrorKind, FileIndex, FilePriority, FileSelection, Magnet,
-    Metainfo, PieceSize, Progress, ResumeData, Session, TorrentFormat, TorrentId, TorrentSource,
-    libtorrent_version,
+    AddTorrent, Alert, Config, Dht, DhtState, ErrorKind, FileIndex, FilePriority, FileSelection,
+    Magnet, Metainfo, PieceSize, Progress, ResumeData, Session, TorrentFormat, TorrentId,
+    TorrentSource, libtorrent_version,
 };
 
 use crate::support::{Fixture, Node, bencode, loopback, magnet};
@@ -138,5 +140,51 @@ fn saved_dht_state_keeps_the_node_id() {
         node_id(&fresh.session),
         Some(saved),
         "a fresh session picks its own id"
+    );
+}
+
+#[test]
+fn listen_failures_and_taken_ports() {
+    let unassigned: SocketAddr = "192.0.2.1:6881".parse().unwrap();
+    let mut session = Session::new(Config {
+        listen: vec![unassigned],
+        ..loopback()
+    })
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let failure = loop {
+        let alerts = session.wait_alerts(Duration::from_millis(100)).unwrap();
+        if let Some(f) = alerts
+            .into_iter()
+            .find(|a| matches!(a, Alert::ListenFailed { .. }))
+        {
+            break f;
+        }
+        assert!(Instant::now() < deadline, "no ListenFailed alert");
+    };
+    let Alert::ListenFailed {
+        port,
+        operation,
+        error,
+        ..
+    } = failure
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        (port, operation.as_str(), error.category.as_str()),
+        (6881, "sock_bind", "system")
+    );
+    assert_eq!(session.listen_port().unwrap(), None);
+
+    let taken = Node::new(loopback());
+    let next = Node::new(Config {
+        listen: vec![taken.addr()],
+        ..loopback()
+    });
+    assert_ne!(
+        next.addr().port(),
+        taken.addr().port(),
+        "libtorrent moved to a free port"
     );
 }

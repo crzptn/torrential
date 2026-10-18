@@ -77,7 +77,7 @@ pub enum Alert {
         transport: Transport,
     },
     ListenFailed {
-        /// The interface as written in `Config::listen`.
+        /// The device or address libtorrent tried, such as `lo0`.
         interface: String,
         port: u16,
         transport: Transport,

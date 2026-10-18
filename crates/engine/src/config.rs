@@ -5,8 +5,9 @@ use std::num::NonZeroU32;
 /// `Session::new`.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Addresses to accept peers on. Port 0 lets the OS choose, and
-    /// `Session::listen_port` reports the result.
+    /// Addresses to accept peers on. Port 0 lets the OS choose. A taken port
+    /// is not an error: libtorrent binds the next free one, up to 10 tries.
+    /// `Session::listen_port` reports the port it got.
     pub listen: Vec<SocketAddr>,
     pub dht: Dht,
     /// Local service discovery (BEP 14).
