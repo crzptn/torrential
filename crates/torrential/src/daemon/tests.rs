@@ -1,0 +1,456 @@
+//! The engine process driven through its request handler, with a fake torrent engine,
+//! search service, and disk.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use torrential_core::protocol::{Change, GetOutcome, GetReply, GetRequest, Request, Response};
+use torrential_core::{Error, ErrorCode, InfoHash, Job, JobStatus, Selection, Target};
+
+use super::admission::{FakeDisk, GIB, Space};
+use super::engine_port::{Fake, FakeTorrentFile, Swarm, parse_fake};
+use super::owner::OwnerConfig;
+use super::search_port::{self, fake_catalog};
+use super::store::Store;
+use super::{Ports, Running, server, start};
+
+const ROOMY: Space = Space { device: 1, total: 1000 * GIB, free: 500 * GIB };
+
+struct Harness {
+    dir: tempfile::TempDir,
+    running: Running,
+    swarm: Swarm,
+    disk: FakeDisk,
+    search: search_port::Fake,
+}
+
+fn config(dir: &std::path::Path) -> OwnerConfig {
+    OwnerConfig {
+        default_dir: dir.join("downloads"),
+        probe_dir: dir.join("probes"),
+        max_active: super::MAX_ACTIVE,
+        idle_timeout: None,
+        resume_on_start: false,
+    }
+}
+
+impl Harness {
+    fn new() -> Self {
+        Self::with_catalog(fake_catalog())
+    }
+
+    fn with_catalog(catalog: Vec<torrential_core::Release>) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let (swarm, disk, search) = (Swarm::new(0), FakeDisk::new(ROOMY), search_port::Fake::new(catalog));
+        let running = Self::boot(&dir, &swarm, &disk, &search);
+        Self { dir, running, swarm, disk, search }
+    }
+
+    fn boot(dir: &tempfile::TempDir, swarm: &Swarm, disk: &FakeDisk, search: &search_port::Fake) -> Running {
+        let ports = Ports {
+            engine: Box::new(Fake::new(swarm.clone())),
+            parse: parse_fake,
+            search: Arc::new(search.clone()),
+            disk: Box::new(disk.clone()),
+        };
+        start(Store::open(&dir.path().join("state.db")).unwrap(), ports, config(dir.path()), "0.1.0".into()).unwrap()
+    }
+
+    /// Kills the engine without letting it save anything, then starts a new one on the same state.
+    async fn crash_and_restart(self) -> Self {
+        let Self { dir, running, swarm, disk, search } = self;
+        running.owner.abort();
+        let _ = running.owner.await;
+        drop(running.ctx);
+        let running = Self::boot(&dir, &swarm, &disk, &search);
+        Self { dir, running, swarm, disk, search }
+    }
+
+    async fn ask(&self, request: Request) -> Response {
+        server::handle(&self.running.ctx, request).await
+    }
+
+    async fn get(&self, target: Target, files: &[&str]) -> Result<GetReply, Error> {
+        self.get_with(GetRequest {
+            target,
+            dir: Some(self.dir.path().join("downloads")),
+            files: files.iter().map(|f| f.to_string()).collect(),
+            max_size: None,
+            dry_run: false,
+        })
+        .await
+    }
+
+    async fn get_with(&self, request: GetRequest) -> Result<GetReply, Error> {
+        match self.ask(Request::Get(request)).await {
+            Response::Get { reply } => Ok(*reply),
+            Response::Error { error } => Err(error),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    async fn changes(&self, request: Request) -> Result<Vec<(String, String)>, Error> {
+        match self.ask(request).await {
+            Response::Changed { changes } => {
+                Ok(changes.into_iter().map(|c: Change| (c.id[..6].to_string(), c.result)).collect())
+            }
+            Response::Error { error } => Err(error),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    async fn status(&self) -> Vec<Job> {
+        match self.ask(Request::Status { refs: Vec::new() }).await {
+            Response::Jobs { jobs } => jobs,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    async fn states(&self) -> Vec<&'static str> {
+        self.status().await.iter().map(|j| j.status.name()).collect()
+    }
+
+    /// Polls status until `done` holds, for at most five seconds.
+    async fn until(&self, what: &str, done: impl Fn(&[Job]) -> bool) -> Vec<Job> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let jobs = self.status().await;
+            if done(&jobs) {
+                return jobs;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting until {what}: {jobs:#?}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn torrent_file(&self, torrent: &FakeTorrentFile) -> Target {
+        let path = self.dir.path().join(format!("{}.torrent", torrent.name));
+        std::fs::write(&path, torrent.bytes()).unwrap();
+        Target::TorrentFile(path)
+    }
+
+    fn downloads(&self) -> PathBuf {
+        self.dir.path().join("downloads")
+    }
+}
+
+fn torrent(n: u8, name: &str, files: &[(&str, u64)]) -> FakeTorrentFile {
+    FakeTorrentFile {
+        info_hash: InfoHash::V1([n; 20]),
+        name: name.into(),
+        files: files.iter().map(|(p, s)| (p.to_string(), *s)).collect(),
+    }
+}
+
+fn magnet(torrent: &FakeTorrentFile) -> Target {
+    Target::Magnet(format!("magnet:?xt=urn:btih:{}&dn={}", torrent.info_hash.id().to_hex(), torrent.name))
+}
+
+fn prefix(t: &FakeTorrentFile) -> String {
+    t.info_hash.id().to_hex()[..6].to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_crash_after_the_intent_commit_leaves_one_interrupted_download() {
+    let h = Harness::new();
+    let film = torrent(1, "film", &[("film.mkv", GIB)]);
+    let reply = h.get(magnet(&film), &[]).await.unwrap();
+    assert_eq!(reply.outcome, GetOutcome::Started);
+    let h = h.crash_and_restart().await;
+    let jobs = h.status().await;
+    assert_eq!(jobs.len(), 1);
+    assert_eq!((jobs[0].id, jobs[0].status.name()), (film.info_hash.id(), "interrupted"));
+    assert_eq!(
+        h.changes(Request::Resume { refs: vec![prefix(&film)], all: false }).await.unwrap(),
+        [("010101".into(), "resumed".into())]
+    );
+    assert_eq!(h.states().await, ["metadata"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_get_brings_back_an_interrupted_download() {
+    let h = Harness::new();
+    let film = torrent(2, "film", &[("film.mkv", GIB)]);
+    h.get(magnet(&film), &[]).await.unwrap();
+    let h = h.crash_and_restart().await;
+    assert_eq!(h.states().await, ["interrupted"]);
+    assert_eq!(h.get(magnet(&film), &[]).await.unwrap().outcome, GetOutcome::Existing);
+    assert_eq!(h.states().await, ["metadata"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_download_is_done_and_stays_done_after_a_restart() {
+    let h = Harness::new();
+    h.swarm.set_rate(100 * GIB);
+    let iso = torrent(2, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    let jobs = h.until("done", |jobs| jobs[0].status.name() == "done").await;
+    assert_eq!(jobs[0].progress.verified, GIB);
+    assert_eq!(jobs[0].path, Some(h.downloads().join("arch.iso")));
+    let h = h.crash_and_restart().await;
+    assert_eq!(h.states().await, ["done"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_is_idempotent_and_reports_a_changed_selection() {
+    let h = Harness::new();
+    let film = torrent(3, "film", &[("film.mkv", GIB), ("film.srt", 50_000), ("extras.mkv", GIB)]);
+    h.swarm.publish(film.clone());
+    assert_eq!(h.get(magnet(&film), &[]).await.unwrap().outcome, GetOutcome::Started);
+    h.until("metadata arrived", |jobs| jobs[0].progress.size.is_some()).await;
+    let again = h.get(magnet(&film), &[]).await.unwrap();
+    assert_eq!(again.outcome, GetOutcome::Existing);
+    let updated = h.get(Target::Prefix(prefix(&film)), &["film.*"]).await.unwrap();
+    assert_eq!(updated.outcome, GetOutcome::Updated);
+    assert_eq!(updated.previous_selection, Some(Selection::All));
+    assert_eq!(updated.job.selection, Selection::Patterns(vec!["film.*".into()]));
+    assert_eq!(updated.job.progress.size, Some(GIB + 50_000));
+    assert_eq!(h.status().await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pause_and_rm_are_idempotent_and_rm_keeps_the_path() {
+    let h = Harness::new();
+    let iso = torrent(4, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    let id = prefix(&iso);
+    let pause = || Request::Pause { refs: vec![id.clone()] };
+    assert_eq!(h.changes(pause()).await.unwrap(), [(id.clone(), "paused".into())]);
+    assert_eq!(h.changes(pause()).await.unwrap(), [(id.clone(), "already_paused".into())]);
+    assert_eq!(h.states().await, ["paused"]);
+    let rm = || Request::Remove { refs: vec![id.clone()] };
+    let Response::Changed { changes } = h.ask(rm()).await else { panic!("expected changes") };
+    assert_eq!(
+        (changes[0].result.as_str(), changes[0].path.clone()),
+        ("removed", Some(h.downloads().join("arch.iso")))
+    );
+    let Response::Changed { changes } = h.ask(rm()).await else { panic!("expected changes") };
+    assert_eq!(
+        (changes[0].result.as_str(), changes[0].path.clone()),
+        ("already_removed", Some(h.downloads().join("arch.iso")))
+    );
+    assert!(h.status().await.is_empty());
+    let unknown = h.changes(Request::Remove { refs: vec!["abcdef".into()] }).await.unwrap_err();
+    assert_eq!(unknown.code, ErrorCode::NotFound);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ambiguous_prefix_lists_the_candidates() {
+    let mut catalog = fake_catalog();
+    let mut twin = catalog[1].clone();
+    twin.id = torrential_core::ReleaseId::Torrent("e3a1c4aaaa000000000000000000000000000000".parse().unwrap());
+    twin.name = "Ubuntu 24.04.5 desktop (repack)".into();
+    catalog.push(twin);
+    let h = Harness::with_catalog(catalog);
+    let Response::Search { result } =
+        h.ask(Request::Search { query: torrential_core::SearchQuery::new("ubuntu") }).await
+    else {
+        panic!("expected results")
+    };
+    assert_eq!(result.releases.len(), 2);
+    let err = h.get(Target::Prefix("e3a1".into()), &[]).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::AmbiguousRef);
+    let Some(torrential_core::error::Details::Candidates(candidates)) = err.details else {
+        panic!("expected candidates")
+    };
+    let ids: Vec<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["e3a1f0", "e3a1c4"]);
+    assert_eq!(h.get(Target::Prefix("e3a1f0".into()), &[]).await.unwrap().outcome, GetOutcome::Started);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disk_size_and_existing_files_refuse_a_download() {
+    let h = Harness::new();
+    let big = torrent(5, "big", &[("a.bin", 40 * GIB), ("b.bin", 20 * GIB)]);
+    let err = h.get(h.torrent_file(&big), &[]).await.unwrap_err();
+    assert_eq!(
+        (err.code, err.message.as_str()),
+        (ErrorCode::TooLarge, "the selection is 60.0 GiB, over the 50.0 GiB cap")
+    );
+    let raised = GetRequest { max_size: Some(60 * GIB), ..request(&h, h.torrent_file(&big)) };
+    h.disk.set_free(70 * GIB);
+    let err = h.get_with(raised.clone()).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::DiskFull);
+    assert_eq!(err.details, Some(torrential_core::error::Details::Space { required: 110 * GIB, available: 70 * GIB }));
+    h.disk.set_free(500 * GIB);
+    h.disk.create(h.downloads().join("big/b.bin"));
+    let err = h.get_with(raised.clone()).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::PathConflict);
+    assert_eq!(
+        err.details,
+        Some(torrential_core::error::Details::Paths(vec![h.downloads().join("big/b.bin").display().to_string()]))
+    );
+    assert!(h.status().await.is_empty());
+    let only_a = GetRequest { files: vec!["a.bin".into()], ..raised };
+    assert_eq!(h.get_with(only_a).await.unwrap().outcome, GetOutcome::Started);
+}
+
+fn request(h: &Harness, target: Target) -> GetRequest {
+    GetRequest { target, dir: Some(h.downloads()), files: Vec::new(), max_size: None, dry_run: false }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn other_downloads_on_the_same_disk_count_against_free_space() {
+    let h = Harness::new();
+    h.disk.set_free(100 * GIB);
+    let first = torrent(6, "first", &[("x", 45 * GIB)]);
+    let second = torrent(7, "second", &[("y", 45 * GIB)]);
+    h.get(h.torrent_file(&first), &[]).await.unwrap();
+    let err = h.get(h.torrent_file(&second), &[]).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::DiskFull);
+    assert!(err.message.contains("plus 45.0 GiB for other downloads"), "{}", err.message);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn three_downloads_run_at_once_and_the_rest_queue() {
+    let h = Harness::new();
+    let torrents: Vec<FakeTorrentFile> = (10..14).map(|n| torrent(n, &format!("t{n}"), &[("f", GIB)])).collect();
+    let mut outcomes = Vec::new();
+    for t in &torrents {
+        outcomes.push(h.get(h.torrent_file(t), &[]).await.unwrap().outcome);
+    }
+    assert_eq!(outcomes, [GetOutcome::Started, GetOutcome::Started, GetOutcome::Started, GetOutcome::Queued]);
+    h.until("three downloading", |jobs| jobs.iter().filter(|j| j.status.name() == "downloading").count() == 3).await;
+    assert_eq!(h.states().await[3], "queued");
+    h.changes(Request::Pause { refs: vec![prefix(&torrents[0])] }).await.unwrap();
+    let jobs = h.until("the queued one started", |jobs| jobs[3].status.name() == "downloading").await;
+    assert_eq!(
+        jobs.iter().map(|j| j.status.name()).collect::<Vec<_>>(),
+        ["paused", "downloading", "downloading", "downloading"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_concurrent_gets_of_one_torrent_make_one_download() {
+    let h = Harness::new();
+    let film = torrent(20, "film", &[("film.mkv", GIB)]);
+    let (a, b) = tokio::join!(h.get(magnet(&film), &[]), h.get(magnet(&film), &[]));
+    let mut outcomes = [a.unwrap().outcome, b.unwrap().outcome];
+    outcomes.sort_by_key(|o| format!("{o:?}"));
+    assert_eq!(outcomes, [GetOutcome::Existing, GetOutcome::Started]);
+    assert_eq!(h.status().await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn both_hashes_of_a_hybrid_torrent_name_one_download() {
+    let h = Harness::new();
+    let v2 = [0x77; 32];
+    let hybrid = FakeTorrentFile {
+        info_hash: InfoHash::Hybrid { v1: [0x21; 20], v2 },
+        name: "hybrid".into(),
+        files: vec![("hybrid".into(), GIB)],
+    };
+    h.swarm.publish(hybrid.clone());
+    h.get(magnet(&hybrid), &[]).await.unwrap();
+    h.until("metadata arrived", |jobs| jobs[0].progress.size.is_some()).await;
+    let by_v2 = Target::Magnet(format!("magnet:?xt=urn:btmh:1220{}", "77".repeat(32)));
+    assert_eq!(h.get(by_v2, &[]).await.unwrap().outcome, GetOutcome::Existing);
+    assert_eq!(h.status().await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pattern_matching_no_file_stops_the_download_when_metadata_arrives() {
+    let h = Harness::new();
+    let film = torrent(22, "film", &[("film.mp4", GIB)]);
+    h.swarm.publish(film.clone());
+    h.get(magnet(&film), &["*.mkv"]).await.unwrap();
+    let jobs = h.until("stopped", |jobs| jobs[0].status.name() == "error").await;
+    let JobStatus::Error { error } = &jobs[0].status else { unreachable!() };
+    assert_eq!((error.code, error.message.as_str()), (ErrorCode::NoSelection, "no file in film matches \"*.mkv\""));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn files_fetch_metadata_from_peers_and_get_reuses_it() {
+    let h = Harness::new();
+    let film = torrent(23, "film", &[("film.mkv", GIB), ("setup.exe", 1000)]);
+    h.swarm.publish(film.clone());
+    let Response::Files { files } = h.ask(Request::Files { target: magnet(&film), timeout_ms: 5_000 }).await else {
+        panic!("expected files")
+    };
+    assert_eq!(files.metadata_source, "peers");
+    let paths: Vec<(&str, bool)> = files.files.iter().map(|f| (f.path.as_str(), f.risk.is_some())).collect();
+    assert_eq!(paths, [("film.mkv", false), ("setup.exe", true)]);
+    let dry = GetRequest { files: vec!["*.mkv".into()], dry_run: true, ..request(&h, magnet(&film)) };
+    let reply = h.get_with(dry).await.unwrap();
+    assert_eq!(reply.outcome, GetOutcome::Planned);
+    assert_eq!(reply.plan.map(|p| (p.selected_files, p.total_files, p.selected_size)), Some((1, 2, GIB)));
+    assert!(h.status().await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn files_without_peers_time_out() {
+    let h = Harness::new();
+    let lonely = torrent(24, "lonely", &[("x", 1)]);
+    let response = h.ask(Request::Files { target: magnet(&lonely), timeout_ms: 200 }).await;
+    let Response::Error { error } = response else { panic!("expected an error, got {response:?}") };
+    assert_eq!(error.code, ErrorCode::MetadataTimeout);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn verify_reports_damage_and_repair_downloads_it_again() {
+    let h = Harness::new();
+    h.swarm.set_rate(100 * GIB);
+    let iso = torrent(25, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    h.until("done", |jobs| jobs[0].status.name() == "done").await;
+    h.swarm.damage(iso.info_hash.id(), 3);
+    let verify = |repair| Request::Verify { reference: prefix(&iso), repair };
+    assert_eq!(h.changes(verify(false)).await.unwrap(), [(prefix(&iso), "checking".into())]);
+    let jobs = h.until("damage reported", |jobs| jobs[0].status.name() == "error").await;
+    let JobStatus::Error { error } = &jobs[0].status else { unreachable!() };
+    assert_eq!(
+        (error.code, error.message.as_str()),
+        (ErrorCode::VerificationFailed, "3 damaged pieces in the selected files")
+    );
+    h.swarm.damage(iso.info_hash.id(), 3);
+    h.changes(verify(true)).await.unwrap();
+    h.until("repaired", |jobs| jobs[0].status.name() == "done").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_result_with_only_a_torrent_url_is_fetched_once_found() {
+    let iso = torrent(27, "debian.iso", &[("debian.iso", GIB)]);
+    let url = "https://cdimage.example/debian.iso.torrent";
+    let row = torrential_core::Release {
+        id: torrential_core::ReleaseId::Locator(torrential_core::LocatorId::from_bytes([0xab; 20])),
+        name: "debian.iso".into(),
+        magnet: None,
+        torrent_url: Some(url.into()),
+        ..fake_catalog().remove(0)
+    };
+    let h = Harness::with_catalog(vec![row]);
+    h.search.serve_torrent(url, iso.bytes());
+    let Response::Search { result } =
+        h.ask(Request::Search { query: torrential_core::SearchQuery::new("debian") }).await
+    else {
+        panic!("expected results")
+    };
+    assert_eq!(result.releases[0].id.to_ref(), format!("u{}", "ab".repeat(20)));
+    let reply = h.get(Target::Prefix("uabab".into()), &[]).await.unwrap();
+    assert_eq!((reply.job.id, reply.plan.map(|p| p.selected_size)), (iso.info_hash.id(), Some(GIB)));
+    let Response::Files { files } =
+        h.ask(Request::Files { target: Target::Prefix(prefix(&iso)), timeout_ms: 1_000 }).await
+    else {
+        panic!("expected files")
+    };
+    assert_eq!(files.metadata_source, "download");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_search_does_not_delay_a_pause() {
+    let h = Harness::new();
+    let iso = torrent(26, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    h.search.set_delay(Duration::from_secs(3));
+    let ctx = h.running.ctx.clone();
+    let search = tokio::spawn(async move {
+        server::handle(&ctx, Request::Search { query: torrential_core::SearchQuery::new("arch") }).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let started = Instant::now();
+    h.changes(Request::Pause { refs: vec![prefix(&iso)] }).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1), "pause took {:?}", started.elapsed());
+    assert!(!search.is_finished());
+    search.abort();
+}
