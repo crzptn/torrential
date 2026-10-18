@@ -271,12 +271,12 @@ fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) 
 }
 
 /// One total order. `relevance` sorts by query relevance, then releases that fit the
-/// user's preferences, then official and lawful sources, then resolution closest to
-/// the user's screen, with a trailer's resolution unknown, then seeders, then names with fewer words beyond the query, then
-/// downloads, then newer names, then ID. Without preferences every release fits and
-/// every resolution is as close. A bigger file is no closer a match, so size never
-/// breaks a tie. The other sorts put their key first and fall back to that order.
-/// Unknown values sort last.
+/// user's preferences, then official and lawful sources, then the resolution closest
+/// to the user's screen, with a trailer's resolution unknown, then seeders, then names
+/// with fewer words beyond the query, then downloads, then newer names, then ID.
+/// Without preferences every release fits and every resolution is as close. A bigger
+/// file is no closer a match, so size never breaks a tie. The other sorts put their key
+/// first and fall back to that order. Unknown values sort last.
 fn rank(candidates: &mut [Candidate], sort: Sort, preferences: Preferences) {
     let fits = |c: &Candidate| preferences.fits(c.release.size, c.quality);
     let closeness = |c: &Candidate| preferences.closeness(c.quality.resolution.filter(|_| !c.extra));
