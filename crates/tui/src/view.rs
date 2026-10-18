@@ -80,6 +80,13 @@ fn mark(buf: &mut Buffer, y: u16) {
     put(buf, MARK, y, 1, "●", fg(ACTION));
 }
 
+/// `↑` or `↓` on the margin rule where more of a list lies past its edge, unless the mark is there.
+fn arrow(buf: &mut Buffer, y: u16, glyph: &str) {
+    if buf[(MARK, y)].symbol() == "│" {
+        put(buf, MARK, y, 1, glyph, fg(PENCIL));
+    }
+}
+
 /// The rule between the margin and the entries, on the rows from `top` up to `bottom`.
 fn rule(buf: &mut Buffer, top: u16, bottom: u16) {
     for y in top..bottom {
@@ -427,16 +434,11 @@ fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
     {
         margin(buf, area.y, word, fg(PENCIL));
     }
-    let mut arrow = |y: u16, glyph: &str| {
-        if buf[(MARK, y)].symbol() == "│" {
-            put(buf, MARK, y, 1, glyph, fg(PENCIL));
-        }
-    };
     if scroll > 0 {
-        arrow(area.y, "↑");
+        arrow(buf, area.y, "↑");
     }
     if scroll + area.height < content {
-        arrow(area.bottom() - 1, "↓");
+        arrow(buf, area.bottom() - 1, "↓");
     }
 }
 
@@ -546,16 +548,11 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
         put_right(buf, g.right, row, &size(file.size), fg(PENCIL));
         row += 1;
     }
-    let mut arrow = |y: u16, glyph: &str| {
-        if buf[(MARK, y)].symbol() == "│" {
-            put(buf, MARK, y, 1, glyph, fg(PENCIL));
-        }
-    };
     if skip > 0 {
-        arrow(first, "↑");
+        arrow(buf, first, "↑");
     }
     if inside && skip + shown < picked.len() {
-        arrow(row - 1, "↓");
+        arrow(buf, row - 1, "↓");
     }
     if more {
         let text = format!("and {} more files · press enter to list them", picked.len() - shown);

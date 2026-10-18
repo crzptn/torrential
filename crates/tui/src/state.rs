@@ -319,9 +319,11 @@ impl State {
         self.arrived.get(&job.id).copied().filter(|_| waiting)
     }
 
-    /// Notes bytes arriving, or a download starting to want them, which restarts the wait.
-    pub fn note_arrival(&mut self, job: &Job, before: Option<&JobStatus>) {
-        if job.progress.down_rate > 0 || before != Some(&JobStatus::Downloading) {
+    /// Notes bytes arriving, or a download starting to want them, which restarts the wait. Call
+    /// it before `job` replaces the state's copy, which tells whether it was downloading.
+    pub fn note_arrival(&mut self, job: &Job) {
+        let was_downloading = self.job(job.id).is_some_and(|j| j.status == JobStatus::Downloading);
+        if job.progress.down_rate > 0 || !was_downloading {
             self.arrived.insert(job.id, self.now);
         }
     }

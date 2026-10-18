@@ -714,8 +714,7 @@ impl State {
             Event::Snapshot { jobs } => {
                 self.engine = Engine::Ready;
                 for job in &jobs {
-                    let before = self.job(job.id).map(|j| j.status.clone());
-                    self.note_arrival(job, before.as_ref());
+                    self.note_arrival(job);
                 }
                 self.downloads = jobs;
                 self.resort();
@@ -733,8 +732,7 @@ impl State {
             }
             Event::Job { job } => {
                 let id = job.id;
-                let before = self.job(id).map(|j| j.status.clone());
-                self.note_arrival(&job, before.as_ref());
+                self.note_arrival(&job);
                 match self.downloads.iter_mut().find(|j| j.id == id) {
                     Some(existing) => *existing = *job,
                     None => {
@@ -842,8 +840,7 @@ impl State {
                 };
                 self.say(Tone::Success, text);
                 let job = reply.job;
-                let before = self.job(job.id).map(|j| j.status.clone());
-                self.note_arrival(&job, before.as_ref());
+                self.note_arrival(&job);
                 match self.downloads.iter_mut().find(|j| j.id == job.id) {
                     Some(existing) => *existing = job,
                     None => {
