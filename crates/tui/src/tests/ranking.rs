@@ -1,6 +1,3 @@
-//! The ranking panel: only `S` opens it, its keys move the picks, and `enter` saves what changed
-//! and searches again.
-
 use crossterm::event::KeyCode;
 use torrential_core::{Playback, Preferences, Screen};
 
@@ -12,7 +9,6 @@ const TV_4K: Preferences = Preferences { screen: Some(Screen::Tv4k), max_size: N
 const LAPTOP: Preferences =
     Preferences { screen: Some(Screen::Laptop), max_size: Some(8_000_000_000), playback: Some(Playback::H264) };
 
-/// The night search, ranked with `preferences`.
 fn searched_with(preferences: Preferences) -> State {
     let mut state = with_downloads((100, 30));
     press(&mut state, "/night of the living dead");
@@ -27,7 +23,6 @@ fn night_query() -> SearchQuery {
     SearchQuery { limit: 50, ..SearchQuery::new("night of the living dead") }
 }
 
-/// What the backend sends back once `edit` is saved over `current`.
 fn saved(edit: &Effect, current: Preferences) -> Msg {
     let Effect::SavePreferences(edit) = edit else { panic!("expected a save, got {edit:?}") };
     Msg::Saved { edit: *edit, result: Ok(edit.apply(current)) }

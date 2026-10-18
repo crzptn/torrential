@@ -1,14 +1,10 @@
-//! A torrent's file list as a foldable tree with checkboxes.
-
 use std::collections::BTreeSet;
 
 use torrential_core::{FileRisk, TorrentFile};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum NodeKind {
-    /// `end` is the index of the first node after this folder's subtree.
     Folder { end: usize },
-    /// An index into [`Tree::files`].
     File(usize),
 }
 
@@ -26,17 +22,13 @@ pub enum Check {
     None,
 }
 
-/// The files of one search result, the ones picked for download, and where the cursor is.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Tree {
     pub files: Vec<TorrentFile>,
-    /// Depth first. A multi-file torrent has one root folder named after the torrent.
     pub nodes: Vec<Node>,
     pub picked: Vec<bool>,
     pub folded: BTreeSet<usize>,
-    /// A node index, always a visible one.
     pub cursor: usize,
-    /// The first visible row shown.
     pub scroll: usize,
 }
 
@@ -93,7 +85,6 @@ fn leaf(path: &str) -> String {
 }
 
 impl Tree {
-    /// Every file is picked except the risky ones.
     pub fn new(name: &str, files: Vec<TorrentFile>) -> Self {
         let mut nodes = Vec::new();
         if let [only] = files.as_slice()
@@ -125,7 +116,6 @@ impl Tree {
         })
     }
 
-    /// Node indices that are not inside a folded folder.
     pub fn visible(&self) -> Vec<usize> {
         let mut out = Vec::new();
         let mut n = 0;
@@ -156,7 +146,6 @@ impl Tree {
         self.files[file].risk == Some(FileRisk::Executable)
     }
 
-    /// A folder toggles its safe files; a risky file changes only when picked by itself.
     pub fn toggle(&mut self) {
         match self.nodes[self.cursor].kind {
             NodeKind::File(i) => self.picked[i] = !self.picked[i],
@@ -170,7 +159,6 @@ impl Tree {
         }
     }
 
-    /// Picks every safe file, or nothing when anything is picked.
     pub fn toggle_all(&mut self) {
         let any = self.picked.iter().any(|p| *p);
         for i in 0..self.files.len() {
@@ -185,7 +173,6 @@ impl Tree {
         self.cursor = visible[to];
     }
 
-    /// Folds the folder under the cursor, or moves to the parent folder.
     pub fn fold(&mut self) {
         let unfolded_folder =
             matches!(self.nodes[self.cursor].kind, NodeKind::Folder { .. }) && !self.folded.contains(&self.cursor);
@@ -217,7 +204,6 @@ impl Tree {
         (0..self.files.len()).filter(|&i| self.is_risky(i) && !self.picked[i]).count()
     }
 
-    /// The paths to ask for, or `None` for every file.
     pub fn selection(&self) -> Option<Vec<String>> {
         if self.picked.iter().all(|p| *p) {
             return None;
@@ -225,7 +211,6 @@ impl Tree {
         Some(self.files.iter().zip(&self.picked).filter(|(_, p)| **p).map(|(f, _)| f.path.clone()).collect())
     }
 
-    /// Keeps the cursor inside the `rows` shown.
     pub fn settle(&mut self, rows: usize) {
         let visible = self.visible();
         let at = visible.iter().position(|&n| n == self.cursor).unwrap_or(0);

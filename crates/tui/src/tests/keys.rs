@@ -1,5 +1,3 @@
-//! Key sequences in, observable state and effects out.
-
 use crossterm::event::KeyCode;
 use torrential_core::protocol::{Change, GetOutcome, GetReply};
 

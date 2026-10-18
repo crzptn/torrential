@@ -1,8 +1,3 @@
-//! Drawing. Everything here reads [`State`] and writes a buffer; nothing changes state.
-//!
-//! The page is a ledger. A margin on the left holds short labels, a mark beside the margin
-//! shows where keys go, and every entry is one line on a fixed grid of right-aligned numbers.
-
 use std::time::Duration;
 
 use ratatui::buffer::Buffer;
@@ -30,7 +25,6 @@ fn bold(c: Color) -> Style {
     fg(c).add_modifier(Modifier::BOLD)
 }
 
-/// Writes `text` cut to `max` cells, and returns the cells written.
 fn put(buf: &mut Buffer, x: u16, y: u16, max: u16, text: &str, style: Style) -> u16 {
     let area = buf.area;
     if max == 0 || y < area.y || y >= area.bottom() || x >= area.right() {
@@ -42,14 +36,12 @@ fn put(buf: &mut Buffer, x: u16, y: u16, max: u16, text: &str, style: Style) -> 
     width(&text) as u16
 }
 
-/// Writes `text` so it ends just before `right`, and returns where it starts.
 fn put_right(buf: &mut Buffer, right: u16, y: u16, text: &str, style: Style) -> u16 {
     let x = right.saturating_sub(width(text) as u16);
     put(buf, x, y, right - x, text, style);
     x
 }
 
-/// Writes styled pieces one after another, and returns the cells written.
 fn spans(buf: &mut Buffer, x: u16, y: u16, max: u16, parts: &[(impl AsRef<str>, Style)]) -> u16 {
     let mut used = 0;
     for (text, style) in parts {
@@ -62,7 +54,6 @@ fn spans_width(parts: &[(impl AsRef<str>, Style)]) -> u16 {
     parts.iter().map(|(t, _)| width(t.as_ref()) as u16).sum()
 }
 
-/// Writes styled pieces so they end just before `right`, and returns where they start.
 fn spans_right(buf: &mut Buffer, right: u16, y: u16, parts: &[(impl AsRef<str>, Style)]) -> u16 {
     let w = spans_width(parts);
     spans(buf, right.saturating_sub(w), y, w, parts);
@@ -75,42 +66,32 @@ fn paint(buf: &mut Buffer) {
     }
 }
 
-/// A margin label, right-aligned against the margin's edge.
 fn margin(buf: &mut Buffer, y: u16, text: &str, style: Style) {
     put_right(buf, MARGIN + 1, y, text, style);
 }
 
-/// The one mark on the page: where keys go.
 fn mark(buf: &mut Buffer, y: u16) {
     put(buf, MARK, y, 1, "●", fg(ACTION));
 }
 
-/// `↑` or `↓` on the margin rule where more of a list lies past its edge, unless the mark is there.
 fn arrow(buf: &mut Buffer, y: u16, glyph: &str) {
     if buf[(MARK, y)].symbol() == "│" {
         put(buf, MARK, y, 1, glyph, fg(PENCIL));
     }
 }
 
-/// The rule between the margin and the entries, on the rows from `top` up to `bottom`.
 fn rule(buf: &mut Buffer, top: u16, bottom: u16) {
     for y in top..bottom {
         put(buf, MARK, y, 1, "│", fg(RULE));
     }
 }
 
-/// What a progress mark shows.
 enum Meter {
-    /// Bytes verified out of a size, drawn as a rule. `size` is unknown until a peer sends the
-    /// file list. `getting` while the download gets bytes.
     Share { verified: u64, size: Option<u64>, getting: bool },
-    /// Where a downloading torrent's pieces sit: its wanted slices in torrent order, never empty.
     Pieces(Vec<Eighths>),
 }
 
 impl Meter {
-    /// The gauge shows only while bytes arrive, so a stalled download draws the rule instead of
-    /// a gauge frozen at its last map.
     fn job(state: &State, job: &Job) -> Self {
         let p = &job.progress;
         let getting = state.getting(job);
@@ -137,9 +118,6 @@ impl Meter {
     }
 }
 
-/// The one place progress is drawn, `cells` wide. A share is a rule that fills in half cells,
-/// sage while the download gets bytes and pencil otherwise. Pieces are a rain gauge of the
-/// wanted slices alone, stretched over every cell, so one slice can fill several cells.
 fn progress_mark(buf: &mut Buffer, x: u16, y: u16, cells: u16, meter: Meter) {
     match meter {
         Meter::Share { verified, size, getting } => {
@@ -180,8 +158,6 @@ fn hints_width(pairs: &[(&str, &str)]) -> u16 {
     cells as u16
 }
 
-/// Key hints as `key verb` pairs, most useful first, right-aligned before `right` within `room`
-/// cells. Pairs drop from the end, so the first one stays.
 fn hints(buf: &mut Buffer, right: u16, y: u16, room: u16, pairs: &[(&str, &str)]) {
     let mut pairs = pairs.to_vec();
     while pairs.len() > 1 && hints_width(&pairs) > room {
@@ -219,8 +195,6 @@ pub fn render(buf: &mut Buffer, state: &State, mode: ColorMode) -> Option<Positi
     caret
 }
 
-/// The title in the margin, and on the right only what needs saying: bytes arriving, a disk
-/// running out, or an engine that is not there.
 fn masthead(buf: &mut Buffer, state: &State, screen: &Screen) {
     margin(buf, MASTHEAD, "torrential", bold(INK));
     let total = rate(state.rate());
@@ -244,7 +218,6 @@ fn masthead(buf: &mut Buffer, state: &State, screen: &Screen) {
     spans_right(buf, screen.right, MASTHEAD, &parts);
 }
 
-/// Whether the disk has less room than the running downloads still need, or under 1 GiB.
 fn short_of_space(state: &State) -> bool {
     let needed: u64 = state
         .downloads
@@ -255,7 +228,6 @@ fn short_of_space(state: &State) -> bool {
     state.free_space.is_some_and(|free| free < needed.max(1 << 30))
 }
 
-/// The search line. Returns where the terminal's cursor goes while typing.
 fn search(buf: &mut Buffer, state: &State, screen: &Screen) -> Option<Position> {
     let focused = state.focus == Focus::Query;
     margin(buf, SEARCH, "search", fg(PENCIL));
@@ -267,7 +239,6 @@ fn search(buf: &mut Buffer, state: &State, screen: &Screen) -> Option<Position> 
     let text = &state.query.text;
     let hint = if focused { "type a name, then press enter" } else { "press / to search" };
     let left = width(if text.is_empty() { hint } else { text }) as u16;
-    // The status keeps its place and a long query is cut instead, so failed sources stay in view.
     let room = screen.right - CONTENT;
     let [long, short] = [false, true].map(|short| search_status(state, short));
     let status = if left + 3 + spans_width(&long) <= room { long } else { short };
@@ -309,7 +280,6 @@ fn reason(outcome: &SourceOutcome) -> String {
     }
 }
 
-/// `a`, `a and b`, `a, b and c`.
 fn and_list(names: &[&str]) -> String {
     match names {
         [] => String::new(),
@@ -318,7 +288,6 @@ fn and_list(names: &[&str]) -> String {
     }
 }
 
-/// The right end of the search line. `short` drops what can go when the query is long.
 fn search_status(state: &State, short: bool) -> Vec<(String, Style)> {
     let Some(search) = &state.search else { return Vec::new() };
     if state.filtering() {
@@ -355,7 +324,6 @@ fn search_status(state: &State, short: bool) -> Vec<(String, Style)> {
     }
 }
 
-/// The download grid: name, a progress rule, the percent, then time left or a size.
 struct Grid {
     rule: u16,
     rule_cells: u16,
@@ -375,8 +343,6 @@ fn download_grid(right: u16) -> Grid {
     Grid { rule: percent - 6 - rule_cells, rule_cells, percent, tail, right }
 }
 
-/// The result grid: name, one flag, the quality's first word, then size, seeds, and age, each
-/// right-aligned. The fields hold where each column starts (`flag`, `quality`) or ends (the rest).
 struct Columns {
     flag: u16,
     quality: Option<u16>,
@@ -385,8 +351,6 @@ struct Columns {
     age: u16,
 }
 
-/// The quality column is there only when a listed release has a quality and names keep 20
-/// cells beside it, so a search for disk images, or a narrow window, keeps the room for names.
 fn result_columns(right: u16, with_quality: bool) -> Columns {
     let seeds = right - 6;
     let size = seeds - 7;
@@ -396,7 +360,6 @@ fn result_columns(right: u16, with_quality: bool) -> Columns {
     Columns { flag: quality.unwrap_or(size - 8) - 10, quality, size, seeds, age: right }
 }
 
-/// Where a file row's name must end: two cells before the size column.
 fn before_size(c: &Columns) -> u16 {
     c.size - 10
 }
@@ -409,7 +372,6 @@ fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
     let mut sheet = Buffer::empty(Rect::new(0, 0, area.width, total));
     paint(&mut sheet);
     rule(&mut sheet, 0, total);
-    // The label in force on each sheet row, so a group scrolled past still shows its name.
     let mut group: Vec<Option<&'static str>> = vec![None; usize::from(total)];
     let mut last: Option<&'static str> = None;
     let right = screen.right;
@@ -494,10 +456,6 @@ fn selected(state: &State, item: Item) -> bool {
     state.cursor == Some(item) && state.focus != Focus::Query && state.ranking.is_none()
 }
 
-/// The ranking panel as ledger rows. The first says what search would rank for with the picks,
-/// so it reads "ranking for this Mac: …" across the margin, as `torrential setup` prints it. Then
-/// a row for each override, its choices in a line with the pick in brackets and bold, and what
-/// `auto` stands for at its end.
 fn ranking_rows(buf: &mut Buffer, state: &State, ranking: &Ranking, right: u16, y: u16) {
     margin(buf, y, "ranking", fg(PENCIL));
     let room = right - CONTENT;
@@ -510,8 +468,6 @@ fn ranking_rows(buf: &mut Buffer, state: &State, ranking: &Ranking, right: u16, 
             mark(buf, y);
         }
         put(buf, CONTENT, y, room, row.name(), if current { bold(INK) } else { fg(TEXT) });
-        // Every choice takes a cell on each side, which the pick's brackets fill, so moving the
-        // pick moves no word.
         let picked = ranking.picked(row);
         let mut x = CONTENT + 10;
         for (k, choice) in ranking.choices(row).into_iter().enumerate() {
@@ -529,9 +485,6 @@ fn ranking_rows(buf: &mut Buffer, state: &State, ranking: &Ranking, right: u16, 
     }
 }
 
-/// What `auto` stands for on a row: the detected display's resolution, the detected playback, or
-/// "plays anything" while the screen is another one, since nothing detected that screen's player.
-/// A size cap notes that it also refuses larger downloads.
 fn auto_note(row: Row, ranking: &Ranking, machine: Option<&Machine>) -> Option<String> {
     match (row, machine) {
         (Row::MaxSize, _) => ranking.picks.max_size.map(|_| "refuses larger downloads".into()),
@@ -588,7 +541,6 @@ fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
     put_right(buf, g.right, y, &tail, if is_selected { ink } else { fg(PENCIL) });
 }
 
-/// What opens under a selected download. `viewport` is the list's height, which caps the files.
 fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, viewport): (u16, u16)) {
     let room = g.right - DETAIL;
     let home = state.home.as_deref();
@@ -662,8 +614,6 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
     }
 }
 
-/// The order the results are in. In the engine's order, a search the machine changes says what
-/// it ranked for, as much as fits before the column heads.
 fn heads(buf: &mut Buffer, state: &State, c: &Columns, y: u16) {
     margin(buf, y, "found", fg(PENCIL));
     let room = c.size - "size".len() as u16 - 2 - CONTENT;
@@ -682,9 +632,6 @@ fn heads(buf: &mut Buffer, state: &State, c: &Columns, y: u16) {
     put_right(buf, c.age, y, "age", fg(PENCIL));
 }
 
-/// What the found row may say a search ranked for, longest first. A search with overrides says
-/// them after the profile, as the CLI does, or names only the machine, so a cut never leaves part
-/// of an override.
 fn ranked_lines(ranked: &RankedFor) -> Vec<String> {
     let shorter = shortenings(&ranked.profile);
     match &ranked.overrides {
@@ -696,7 +643,6 @@ fn ranked_lines(ranked: &RankedFor) -> Vec<String> {
     }
 }
 
-/// The flag a row has room for: the warning first, then provenance.
 fn first_flag(release: &Release) -> Option<Flag> {
     let rank = [Flag::Cam, Flag::Official, Flag::PublicDomain, Flag::CreativeCommons, Flag::Trusted, Flag::Adult];
     rank.into_iter().find(|f| release.flags.contains(f))
@@ -713,8 +659,6 @@ fn flag_words(flag: Flag) -> &'static str {
     }
 }
 
-/// What a row has room for of a release's quality: the resolution, else the codec, else `hdr`.
-/// The details spell out the rest.
 fn quality_word(quality: Quality) -> Option<&'static str> {
     let codec = quality.codec.map(Codec::as_str);
     quality.resolution.map(Resolution::as_str).or(codec).or(quality.hdr.then_some("hdr"))
@@ -798,8 +742,6 @@ fn result_detail(buf: &mut Buffer, state: &State, id: ReleaseId, c: &Columns, y:
     }
 }
 
-/// The file picker under a result: tick marks, sizes under the result's size column, and a
-/// total ruled off below them.
 fn file_tree(buf: &mut Buffer, state: &State, tree: &Tree, c: &Columns, y: u16, height: u16) {
     let rows = usize::from(height - 2);
     for (k, &n) in tree.visible().iter().skip(tree.scroll).take(rows).enumerate() {
@@ -932,7 +874,6 @@ const NOTES: [&str; 4] = [
     "Removing a download keeps its files.",
 ];
 
-/// The keys, in place of the list, as a ledger of their own.
 fn help(buf: &mut Buffer, screen: &Screen) {
     let area = screen.list;
     rule(buf, area.y, area.bottom());
@@ -974,7 +915,6 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
     let downloaded = matches!(state.cursor, Some(Item::Result(ReleaseId::Torrent(t))) if state.job(t).is_some());
     let pairs: Vec<(&str, &str)> = match (state.focus, state.cursor) {
         _ if state.confirm.is_some() => Vec::new(),
-        // The arrows drop first beside a long toast, since the brackets in each row show the picks.
         _ if state.ranking.is_some() => vec![("enter", "save"), ("esc", "close"), ("← →", "choose")],
         _ if state.help => vec![("esc", "close")],
         (Focus::Query, _) if state.items().is_empty() => vec![("enter", "search"), ("f1", "keys")],
@@ -990,7 +930,6 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
         }
         (Focus::List, None) => vec![("/", "search"), ("?", "keys")],
     };
-    // The toast gets the room the first hint leaves, so a message never hides the first key.
     let mut room = screen.right - CONTENT;
     let first = pairs.first().map_or(0, |pair| hints_width(&[*pair]) + 4);
     if let Some(toast) = &state.toast {

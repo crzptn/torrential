@@ -1,7 +1,3 @@
-//! The terminal loop. Keys and engine replies arrive as messages on one channel, effects run
-//! on their own threads, and the loop sleeps until a message comes or a timer the screen
-//! needs is due, so an idle screen costs nothing.
-
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -20,7 +16,6 @@ use crate::theme::ColorMode;
 use crate::update::{Effect, Msg};
 use crate::view;
 
-/// How long the loop may wait before drawing new download numbers, so digits stay readable.
 const NUMBERS_EVERY: Duration = Duration::from_millis(500);
 const WATCH_RETRY: Duration = Duration::from_secs(2);
 
@@ -38,7 +33,6 @@ pub fn run(backend: impl Backend) -> io::Result<()> {
     Ok(())
 }
 
-/// Everything between taking the terminal and giving it back, so `run` always restores it.
 fn session<B: Backend>(terminal: &mut ratatui::DefaultTerminal, backend: Arc<B>, mode: ColorMode) -> io::Result<State> {
     let size = terminal.size()?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -50,7 +44,6 @@ fn session<B: Backend>(terminal: &mut ratatui::DefaultTerminal, backend: Arc<B>,
     watch(backend.clone(), tx.clone());
     let (reader, sender) = (backend.clone(), tx.clone());
     thread::spawn(move || {
-        // A config that cannot be read fails each search too, which says why.
         if let Ok(preferences) = reader.preferences() {
             let _ = sender.send(Msg::Preferences(preferences));
         }
@@ -72,8 +65,6 @@ fn unix_now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
-/// How soon a message should reach the screen. A download whose state is unchanged brings
-/// only new numbers, which wait for the next 500 ms slot.
 fn urgency(state: &State, msg: &Msg) -> Option<Duration> {
     match msg {
         Msg::Watch(Event::Job { job }) if state.job(job.id).is_some_and(|j| j.status == job.status) => {
@@ -131,8 +122,6 @@ fn run_loop<B: Backend>(
     }
 }
 
-/// The next time something happens without input: a spinner frame, a toast going away, a
-/// file list to fetch, or a quiet download turning stalled.
 fn wake_at(state: &State) -> Option<Instant> {
     let spin = state.spinning().then(|| state.next_frame());
     let toast = state.toast.as_ref().map(|t| t.until);
@@ -140,7 +129,6 @@ fn wake_at(state: &State) -> Option<Instant> {
     [spin, toast, prefetch, state.next_stall()].into_iter().flatten().min()
 }
 
-/// Keys and resizes. `crossterm::event::read` blocks, so this thread sleeps between keys.
 fn listen(tx: Sender<Msg>) {
     thread::spawn(move || {
         loop {
@@ -157,8 +145,6 @@ fn listen(tx: Sender<Msg>) {
     });
 }
 
-/// Download events for the whole session. When the engine goes away the screen says so,
-/// and this reconnects, starting the engine again if needed.
 fn watch<B: Backend>(backend: Arc<B>, tx: Sender<Msg>) {
     thread::spawn(move || {
         loop {

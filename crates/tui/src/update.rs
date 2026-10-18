@@ -1,6 +1,3 @@
-//! Messages in, effects out. [`State::update`] is the only place state changes, and it never
-//! does I/O: the runtime carries out the effects it returns.
-
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -23,41 +20,18 @@ use crate::tree::Tree;
 pub enum Msg {
     Key(KeyEvent),
     Resize(u16, u16),
-    /// Time passed: the spinner moves, an old toast goes, and a planned prefetch may start.
     Tick,
     Watch(Event),
     WatchLost(Error),
     FreeSpace(Option<u64>),
-    SearchUpdate {
-        search: u64,
-        result: SearchResult,
-        pending: Vec<String>,
-    },
-    SearchDone {
-        search: u64,
-        result: Result<SearchResult, Error>,
-    },
-    Files {
-        item: Item,
-        result: Result<FilesReply, Error>,
-    },
-    Started {
-        release: ReleaseId,
-        result: Result<Box<GetReply>, Error>,
-    },
-    Changed {
-        id: TorrentId,
-        action: JobAction,
-        result: Result<Vec<Change>, Error>,
-    },
-    /// The overrides in config.yaml, read at start.
+    SearchUpdate { search: u64, result: SearchResult, pending: Vec<String> },
+    SearchDone { search: u64, result: Result<SearchResult, Error> },
+    Files { item: Item, result: Result<FilesReply, Error> },
+    Started { release: ReleaseId, result: Result<Box<GetReply>, Error> },
+    Changed { id: TorrentId, action: JobAction, result: Result<Vec<Change>, Error> },
     Preferences(Preferences),
-    /// This machine, detected at start.
     Machine(Machine),
-    Saved {
-        edit: Edit,
-        result: Result<Preferences, Error>,
-    },
+    Saved { edit: Edit, result: Result<Preferences, Error> },
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -72,7 +46,6 @@ pub enum Effect {
     SavePreferences(Edit),
 }
 
-/// Everything a key can do.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     Quit,
@@ -161,7 +134,6 @@ impl State {
             Msg::Files { item, result } => self.files_arrived(item, result),
             Msg::Started { release, result } => self.started(release, result),
             Msg::Changed { id, action, result } => self.changed(id, action, result),
-            // A search reply or a save is newer than what was read or detected at start.
             Msg::Preferences(preferences) => {
                 self.preferences.get_or_insert(preferences);
                 Vec::new()
@@ -177,8 +149,6 @@ impl State {
         effects
     }
 
-    /// A result with a `.torrent` link gets its file list once the cursor rests on it, so its
-    /// details can count files. Magnet-only results wait for `enter`: their list comes from peers.
     fn plan_prefetch(&mut self) {
         let wanted = match self.cursor {
             Some(Item::Result(id))
@@ -208,8 +178,6 @@ impl State {
         }
     }
 
-    /// The cursor's screen row, so new results above it do not move it. The ranking panel keeps
-    /// itself in view instead.
     fn anchor(&self) -> Option<(Item, i32)> {
         let item = self.cursor.filter(|_| self.ranking.is_none())?;
         let placed = layout::blocks(self, layout::list_height(self));
@@ -266,7 +234,6 @@ impl State {
         if let Some(ranking) = self.ranking {
             return self.ranking_key(ranking, key);
         }
-        // F1 works while typing, where `?` is a character.
         if key.code == KeyCode::F(1) {
             return self.act(Action::Help);
         }
@@ -279,7 +246,6 @@ impl State {
         }
     }
 
-    /// The keymap for the list and the file tree.
     fn binding(&self, key: KeyEvent) -> Option<Action> {
         use KeyCode::*;
         if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
@@ -407,8 +373,6 @@ impl State {
         Vec::new()
     }
 
-    /// Arrows or `h j k l` choose, `enter` saves what changed, and `esc` or `S` closes without
-    /// saving. `q` quits, as in the list.
     fn ranking_key(&mut self, mut ranking: Ranking, key: KeyEvent) -> Vec<Effect> {
         use KeyCode::*;
         match key.code {
@@ -432,8 +396,6 @@ impl State {
         Vec::new()
     }
 
-    /// Says what the save changed, and searches again with the new order. A filter typed over
-    /// the results stays.
     fn saved(&mut self, edit: Edit, result: Result<Preferences, Error>) -> Vec<Effect> {
         let preferences = match result {
             Ok(preferences) => preferences,
@@ -448,7 +410,6 @@ impl State {
             0 => format!("Saved {}.", changes[..n].join(", ")),
             more => format!("Saved {} and {more} more.", changes[..n].join(", ")),
         });
-        // The footer leaves a toast its width less 16 cells, the longest first hint and its gap.
         let room = layout::screen(self.size).map_or(0, |s| s.right - CONTENT - 16);
         let counted = format!("Saved {}.", count(changes.len(), "change"));
         self.say(Tone::Success, first_fit(listed.chain([counted]), room.into()).unwrap_or_else(|| "Saved.".into()));
@@ -472,7 +433,6 @@ impl State {
         matches!(self.cursor, Some(Item::Result(id)) if matches!(self.files.get(&id), Some(Files::Ready(_))))
     }
 
-    /// The open file tree, when the cursor is inside one.
     fn tree(&mut self) -> Option<&mut Tree> {
         let Some(Item::Result(id)) = self.cursor else { return None };
         match (self.focus, self.files.get_mut(&id)) {
@@ -481,7 +441,6 @@ impl State {
         }
     }
 
-    /// A download's file list, when the cursor is inside one.
     fn download_files(&mut self) -> Option<&mut DownloadFiles> {
         let Some(Item::Download(id)) = self.cursor else { return None };
         match self.focus {
@@ -490,7 +449,6 @@ impl State {
         }
     }
 
-    /// The esc ladder: close help, leave the file tree, then go to the query.
     fn back(&mut self) {
         if self.help {
             self.help = false;
@@ -551,7 +509,6 @@ impl State {
         self.select(items[to])
     }
 
-    /// The item about one screen of rows away from `at`, in `direction`.
     fn page(&self, items: &[Item], at: usize, direction: i32) -> usize {
         let viewport = layout::list_height(self);
         let placed = layout::blocks(self, viewport);
@@ -618,7 +575,6 @@ impl State {
         }
     }
 
-    /// `enter`, `l` or `→`: unfold a folder, show details, or open a result's files.
     fn open(&mut self) -> Vec<Effect> {
         if let Some(tree) = self.tree() {
             tree.unfold();
@@ -664,7 +620,6 @@ impl State {
         matches!(id, ReleaseId::Torrent(t) if self.job(t).is_some())
     }
 
-    /// `D`, or `enter` in a file tree: download the picked files, or every safe file.
     fn download(&mut self, id: ReleaseId) -> Vec<Effect> {
         if self.downloaded(id) {
             self.say(Tone::Info, "Already in downloads. Press d to view it.");
@@ -742,7 +697,6 @@ impl State {
         Vec::new()
     }
 
-    /// From the query into the list: results first when there are any.
     fn enter_list(&mut self) -> Vec<Effect> {
         let items = self.items();
         if let Some(cursor) = self.cursor.filter(|c| items.contains(c)) {
@@ -767,7 +721,6 @@ impl State {
         self.search_for(text)
     }
 
-    /// Starts a search for `text`, which replaces the last one.
     fn search_for(&mut self, text: String) -> Vec<Effect> {
         let id = self.next_search;
         self.next_search += 1;
@@ -864,7 +817,6 @@ impl State {
         }
     }
 
-    /// Drops a download, moving the cursor to its neighbor.
     fn forget(&mut self, id: TorrentId) {
         if self.cursor == Some(Item::Download(id)) {
             let items = self.items();
@@ -880,8 +832,6 @@ impl State {
         self.resort();
     }
 
-    /// Asks for a download's per-file progress when it is selected, then about once a second
-    /// while it changes.
     fn refresh_files(&mut self, id: TorrentId, just_selected: bool) -> Vec<Effect> {
         let Some(job) = self.job(id) else { return Vec::new() };
         let known = job.progress.size.is_some();
@@ -1013,8 +963,6 @@ fn remove_char(text: &str, at: usize) -> String {
     text.chars().enumerate().filter(|(i, _)| *i != at).map(|(_, c)| c).collect()
 }
 
-/// The CLI's rule for its `# ranked for` line. Films and shows get the whole profile and its
-/// overrides, and software whose names mention an architecture gets the architecture alone.
 fn ranked_for(result: &SearchResult) -> Option<RankedFor> {
     let profile = &result.query.profile;
     if result.is_video() {

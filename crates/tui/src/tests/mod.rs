@@ -1,6 +1,3 @@
-//! A fixed world for the tests: the downloads and results fake mode shows, built from plain
-//! data and fed to the app as the messages the runtime would send.
-
 mod keys;
 mod ranking;
 mod render;
@@ -83,8 +80,6 @@ pub fn jobs() -> Vec<Job> {
             31,
         ),
     ];
-    // Scattered the way a swarm fills a torrent. Wikipedia's last slices hold its two files with
-    // nothing yet.
     jobs[0].progress.piece_map =
         Some("4206224002006442024224020020406220240400262202424020022420000000".parse().unwrap());
     jobs[2].progress.piece_map =
@@ -117,7 +112,6 @@ fn release(
     }
 }
 
-/// The night catalog in the engine's ranking.
 pub fn night() -> Vec<Release> {
     vec![
         release(
@@ -191,7 +185,6 @@ fn report(source: &str, outcome: SourceOutcome) -> SourceReport {
     SourceReport { source: source.into(), outcome, elapsed_ms: 400 }
 }
 
-/// The machine the engine detects in every search here: a Mac with a 1080p HDR panel.
 pub fn mac() -> Machine {
     Machine {
         os: Os::Macos,
@@ -201,7 +194,6 @@ pub fn mac() -> Machine {
     }
 }
 
-/// The engine's answer, ranked for [`mac`] with no overrides.
 pub fn result(releases: Vec<Release>, sources: Vec<SourceReport>) -> SearchResult {
     let profile = Profile { detected: Some(mac()), ..Profile::default() };
     SearchResult {
@@ -225,7 +217,6 @@ pub fn final_sources() -> Vec<SourceReport> {
     ]
 }
 
-/// The first partial result: archive.org has answered.
 pub fn partial() -> (SearchResult, Vec<String>) {
     let releases = night().into_iter().filter(|r| r.sources[0] == "archive.org").collect();
     let sources = final_sources()[..2].to_vec();
@@ -284,7 +275,6 @@ pub fn wikipedia_files() -> FilesReply {
     }
 }
 
-/// Twenty parts of the paused stackexchange download, the last one complete.
 pub fn stackexchange_files() -> FilesReply {
     FilesReply {
         id: id("91fd3b").to_hex(),
@@ -296,13 +286,11 @@ pub fn stackexchange_files() -> FilesReply {
     }
 }
 
-/// A screen of the given size, with a fixed clock.
 pub fn app(size: (u16, u16)) -> State {
     let now = Instant::now();
     State::new(now, CLOCK, size, Some(PathBuf::from("/Users/ada")))
 }
 
-/// What the engine sends at startup: every download.
 pub fn with_downloads(size: (u16, u16)) -> State {
     let mut state = app(size);
     state.update(Msg::Watch(Event::Snapshot { jobs: jobs() }));
@@ -318,12 +306,10 @@ pub fn ctrl(c: char) -> Msg {
     Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
 }
 
-/// Types `text` and presses each key, returning every effect.
 pub fn press(state: &mut State, keys: &str) -> Vec<Effect> {
     keys.chars().flat_map(|c| state.update(key(KeyCode::Char(c)))).collect()
 }
 
-/// Runs the night search to the end: `/`, the query, enter, then the engine's answer.
 pub fn searched(size: (u16, u16)) -> State {
     let mut state = with_downloads(size);
     press(&mut state, "/");

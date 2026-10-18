@@ -1,6 +1,3 @@
-//! Text as the screen shows it: widths in cells, truncation, and short number forms that line
-//! up in columns.
-
 use std::path::Path;
 
 use ratatui::text::Span;
@@ -13,7 +10,6 @@ fn char_width(c: char) -> usize {
     width(c.encode_utf8(&mut [0; 4]))
 }
 
-/// Cuts `s` to `max` cells, ending with `…` when cut.
 pub fn ellipsize(s: &str, max: usize) -> String {
     if width(s) <= max {
         return s.to_string();
@@ -36,7 +32,6 @@ pub fn ellipsize(s: &str, max: usize) -> String {
     out
 }
 
-/// Cuts `s` in the middle, keeping its start and end (opencode's `truncateMiddle`).
 pub fn middle(s: &str, max: usize) -> String {
     if width(s) <= max || max < 5 {
         return ellipsize(s, max);
@@ -66,7 +61,6 @@ pub fn middle(s: &str, max: usize) -> String {
     start
 }
 
-/// How far a cut may move to land on a word break.
 const NEAR: usize = 4;
 
 fn in_word(c: char) -> bool {
@@ -77,9 +71,6 @@ fn separator(c: char) -> bool {
     c.is_whitespace() || matches!(c, '.' | '_' | '-' | ',')
 }
 
-/// Cuts a torrent's name in the middle, giving two thirds of the room to its end, where the
-/// version, resolution, and edition sit. A cut inside a word moves to a nearby break, so no
-/// fragment like `80p` is left.
 pub fn name(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     let cells = |part: &[char]| part.iter().map(|&c| char_width(c)).sum::<usize>();
@@ -114,7 +105,6 @@ pub fn name(s: &str, max: usize) -> String {
     format!("{head}…{tail}")
 }
 
-/// `now` under a minute, then `45m`, `5h`, `17d`, `2mo`, `3y`.
 pub fn age(published: i64, now: i64) -> String {
     let secs = (now - published).max(0);
     let (minute, hour, day) = (60, 3_600, 86_400);
@@ -128,8 +118,6 @@ pub fn age(published: i64, now: i64) -> String {
     }
 }
 
-/// Three figures at most, so sizes fit an 8-cell column: `512 B`, `51.4 KiB`, `734 MiB`,
-/// `1.3 GiB`. A value that would print as 1000 or more moves up a unit.
 pub fn size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
@@ -149,7 +137,6 @@ pub fn rate(bytes_per_sec: u64) -> String {
     format!("{}/s", size(bytes_per_sec))
 }
 
-/// `0` to `9,999` with a comma, then `10k` to `999k`, and `–` when unknown.
 pub fn seeds(n: Option<u32>) -> String {
     match n {
         None => "–".into(),
@@ -159,9 +146,6 @@ pub fn seeds(n: Option<u32>) -> String {
     }
 }
 
-/// `text`, a list joined by `, ` after a `label: `, then with one item fewer at a time down to
-/// the label alone: `this Mac: 1080p screen, arm64`, `this Mac: 1080p screen`, `this Mac`. A text
-/// with no `label: `, such as `this machine, not detected yet`, is all label and never shrinks.
 pub fn shortenings(text: &str) -> Vec<String> {
     let Some((label, list)) = text.split_once(": ") else { return vec![text.to_string()] };
     let items: Vec<&str> = list.split(", ").collect();
@@ -169,12 +153,10 @@ pub fn shortenings(text: &str) -> Vec<String> {
     lists.chain([label.to_string()]).collect()
 }
 
-/// The first of `texts` that fits in `room` cells.
 pub fn first_fit(texts: impl IntoIterator<Item = String>, room: usize) -> Option<String> {
     texts.into_iter().find(|text| width(text) <= room)
 }
 
-/// A path with the home folder written as `~`.
 pub fn home_path(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|h| path.strip_prefix(h).ok()) {
         Some(rest) if rest.as_os_str().is_empty() => "~".into(),
@@ -183,7 +165,6 @@ pub fn home_path(path: &Path, home: Option<&Path>) -> String {
     }
 }
 
-/// `62%`, rounded down so a full bar always means done.
 pub fn percent(done: u64, size: u64) -> String {
     if size == 0 {
         return "100%".into();

@@ -1,6 +1,3 @@
-//! Snapshots of whole screens at the three sizes the design is checked at, plus the colors
-//! that carry meaning.
-
 use crossterm::event::KeyCode;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -65,7 +62,6 @@ fn download(size: (u16, u16)) -> State {
     state
 }
 
-/// The ranking panel over the night search, on the playback row with h264 picked.
 fn ranking(size: (u16, u16)) -> State {
     let mut state = searched(size);
     press(&mut state, "Sjjlll");
@@ -140,7 +136,6 @@ fn a_download_says_stalled_only_after_a_quiet_spell() {
     assert_eq!(state.next_stall(), None);
 }
 
-/// Wikipedia as the engine sends it, at 100×30, and the row it lands on.
 fn wikipedia_with(status: JobStatus, map: Option<&str>) -> (State, Buffer, u16) {
     let mut state = with_downloads((100, 30));
     let mut job = jobs()[0].clone();
@@ -152,13 +147,11 @@ fn wikipedia_with(status: JobStatus, map: Option<&str>) -> (State, Buffer, u16) 
     (state, buf, y)
 }
 
-/// Thirty-two wanted slices among unwanted ones, two to each cell of a 16-cell gauge.
 const SCATTERED: &str = concat!(
     "8-8-", "--44", "0--0", "-01-", "8--7", "12--", "----", "6666", "-22-", "3-4-", "----", "8888", "0-0-", "--0-",
     "-0--", "4444",
 );
 
-/// One small file in a large torrent: five wanted slices.
 const ONE_FILE: &str = concat!("----------------------------------------", "84026", "-------------------");
 
 #[test]
@@ -380,7 +373,6 @@ fn a_search_ranks_for_what_its_results_depend_on() {
     );
 }
 
-/// The night search, as the engine ranked it with `profile`.
 fn searched_for(size: (u16, u16), profile: Profile) -> State {
     let mut state = with_downloads(size);
     press(&mut state, "/night");

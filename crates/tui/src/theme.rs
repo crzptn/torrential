@@ -1,20 +1,11 @@
-//! The Margin palette: warm paper, four grays of ink, and two colored inks. The view draws with
-//! these RGB values only, and [`degrade`] rewrites the finished buffer for terminals with fewer
-//! colors.
-
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 
 pub const PAPER: Color = Color::Rgb(0x14, 0x12, 0x0F);
-/// The selected row, the query, and the title.
 pub const INK: Color = Color::Rgb(0xF0, 0xE9, 0xDC);
-/// Every other entry.
 pub const TEXT: Color = Color::Rgb(0xBD, 0xB5, 0xA6);
-/// Margin labels, column heads, notes, and keys.
 pub const PENCIL: Color = Color::Rgb(0x83, 0x7C, 0x70);
-/// The margin rule and the unfilled part of a progress rule. Never text.
 pub const RULE: Color = Color::Rgb(0x3B, 0x37, 0x30);
-/// Where keys go and what moves: the margin mark, bytes arriving, picked files.
 pub const ACTION: Color = Color::Rgb(0xA6, 0xC7, 0x9A);
 pub const ERROR: Color = Color::Rgb(0xE2, 0x80, 0x6E);
 
@@ -27,7 +18,6 @@ pub enum ColorMode {
 }
 
 impl ColorMode {
-    /// `NO_COLOR`, then `COLORTERM`, then `TERM`.
     pub fn detect(var: impl Fn(&str) -> Option<String>) -> Self {
         let set = |key| var(key).filter(|v| !v.is_empty());
         if set("NO_COLOR").is_some() {
@@ -44,9 +34,6 @@ impl ColorMode {
     }
 }
 
-/// Rewrites a buffer drawn with the Margin tokens for a terminal with fewer colors. With 16
-/// colors or none, the terminal's own background and foreground stand in for paper and ink,
-/// and pencil becomes faint so the hierarchy survives.
 pub fn degrade(buf: &mut Buffer, mode: ColorMode) {
     for cell in &mut buf.content {
         match mode {
