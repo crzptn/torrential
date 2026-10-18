@@ -422,6 +422,29 @@ fn the_engine_refuses_a_config_that_does_not_parse() {
 }
 
 #[test]
+fn a_config_toml_is_named_rather_than_ignored() {
+    let server = Server::start(|_| Vec::new());
+    let home = Home::new(&server, &[], "");
+    std::fs::remove_file(home.path("th/config/config.yaml")).unwrap();
+    std::fs::write(home.path("th/config/config.toml"), "[downloads]\ndir = \"~/isos\"\n").unwrap();
+
+    let refused = home.run(&["status"]);
+    let doctor = home.run(&["doctor"]);
+
+    let (toml, yaml) = (home.path("th/config/config.toml"), home.path("th/config/config.yaml"));
+    let message = format!("{} is not read; torrential reads config.yaml", toml.display());
+    assert_eq!(refused.code, 2, "{}{}", refused.stdout, refused.stderr);
+    assert_eq!(
+        refused.stderr,
+        format!(
+            "error[usage]: {message}\nhint: write your settings as YAML in {}, then delete config.toml\n",
+            yaml.display()
+        )
+    );
+    assert!(doctor.stdout.contains(&format!("config\tfail\t{message}\n")), "{}", doctor.stdout);
+}
+
+#[test]
 fn doctor_network_asks_each_enabled_source() {
     let server = Server::start(|_| {
         vec![

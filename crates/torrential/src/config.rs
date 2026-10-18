@@ -235,19 +235,29 @@ fn with_block(text: &str, block: &str) -> String {
 }
 
 /// The file and its text. Both names at once is an error, since either could be the one the
-/// user edits.
+/// user edits. So is a `config.toml` alone, since an earlier README named it, and its settings
+/// would otherwise give way to the defaults without a word. The engine logs to a file nobody
+/// reads, so only an error reaches the user.
 fn read(paths: &Paths) -> Result<Option<(PathBuf, String)>, Error> {
     let try_read = |path: PathBuf| match std::fs::read_to_string(&path) {
         Ok(text) => Ok(Some((path, text))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(invalid(&path, None, &format!("cannot be read: {e}"))),
     };
+    let toml = paths.config.join("config.toml");
     match (try_read(path(paths))?, try_read(paths.config.join("config.yml"))?) {
         (Some((yaml, _)), Some((yml, _))) => Err(Error::new(
             ErrorCode::Usage,
             format!("{} and {} both exist, so torrential cannot tell which to read", yaml.display(), yml.display()),
         )
         .with_hint("move what you want to keep into one file and delete the other")),
+        (None, None) if toml.exists() => {
+            Err(Error::new(ErrorCode::Usage, format!("{} is not read; torrential reads config.yaml", toml.display()))
+                .with_hint(format!(
+                    "write your settings as YAML in {}, then delete config.toml",
+                    path(paths).display()
+                )))
+        }
         (found, None) | (None, found) => Ok(found),
     }
 }
@@ -361,7 +371,7 @@ mod tests {
         let relative = |text: String| text.replace(&home, "$TORRENTIAL_HOME");
         Config::load(&paths, &env)
             .map(|config| Config { file: config.file.map(|f| relative(f.display().to_string()).into()), ..config })
-            .map_err(|e| Error { message: relative(e.message), ..e })
+            .map_err(|e| Error { message: relative(e.message), hint: e.hint.map(relative), ..e })
     }
 
     #[test]
@@ -416,6 +426,23 @@ sources:
                 Some("move what you want to keep into one file and delete the other")
             )
         );
+    }
+
+    #[test]
+    fn a_config_toml_is_an_error_until_a_yaml_config_exists() {
+        let toml = "[downloads]\ndir = \"~/isos\"\n";
+        let alone = load_files(&[("config.toml", toml)]).unwrap_err();
+        let beside = load_files(&[("config.toml", toml), ("config.yaml", "sources:\n  disabled: [nyaa]\n")]).unwrap();
+
+        assert_eq!(
+            (alone.code, alone.message.as_str(), alone.hint.as_deref()),
+            (
+                ErrorCode::Usage,
+                "$TORRENTIAL_HOME/config/config.toml is not read; torrential reads config.yaml",
+                Some("write your settings as YAML in $TORRENTIAL_HOME/config/config.yaml, then delete config.toml")
+            )
+        );
+        assert_eq!(beside.search.disabled, ["nyaa"]);
     }
 
     #[test]
