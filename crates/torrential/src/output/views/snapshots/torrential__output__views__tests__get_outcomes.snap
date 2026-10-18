@@ -228,13 +228,13 @@ next:  torrential wait 6bc1af
   },
   "next": "torrential wait 6bc1af"
 }
-=== planned
+=== planned in the default folder
 planned 6bc1af night_of_the_living_dead_dvd
 files:     Night.mp4 *.srt (2 of 255, 568.8 MiB)
 path:      /Users/ada/Movies/night_of_the_living_dead_dvd
 free:      410.0 GiB
 conflicts: none
-next:      torrential get 6bc1af --files Night.mp4 --files '*.srt' --dir /Users/ada/Movies
+next:      torrential get 6bc1af --files Night.mp4 --files '*.srt'
 
 --- json
 {
@@ -278,7 +278,7 @@ next:      torrential get 6bc1af --files Night.mp4 --files '*.srt' --dir /Users/
       "conflicts": []
     }
   },
-  "next": "torrential get 6bc1af --files Night.mp4 --files '*.srt' --dir /Users/ada/Movies"
+  "next": "torrential get 6bc1af --files Night.mp4 --files '*.srt'"
 }
 === planned with conflicts
 planned 6bc1af night_of_the_living_dead_dvd
@@ -334,4 +334,56 @@ next:      torrential get 6bc1af --files Night.mp4 --files '*.srt' --dir <EMPTY 
     }
   },
   "next": "torrential get 6bc1af --files Night.mp4 --files '*.srt' --dir <EMPTY DIR>"
+}
+=== planned with --dir
+planned 6bc1af night_of_the_living_dead_dvd
+files:     Night.mp4 *.srt (2 of 255, 568.8 MiB)
+path:      /Users/ada/Movies/night_of_the_living_dead_dvd
+free:      410.0 GiB
+conflicts: none
+next:      torrential get 6bc1af --files Night.mp4 --files '*.srt' --dir /Users/ada/Movies
+
+--- json
+{
+  "schema": 1,
+  "type": "get",
+  "reply": {
+    "outcome": "planned",
+    "job": {
+      "id": "6bc1af0000000000000000000000000000000000",
+      "info_hash": {
+        "v1": "6bc1af0000000000000000000000000000000000"
+      },
+      "name": "night_of_the_living_dead_dvd",
+      "dir": "/Users/ada/Movies",
+      "path": "/Users/ada/Movies/night_of_the_living_dead_dvd",
+      "state": "checking",
+      "progress": {
+        "size": null,
+        "verified": 0,
+        "down_rate": 0,
+        "up_rate": 0,
+        "peers": 0,
+        "seeds": 0,
+        "eta": null
+      },
+      "selection": {
+        "kind": "patterns",
+        "value": [
+          "Night.mp4",
+          "*.srt"
+        ]
+      },
+      "added_at": 1792311123
+    },
+    "plan": {
+      "selected_files": 2,
+      "total_files": 255,
+      "selected_size": 596452175,
+      "destination": "/Users/ada/Movies/night_of_the_living_dead_dvd",
+      "free_space": 440234147840,
+      "conflicts": []
+    }
+  },
+  "next": "torrential get 6bc1af --files Night.mp4 --files '*.srt' --dir /Users/ada/Movies"
 }

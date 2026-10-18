@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use torrential_core::id::shortest_unique_prefix;
@@ -193,7 +194,8 @@ pub fn selection(selection: &Selection) -> String {
     }
 }
 
-pub fn get(reply: &GetReply) -> Doc {
+/// `dir` is the `--dir` the user passed, which a suggested rerun repeats.
+pub fn get(reply: &GetReply, dir: Option<&Path>) -> Doc {
     let job = &reply.job;
     let id = short_ids(&[job.id]).remove(0);
     let (word, token) = match reply.outcome {
@@ -240,10 +242,10 @@ pub fn get(reply: &GetReply) -> Doc {
     }
     let next = match reply.outcome {
         GetOutcome::Planned if reply.plan.as_ref().is_some_and(|p| !p.conflicts.is_empty()) => {
-            Some(rerun_get(&id, &job.selection, "<EMPTY DIR>"))
+            Some(rerun_get(&id, &job.selection, Some("<EMPTY DIR>".into())))
         }
         GetOutcome::Planned => {
-            Some(rerun_get(&id, &job.selection, &format::shell_word(&sanitize(&job.dir.display().to_string()))))
+            Some(rerun_get(&id, &job.selection, dir.map(|d| format::shell_word(&sanitize(&d.display().to_string())))))
         }
         _ if job.status.is_stopped() => next_for_stopped(&job.status, &id),
         _ => Some(format!("torrential wait {id}")),
@@ -251,7 +253,7 @@ pub fn get(reply: &GetReply) -> Doc {
     Doc { body: Body::Fields { title, fields }, summary, next }
 }
 
-fn rerun_get(id: &str, selection: &Selection, dir: &str) -> String {
+fn rerun_get(id: &str, selection: &Selection, dir: Option<String>) -> String {
     let mut words = vec!["torrential".to_string(), "get".to_string(), id.to_string()];
     if let Selection::Patterns(patterns) = selection {
         for p in patterns {
@@ -259,8 +261,10 @@ fn rerun_get(id: &str, selection: &Selection, dir: &str) -> String {
             words.push(format::shell_word(&sanitize(p)));
         }
     }
-    words.push("--dir".to_string());
-    words.push(dir.to_string());
+    if let Some(dir) = dir {
+        words.push("--dir".to_string());
+        words.push(dir);
+    }
     words.join(" ")
 }
 

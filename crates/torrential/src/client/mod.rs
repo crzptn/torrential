@@ -170,13 +170,14 @@ fn get(mut conn: Conn, args: GetArgs, mode: Mode, cwd: &Path, env: &Env) -> Resu
     }
     let dir = args.dir.map(|d| absolute(&d, cwd, env));
     let dry_run = args.dry_run;
-    let request = Request::Get(GetRequest { target, dir, files: args.files, max_size: args.max_size, dry_run });
+    let request =
+        Request::Get(GetRequest { target, dir: dir.clone(), files: args.files, max_size: args.max_size, dry_run });
     let within = if dry_run { METADATA_WAIT + Duration::from_secs(15) } else { connect::DEFAULT_REPLY_WITHIN };
     let reply = match answer(conn.call_within(&request, within)?)? {
         Response::Get { reply } => reply,
         other => return Err(connect::unexpected(&other)),
     };
-    let exit = emit(mode, &views::get(&reply), &Response::Get { reply: reply.clone() });
+    let exit = emit(mode, &views::get(&reply, dir.as_deref()), &Response::Get { reply: reply.clone() });
     let attachable = mode == Mode::Human && !dry_run && !reply.job.status.is_stopped();
     if attachable {
         eprintln!("Ctrl-C stops watching. The download keeps going.");

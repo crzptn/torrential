@@ -255,7 +255,7 @@ fn get_outcomes() {
                 ..get_reply(GetOutcome::Updated, film(), Some(plan(vec![])))
             },
         ),
-        ("planned", get_reply(GetOutcome::Planned, film(), Some(plan(vec![])))),
+        ("planned in the default folder", get_reply(GetOutcome::Planned, film(), Some(plan(vec![])))),
         (
             "planned with conflicts",
             get_reply(
@@ -267,8 +267,14 @@ fn get_outcomes() {
     ];
     let mut out = String::new();
     for (name, reply) in cases {
-        out.push_str(&format!("=== {name}\n{}", both(&get(&reply), &Response::Get { reply: Box::new(reply.clone()) })));
+        out.push_str(&format!(
+            "=== {name}\n{}",
+            both(&get(&reply, None), &Response::Get { reply: Box::new(reply.clone()) })
+        ));
     }
+    let reply = get_reply(GetOutcome::Planned, film(), Some(plan(vec![])));
+    let doc = get(&reply, Some(Path::new("/Users/ada/Movies")));
+    out.push_str(&format!("=== planned with --dir\n{}", both(&doc, &Response::Get { reply: Box::new(reply) })));
     insta::assert_snapshot!(out);
 }
 
