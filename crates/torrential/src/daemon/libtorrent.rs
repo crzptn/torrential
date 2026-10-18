@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, Slice, TorrentId};
@@ -14,6 +15,7 @@ use torrential_engine as lt;
 use super::engine_port::{
     Activity, AddSource, AddTorrent, EngineEvent, EnginePort, MetaFile, Metainfo, Missing, Stats,
 };
+use super::search_port::{BoxFuture, SearchPort};
 
 const BOOTSTRAP_NODES: [&str; 4] = [
     "router.bittorrent.com:6881",
@@ -47,8 +49,29 @@ pub struct Libtorrent {
     /// libtorrent reports a bootstrap for each listen socket, and the log needs one.
     dht_bootstrapped: bool,
     peers: Vec<SocketAddr>,
+    mirrors: Mirrors,
     stats_at: Instant,
     dht_saved_at: Instant,
+}
+
+type Found = (TorrentId, Result<Vec<String>, Error>);
+
+/// Lookups of the servers that hold an archive.org torrent's files. They run on the async runtime,
+/// so the engine thread never waits on the network, and [`Libtorrent::poll`] applies the answers.
+struct Mirrors {
+    search: Arc<dyn SearchPort>,
+    runtime: tokio::runtime::Handle,
+    sender: mpsc::Sender<Found>,
+    found: mpsc::Receiver<Found>,
+}
+
+impl Mirrors {
+    fn spawn(&self, id: TorrentId, lookup: BoxFuture<'static, Result<Vec<String>, Error>>) {
+        let sender = self.sender.clone();
+        self.runtime.spawn(async move {
+            let _ = sender.send((id, lookup.await));
+        });
+    }
 }
 
 #[derive(Default)]
@@ -80,8 +103,14 @@ enum Check {
 }
 
 impl Libtorrent {
-    /// `state` holds the listen port and the DHT routing table between runs.
-    pub fn start(state: &Path, network: Network) -> Result<Self, Error> {
+    /// `state` holds the listen port and the DHT routing table between runs. `search` names better
+    /// web seeds for archive.org torrents, and its lookups run on `runtime`.
+    pub fn start(
+        state: &Path,
+        network: Network,
+        search: Arc<dyn SearchPort>,
+        runtime: tokio::runtime::Handle,
+    ) -> Result<Self, Error> {
         let ip = match network {
             Network::Public => Ipv4Addr::UNSPECIFIED,
             Network::Loopback { .. } => Ipv4Addr::LOCALHOST,
@@ -103,6 +132,7 @@ impl Libtorrent {
         }
         .map_err(|e| Error::internal(format!("libtorrent did not start: {e}")))?;
         let now = Instant::now();
+        let (sender, found) = mpsc::channel();
         Ok(Self {
             session,
             torrents: BTreeMap::new(),
@@ -111,6 +141,7 @@ impl Libtorrent {
             dht_state,
             dht_bootstrapped: false,
             peers,
+            mirrors: Mirrors { search, runtime, sender, found },
             stats_at: now,
             dht_saved_at: now,
         })
@@ -251,6 +282,23 @@ impl Libtorrent {
         }
     }
 
+    /// Adds the web seeds a lookup found to a torrent still in the engine. Without them it keeps
+    /// the torrent's own, which can leave a piece that spans two redirected files without a source.
+    fn mirrors_found(&mut self, id: TorrentId, found: Result<Vec<String>, Error>) {
+        match found {
+            Ok(seeds) if self.torrents.contains_key(&id) => {
+                for seed in &seeds {
+                    if let Err(e) = self.session.add_web_seed(engine_id(id), seed) {
+                        super::log(&format!("{} cannot add the web seed {seed}: {e}", short(id)));
+                    }
+                }
+                super::log(&format!("{} also downloads from {}", short(id), seeds.join(", ")));
+            }
+            Ok(_) => {}
+            Err(error) => super::log(&format!("{} keeps the torrent's own web seeds: {}", short(id), error.message)),
+        }
+    }
+
     fn removed(&mut self, id: TorrentId) {
         if let Some(left) = self.removing.get_mut(&id) {
             *left -= 1;
@@ -388,9 +436,11 @@ impl EnginePort for Libtorrent {
                 lt::TorrentSource::Metainfo(lt::Metainfo::from_bytes(bytes).map_err(engine_error)?)
             }
         };
-        let files = match &fallback {
-            lt::TorrentSource::Metainfo(m) => Some(file_indices(m)),
-            _ => None,
+        let (files, mirrors) = match &fallback {
+            lt::TorrentSource::Metainfo(m) => {
+                (Some(file_indices(m)), self.mirrors.search.mirrors(m.name(), m.web_seeds()))
+            }
+            _ => (None, None),
         };
         let source = match resume_data.map(lt::ResumeData::from_bytes) {
             Some(Ok(resume)) => lt::TorrentSource::Resume(resume),
@@ -414,6 +464,9 @@ impl EnginePort for Libtorrent {
             return Err(Error::internal(format!("the engine already has torrent {id}")));
         }
         self.torrents.insert(id, Torrent { files, wanted, ..Torrent::default() });
+        if let Some(lookup) = mirrors {
+            self.mirrors.spawn(id, lookup);
+        }
         Ok(())
     }
 
@@ -491,6 +544,10 @@ impl EnginePort for Libtorrent {
         match self.session.wait_alerts(wait) {
             Ok(alerts) => alerts.into_iter().for_each(|alert| self.alert(alert)),
             Err(e) => super::log(&format!("cannot read libtorrent alerts: {e}")),
+        }
+        let answered: Vec<Found> = self.mirrors.found.try_iter().collect();
+        for (id, found) in answered {
+            self.mirrors_found(id, found);
         }
         if self.stats_at.elapsed() >= STATS_EVERY {
             self.stats_at = Instant::now();

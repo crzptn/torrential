@@ -25,6 +25,9 @@ pub trait SearchPort: Send + Sync {
     ) -> BoxFuture<'_, Result<SearchResult, Error>>;
     /// The bytes of a `.torrent` file a search result links to.
     fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>>;
+    /// Web seeds on the servers that hold an archive.org torrent's files, to add to its own. `None`
+    /// for a torrent that does not download from archive.org. See [`Search::mirrors`].
+    fn mirrors(&self, name: &str, web_seeds: &[String]) -> Option<BoxFuture<'static, Result<Vec<String>, Error>>>;
     /// Releases from recent searches whose ID starts with `prefix`, newest first. They keep the
     /// links from private sources, which can carry an API key, so they are for downloading and
     /// never for printing.
@@ -67,6 +70,10 @@ impl SearchPort for Live {
 
     fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>> {
         Box::pin(async move { self.search.fetch_torrent(&url).await })
+    }
+
+    fn mirrors(&self, name: &str, web_seeds: &[String]) -> Option<BoxFuture<'static, Result<Vec<String>, Error>>> {
+        Some(Box::pin(self.search.mirrors(name, web_seeds)?))
     }
 
     fn find(&self, prefix: &HexPrefix) -> Vec<Release> {
@@ -228,6 +235,10 @@ impl SearchPort for Fake {
                     .with_hint("try the magnet link instead")
             })
         })
+    }
+
+    fn mirrors(&self, _: &str, _: &[String]) -> Option<BoxFuture<'static, Result<Vec<String>, Error>>> {
+        None
     }
 
     fn find(&self, prefix: &HexPrefix) -> Vec<Release> {

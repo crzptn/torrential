@@ -56,7 +56,7 @@ impl Ports {
     /// keeps libtorrent on 127.0.0.1 with discovery off, for tests that run their own peers and list
     /// them in `TORRENTIAL_TEST_PEERS`, and `TORRENTIAL_TEST_DISK=roomy` lets them download on a
     /// disk below the free-space reserve.
-    fn from_env(env: &Env, paths: &Paths, settings: &Config) -> Result<Self, Error> {
+    fn from_env(env: &Env, paths: &Paths, settings: &Config, runtime: &tokio::runtime::Handle) -> Result<Self, Error> {
         if fake(env) {
             let rate =
                 env.var("TORRENTIAL_TEST_FAKE_RATE").and_then(torrential_core::units::parse_size).unwrap_or(10 << 20);
@@ -77,9 +77,10 @@ impl Ports {
         };
         let search =
             torrential_search::SearchConfig { cache_dir: Some(paths.cache.join("search")), ..settings.search.clone() };
+        let search: Arc<dyn SearchPort> = Arc::new(search_port::Live::new(&search)?);
         Ok(Self {
-            search: Arc::new(search_port::Live::new(&search)?),
-            engine: Box::new(Libtorrent::start(&paths.state, network)?),
+            engine: Box::new(Libtorrent::start(&paths.state, network, search.clone(), runtime.clone())?),
+            search,
             parse: libtorrent::parse,
             disk,
         })
@@ -208,7 +209,7 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         .build()
         .map_err(|e| Error::internal(format!("cannot start the async runtime: {e}")))?;
     let version = env.version();
-    let ports = Ports::from_env(env, paths, &settings)?;
+    let ports = Ports::from_env(env, paths, &settings, runtime.handle())?;
     let engine = runtime.block_on(async {
         let socket = paths.socket();
         let _ = std::fs::remove_file(&socket);
