@@ -6,7 +6,8 @@ use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
 use torrential_core::units::{format_limit, format_size, size_text};
 use torrential_core::{
-    Category, ErrorCode, Job, JobStatus, Preferences, Release, ReleaseId, SearchResult, Selection, SourceOutcome,
+    Category, ErrorCode, Job, JobStatus, Preferences, Profile, Release, ReleaseId, SearchResult, Selection,
+    SourceOutcome,
     TorrentId,
 };
 
@@ -153,14 +154,18 @@ fn is_video(result: &SearchResult) -> bool {
         || result.releases.iter().filter(video).count() * 2 > result.releases.len()
 }
 
-/// The doctor's preferences row.
-pub fn preferences_check(preferences: Option<&Preferences>) -> Check {
-    let detail = match preferences {
-        None => "not set; torrential setup asks three questions".to_string(),
-        Some(p) if p.is_empty() => "skipped".to_string(),
-        Some(p) => p.describe(),
-    };
-    Check { check: "preferences".into(), status: CheckStatus::Ok, detail }
+/// `this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English`, and the preferences that
+/// override detection when there are any.
+pub fn ranked_for(profile: &Profile) -> String {
+    match profile.overrides() {
+        Some(overrides) => format!("{} · overrides: {overrides}", profile.describe()),
+        None => profile.describe(),
+    }
+}
+
+/// The doctor's profile row.
+pub fn profile_check(profile: &Profile) -> Check {
+    Check { check: "profile".into(), status: CheckStatus::Ok, detail: ranked_for(profile) }
 }
 
 pub fn files(reply: &FilesReply) -> Doc {

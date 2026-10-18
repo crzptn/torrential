@@ -439,12 +439,17 @@ fn doctor(env: &Env, mode: Mode, network: bool) -> u8 {
         }
         Err(error) => checks.push(check("skill", CheckStatus::Fail, error.message)),
     }
-    let preferences = match &settings {
-        Ok(settings) => views::preferences_check(settings.preferences.as_ref()),
-        Err(_) => check("preferences", CheckStatus::Skipped, "the config has an error".into()),
+    let profile = match (&settings, crate::machine::detect(env)) {
+        (Ok(settings), Ok(machine)) => views::profile_check(&torrential_core::Profile {
+            detected: Some(machine),
+            preferences: settings.preferences.unwrap_or_default(),
+            room: None,
+        }),
+        (Err(_), _) => check("profile", CheckStatus::Skipped, "the config has an error".into()),
+        (_, Err(error)) => check("profile", CheckStatus::Fail, error.message),
     };
     checks.extend(probe::checks(&paths, settings, network));
-    checks.push(preferences);
+    checks.push(profile);
     emit(mode, &views::doctor(&checks, fix), &Typed { kind: "doctor", body: Checks { checks: &checks } })
 }
 
