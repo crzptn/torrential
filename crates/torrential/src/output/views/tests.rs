@@ -46,9 +46,17 @@ fn release(id: ReleaseId, name: &str) -> Release {
     }
 }
 
+/// This MacBook Pro, with 400 GiB to spare.
+fn mac() -> torrential_core::Profile {
+    use torrential_core::{Arch, Display, Language, Machine, Os, Profile};
+    let display = Some(Display { width: 3024, height: 1964, hdr: true });
+    let machine = Machine { os: Os::Macos, display, arch: Some(Arch::Arm64), language: Language::from_locale("en-IN") };
+    Profile { detected: Some(machine), room: Some(400 * GIB), ..Profile::default() }
+}
+
 fn search_result(releases: Vec<Release>, total: u32, sources: Vec<SourceReport>) -> SearchResult {
     SearchResult {
-        query: SearchQuery::new("arch linux iso"),
+        query: SearchQuery { profile: mac(), ..SearchQuery::new("arch linux iso") },
         releases,
         total,
         hidden_adult: 0,
@@ -121,34 +129,43 @@ fn search_for_a_film_shows_the_quality_its_names_give() {
         3,
         vec![report("archive.org", SourceOutcome::Ok { results: 3 })],
     );
-    result.query = SearchQuery::new("night of the living dead 1968");
+    result.query = SearchQuery { profile: mac(), ..SearchQuery::new("night of the living dead 1968") };
     let doc = search(&result, NOW);
     insta::assert_snapshot!(render(Mode::Plain, &doc, &Response::Search { result }));
 }
 
 #[test]
-fn a_film_search_says_whether_the_setup_answers_ranked_it() {
-    use torrential_core::{Category, Playback, Preferences, Screen};
+fn film_and_software_searches_say_what_they_ranked_for() {
+    use torrential_core::{Category, Preferences, Profile, Screen};
     let film = Release {
         category: Some(Category::Video),
         ..release(ReleaseId::Torrent(tid("082e09")), "Night Of The Living Dead 720p 1968")
     };
     let iso = release(ReleaseId::Torrent(ARCH.parse().unwrap()), "archlinux-2026.10.01-x86_64.iso");
-    let tv =
-        Preferences { screen: Some(Screen::Tv4k), max_size: Some(8_000_000_000), playback: Some(Playback::HevcHdr) };
-    let summary = |releases: Vec<Release>, category: Option<Category>, preferences: Option<Preferences>| {
+    let book = release(ReleaseId::Torrent(tid("5c7c3c")), "Ubuntu Linux Bible, 11th Edition [PDF]");
+    let detected = mac();
+    let tv = Preferences { screen: Some(Screen::Tv4k), max_size: Some(8_000_000_000), ..Preferences::default() };
+    let summary = |releases: Vec<Release>, category: Option<Category>, profile: &Profile| {
         let mut result = search_result(releases, 1, vec![report("archive.org", SourceOutcome::Ok { results: 1 })]);
         result.query.category = category;
-        result.query.preferences = preferences;
+        result.query.profile = profile.clone();
         search(&result, NOW).summary[1..].to_vec()
     };
 
-    assert_eq!(summary(vec![film.clone()], None, None), ["preferences: not set · torrential setup"]);
-    assert_eq!(summary(Vec::new(), Some(Category::Video), None), ["preferences: not set · torrential setup"]);
-    assert_eq!(summary(vec![film.clone()], None, Some(tv)), ["ranked for a 4K TV, up to 8 GB, plays HEVC and HDR"]);
-    assert_eq!(summary(vec![film], None, Some(Preferences::default())), Vec::<String>::new());
-    assert_eq!(summary(vec![iso.clone()], None, None), Vec::<String>::new());
-    assert_eq!(summary(vec![iso], None, Some(tv)), Vec::<String>::new());
+    assert_eq!(
+        summary(vec![film.clone()], None, &detected),
+        ["ranked for this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English"]
+    );
+    assert_eq!(
+        summary(vec![film], None, &Profile { preferences: tv, ..detected.clone() }),
+        ["ranked for this Mac: 2160p screen, up to 8 GB, arm64, English · overrides: screen tv-4k, max_size 8GB"]
+    );
+    assert_eq!(
+        summary(Vec::new(), Some(Category::Video), &Profile::default()),
+        ["ranked for this machine, not detected yet"]
+    );
+    assert_eq!(summary(vec![iso], None, &detected), ["ranked for this Mac: arm64"]);
+    assert_eq!(summary(vec![book], None, &detected), Vec::<String>::new());
 }
 
 #[test]

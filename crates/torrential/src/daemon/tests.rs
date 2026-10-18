@@ -70,6 +70,16 @@ impl Harness {
             parse: parse_fake,
             search: Arc::new(search.clone()),
             disk: Box::new(disk.clone()),
+            machine: crate::machine::Detector::detected(
+                torrential_core::Machine {
+                    os: torrential_core::Os::Linux,
+                    display: None,
+                    arch: Some(torrential_core::Arch::X86_64),
+                    language: None,
+                },
+                dir.path().join("downloads"),
+                Box::new(disk.clone()),
+            ),
         };
         let store = Store::open(&dir.path().join("state.db")).unwrap();
         start(&tokio::runtime::Handle::current(), store, ports, config(dir.path()), "0.1.0".into()).unwrap()

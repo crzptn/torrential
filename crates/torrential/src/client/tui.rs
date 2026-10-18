@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use torrential_core::protocol::{Change, Event, FilesReply, GetReply, GetRequest, Request, Response};
-use torrential_core::{Error, ErrorCode, SearchQuery, SearchResult, Target};
+use torrential_core::{Error, ErrorCode, Profile, SearchQuery, SearchResult, Target};
 
 use super::connect::{self, Conn, DEFAULT_REPLY_WITHIN};
 use crate::config::{self, Config};
@@ -60,13 +60,14 @@ impl torrential_tui::Backend for EngineBackend {
         query: SearchQuery,
         partial: &mut dyn FnMut(SearchResult, Vec<String>),
     ) -> Result<SearchResult, Error> {
-        let query = SearchQuery { preferences: config::preferences(&self.paths)?, ..query };
+        let preferences = config::preferences(&self.paths)?.unwrap_or_default();
+        let query = SearchQuery { profile: Profile { preferences, ..Profile::default() }, ..query };
         let within = Duration::from_millis(query.timeout_ms.into()) + Duration::from_secs(10);
         let mut conn = self.conn()?;
         conn.send(&Request::Search { query, stream: true })?;
         loop {
             match conn.read_within::<SearchFrame>(within)? {
-                SearchFrame::Update(Event::SearchUpdate { result, pending }) => partial(result, pending),
+                SearchFrame::Update(Event::SearchUpdate { result, pending }) => partial(*result, pending),
                 SearchFrame::Update(_) => {}
                 SearchFrame::Reply(Response::Search { result }) => return Ok(result),
                 SearchFrame::Reply(Response::Error { error }) => return Err(error),

@@ -167,7 +167,7 @@ pub enum Event {
     },
     /// A streaming search's results so far. `pending` names the sources that have not answered.
     SearchUpdate {
-        result: SearchResult,
+        result: Box<SearchResult>,
         #[serde(default)]
         pending: Vec<String>,
     },

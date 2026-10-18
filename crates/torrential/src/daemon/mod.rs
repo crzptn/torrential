@@ -27,6 +27,7 @@ use torrential_core::{Error, ErrorCode};
 
 use crate::config::Config;
 use crate::env::Env;
+use crate::machine::Detector;
 use crate::paths::{self, Paths};
 use admission::Disk;
 use engine_port::{EnginePort, ParseTorrent};
@@ -48,6 +49,7 @@ pub struct Ports {
     pub parse: ParseTorrent,
     pub search: Arc<dyn SearchPort>,
     pub disk: Box<dyn Disk>,
+    pub machine: Arc<Detector>,
 }
 
 impl Ports {
@@ -65,15 +67,16 @@ impl Ports {
                 parse: engine_port::parse_fake,
                 search: Arc::new(fixture::search(owner::now())),
                 disk: Box::new(admission::RoomyDisk),
+                machine: Detector::start(env, settings.downloads_dir(paths), Box::new(admission::RoomyDisk)),
             });
         }
         let network = match env.var("TORRENTIAL_TEST_NETWORK") {
             Some("loopback") => Network::Loopback { peers: test_peers(env)? },
             _ => Network::Public,
         };
-        let disk: Box<dyn Disk> = match env.var("TORRENTIAL_TEST_DISK") {
-            Some("roomy") => Box::new(admission::RoomyDisk),
-            _ => Box::new(admission::RealDisk),
+        let roomy = env.var("TORRENTIAL_TEST_DISK") == Some("roomy");
+        let disk = || -> Box<dyn Disk + Sync> {
+            if roomy { Box::new(admission::RoomyDisk) } else { Box::new(admission::RealDisk) }
         };
         let search =
             torrential_search::SearchConfig { cache_dir: Some(paths.cache.join("search")), ..settings.search.clone() };
@@ -82,7 +85,8 @@ impl Ports {
             engine: Box::new(Libtorrent::start(&paths.state, network, search.clone(), runtime.clone())?),
             search,
             parse: libtorrent::parse,
-            disk,
+            disk: disk(),
+            machine: Detector::start(env, settings.downloads_dir(paths), disk()),
         })
     }
 }
@@ -123,8 +127,14 @@ pub fn start(
     let owner = Owner::new(store, engine.clone(), ports.parse, ports.disk, config)?;
     let (commands_tx, commands) = mpsc::unbounded_channel();
     let task = runtime.spawn(owner.run(commands, events));
-    let ctx =
-        Arc::new(Ctx { owner: OwnerHandle(commands_tx), search: ports.search, engine, parse: ports.parse, version });
+    let ctx = Arc::new(Ctx {
+        owner: OwnerHandle(commands_tx),
+        search: ports.search,
+        machine: ports.machine,
+        engine,
+        parse: ports.parse,
+        version,
+    });
     Ok(Running { ctx, owner: task, engine: thread })
 }
 

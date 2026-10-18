@@ -8,8 +8,8 @@ use std::sync::Arc;
 use sha1::{Digest, Sha1};
 use torrential_core::error::Details;
 use torrential_core::{
-    Error, ErrorCode, Flag, InfoHash, LocatorId, Preferences, Quality, Release, ReleaseId, Resolution, SearchQuery,
-    SearchResult, Sort, SourceReport, TorrentId,
+    Arch, Category, Error, ErrorCode, Flag, InfoHash, Language, LocatorId, Profile, Quality, Release, ReleaseId,
+    Resolution, SearchQuery, SearchResult, Sort, SourceReport, TorrentId,
 };
 
 use crate::classify;
@@ -45,11 +45,12 @@ pub(crate) fn vet(terms: &Terms, rows: Vec<Observation>) -> Result<Vec<Observati
 /// resolving their IDs later.
 pub(crate) fn assemble(
     query: &SearchQuery,
+    profile: Profile,
     terms: &Terms,
     runs: &[Run],
     elapsed_ms: u32,
 ) -> Result<(SearchResult, Vec<Release>), Error> {
-    let (result, linked) = merged(query, terms, runs, elapsed_ms);
+    let (result, linked) = merged(query, profile, terms, runs, elapsed_ms);
     if !result.sources.iter().any(|r| r.outcome.is_ok()) {
         return Err(all_failed(result.sources));
     }
@@ -57,9 +58,10 @@ pub(crate) fn assemble(
 }
 
 /// What the answers add up to, even when none succeeded, as a search still
-/// waiting on other sources shows them.
+/// waiting on other sources shows them. The result's query carries `profile`.
 pub(crate) fn merged(
     query: &SearchQuery,
+    profile: Profile,
     terms: &Terms,
     runs: &[Run],
     elapsed_ms: u32,
@@ -75,11 +77,12 @@ pub(crate) fn merged(
         rows.iter().map(|row| (&*run.source, row))
     });
     let (mut kept, hidden_adult) = filter(merge(sightings, terms), query);
-    rank(&mut kept, query.sort, query.preferences.unwrap_or_default());
+    rank(&mut kept, query.sort, &profile);
     let total = u32::try_from(kept.len()).unwrap_or(u32::MAX);
     kept.truncate(query.limit.into());
     let releases = kept.iter().map(Candidate::shown).collect();
-    let result = SearchResult { query: query.clone(), releases, total, hidden_adult, sources, elapsed_ms };
+    let query = SearchQuery { profile, ..query.clone() };
+    let result = SearchResult { query, releases, total, hidden_adult, sources, elapsed_ms };
     (result, kept.into_iter().map(|c| c.release).collect())
 }
 
@@ -119,6 +122,9 @@ pub(crate) struct Candidate {
     /// The resolution ranking goes by: the name's, unless the release is a trailer or sample
     /// or too small to hold the film at it.
     resolution: Option<Resolution>,
+    /// CPU architectures and languages the shown name marks.
+    arches: Vec<Arch>,
+    languages: Vec<Language>,
 }
 
 impl Candidate {
@@ -210,6 +216,8 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     let size = first(group, |o| o.size);
     let resolution =
         quality.resolution.filter(|r| !classify::is_extra(&name, terms) && !classify::is_too_small(size, *r));
+    let arches = Arch::named_in(&name);
+    let languages = Language::named_in(&name, terms.words());
     Candidate {
         hash,
         private_url: link.is_some_and(|(_, private, _)| private),
@@ -234,6 +242,8 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
         lawful: group.iter().any(|(s, _)| s.lawful),
         quality,
         resolution,
+        arches,
+        languages,
     }
 }
 
@@ -274,16 +284,20 @@ fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) 
 }
 
 /// One total order. `relevance` sorts by query relevance, then releases that fit the
-/// user's preferences, then official and lawful sources, then the resolution closest
-/// to the user's screen, with the resolution of a trailer or of a file too small to hold
-/// the film unknown, then seeders, then names with fewer words beyond the query, then
-/// downloads, then newer names, then ID. Without preferences every release fits and every
-/// resolution is as close. Above that floor a bigger file is no closer a match, so size
-/// never breaks a tie. The other sorts put their key first and fall back to that order.
-/// Unknown values sort last.
-fn rank(candidates: &mut [Candidate], sort: Sort, preferences: Preferences) {
-    let fits = |c: &Candidate| preferences.fits(c.release.size, c.quality);
-    let closeness = |c: &Candidate| preferences.closeness(c.resolution);
+/// profile's sizes and player, then official and lawful sources, then the resolution
+/// closest to the screen, then the machine's CPU architecture, then the system language,
+/// then seeders, then names with fewer words beyond the query, then downloads, then newer
+/// names, then ID. The resolution of a trailer, or of a file too small to hold the film at
+/// it, is unknown. Closeness counts only when most results are video, so the ISOs of a
+/// software search never rank below the episodes it also finds. With an empty profile
+/// every release fits and ties on the screen, architecture, and language. Above that
+/// floor a bigger file is no closer a match, so size never breaks a tie. The
+/// other sorts put their key first and fall back to that order. Unknown values sort last.
+fn rank(candidates: &mut [Candidate], sort: Sort, profile: &Profile) {
+    let fits = |c: &Candidate| profile.fits(c.release.size, c.quality);
+    let is_video = |c: &Candidate| c.release.category == Some(Category::Video) || c.quality.resolution.is_some();
+    let video_search = candidates.iter().filter(|c| is_video(c)).count() * 2 > candidates.len();
+    let closeness = |c: &Candidate| if video_search { profile.closeness(c.resolution) } else { 0 };
     candidates.sort_by(|a, b| {
         let (ra, rb) = (&a.release, &b.release);
         let primary = match sort {
@@ -297,6 +311,8 @@ fn rank(candidates: &mut [Candidate], sort: Sort, preferences: Preferences) {
             .then_with(|| fits(b).cmp(&fits(a)))
             .then_with(|| standing(b).cmp(&standing(a)))
             .then_with(|| closeness(a).cmp(&closeness(b)))
+            .then_with(|| profile.arch_rank(&a.arches).cmp(&profile.arch_rank(&b.arches)))
+            .then_with(|| profile.language_rank(&a.languages).cmp(&profile.language_rank(&b.languages)))
             .then_with(|| known_first_desc(ra.seeders, rb.seeders))
             .then_with(|| a.extra_words.cmp(&b.extra_words))
             .then_with(|| known_first_desc(a.downloads, b.downloads))

@@ -8,21 +8,26 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use torrential_core::{Error, ErrorCode, HexPrefix, Release, SearchQuery, SearchResult, SourceOutcome, SourceReport};
+use torrential_core::{
+    Error, ErrorCode, HexPrefix, Profile, Release, SearchQuery, SearchResult, SourceOutcome, SourceReport,
+};
 pub use torrential_search::Progress;
 use torrential_search::{ResultCache, Search, SearchConfig};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+/// The profile to rank for, asked each time results change.
+pub type RankFor<'a> = &'a (dyn Fn() -> Profile + Send + Sync);
 
 pub trait SearchPort: Send + Sync {
     /// Ranked results. Fails with `providers_unavailable` only when every source failed.
-    fn search(&self, query: SearchQuery) -> BoxFuture<'_, Result<SearchResult, Error>>;
+    fn search<'a>(&'a self, query: SearchQuery, rank_for: RankFor<'a>) -> BoxFuture<'a, Result<SearchResult, Error>>;
     /// Like [`SearchPort::search`], and sends the results so far each time a source answers.
-    fn search_stream(
-        &self,
+    fn search_stream<'a>(
+        &'a self,
         query: SearchQuery,
+        rank_for: RankFor<'a>,
         progress: mpsc::UnboundedSender<Progress>,
-    ) -> BoxFuture<'_, Result<SearchResult, Error>>;
+    ) -> BoxFuture<'a, Result<SearchResult, Error>>;
     /// The bytes of a `.torrent` file a search result links to.
     fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>>;
     /// `None` for a torrent that does not download from archive.org. See [`Search::mirrors`].
@@ -49,18 +54,19 @@ impl Live {
 }
 
 impl SearchPort for Live {
-    fn search(&self, query: SearchQuery) -> BoxFuture<'_, Result<SearchResult, Error>> {
-        Box::pin(async move { self.search.search(&query).await })
+    fn search<'a>(&'a self, query: SearchQuery, rank_for: RankFor<'a>) -> BoxFuture<'a, Result<SearchResult, Error>> {
+        Box::pin(async move { self.search.search_with_progress(&query, rank_for, |_| {}).await })
     }
 
-    fn search_stream(
-        &self,
+    fn search_stream<'a>(
+        &'a self,
         query: SearchQuery,
+        rank_for: RankFor<'a>,
         progress: mpsc::UnboundedSender<Progress>,
-    ) -> BoxFuture<'_, Result<SearchResult, Error>> {
+    ) -> BoxFuture<'a, Result<SearchResult, Error>> {
         Box::pin(async move {
             self.search
-                .search_with_progress(&query, |update| {
+                .search_with_progress(&query, rank_for, |update| {
                     let _ = progress.send(update);
                 })
                 .await
@@ -173,8 +179,15 @@ pub fn fake_catalog() -> Vec<Release> {
     ]
 }
 
-/// The result once the `answered` sources have answered. Catalog order is the ranking.
-fn compose(catalog: &[Release], answered: &[FakeSource], query: SearchQuery, elapsed: Duration) -> SearchResult {
+/// The result once the `answered` sources have answered. Catalog order is the ranking, and
+/// the query carries `profile`.
+fn compose(
+    catalog: &[Release],
+    answered: &[FakeSource],
+    query: SearchQuery,
+    profile: Profile,
+    elapsed: Duration,
+) -> SearchResult {
     let words: Vec<String> = query.text.split_whitespace().map(str::to_lowercase).collect();
     let matches = |r: &Release| words.iter().all(|w| r.name.to_lowercase().contains(w.as_str()));
     let listed_by = |r: &Release, source: &FakeSource| r.sources.first() == Some(&source.name);
@@ -194,36 +207,39 @@ fn compose(catalog: &[Release], answered: &[FakeSource], query: SearchQuery, ela
         .collect();
     let total = matching.len() as u32;
     let releases = matching.into_iter().take(query.limit as usize).collect();
+    let query = SearchQuery { profile, ..query };
     SearchResult { query, releases, total, hidden_adult: 0, sources, elapsed_ms: elapsed.as_millis() as u32 }
 }
 
 impl SearchPort for Fake {
-    fn search(&self, query: SearchQuery) -> BoxFuture<'_, Result<SearchResult, Error>> {
+    fn search<'a>(&'a self, query: SearchQuery, rank_for: RankFor<'a>) -> BoxFuture<'a, Result<SearchResult, Error>> {
         Box::pin(async move {
             let (catalog, script, delay) = self.parts();
             tokio::time::sleep(delay).await;
-            Ok(self.remember(compose(&catalog, &script, query, delay)))
+            Ok(self.remember(compose(&catalog, &script, query, rank_for(), delay)))
         })
     }
 
-    fn search_stream(
-        &self,
+    fn search_stream<'a>(
+        &'a self,
         query: SearchQuery,
+        rank_for: RankFor<'a>,
         progress: mpsc::UnboundedSender<Progress>,
-    ) -> BoxFuture<'_, Result<SearchResult, Error>> {
+    ) -> BoxFuture<'a, Result<SearchResult, Error>> {
         Box::pin(async move {
             let (catalog, script, _) = self.parts();
             let started = tokio::time::Instant::now();
             for answered in 1..script.len() {
                 tokio::time::sleep_until(started + script[answered - 1].after).await;
-                let result = self.remember(compose(&catalog, &script[..answered], query.clone(), started.elapsed()));
+                let partial = compose(&catalog, &script[..answered], query.clone(), rank_for(), started.elapsed());
+                let result = self.remember(partial);
                 let pending = script[answered..].iter().map(|s| s.name.clone()).collect();
                 let _ = progress.send(Progress { result, pending });
             }
             if let Some(last) = script.last() {
                 tokio::time::sleep_until(started + last.after).await;
             }
-            Ok(self.remember(compose(&catalog, &script, query, started.elapsed())))
+            Ok(self.remember(compose(&catalog, &script, query, rank_for(), started.elapsed())))
         })
     }
 

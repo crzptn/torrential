@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::id::ReleaseId;
-use crate::preferences::Preferences;
+use crate::profile::Profile;
 use crate::quality::Quality;
 
 /// A torrent offered by one or more search sources, merged by infohash. Its JSON
@@ -179,10 +179,10 @@ pub struct SearchQuery {
     /// Skips the result cache.
     #[serde(default)]
     pub fresh: bool,
-    /// The answers to `torrential setup`, which ranking favors. `None` means nobody has
-    /// answered yet, and empty preferences mean the user chose not to.
+    /// What ranking favors. A client sends the preferences, and the engine adds what it
+    /// detected about the machine, so a result's query holds the profile it ranked for.
     #[serde(default)]
-    pub preferences: Option<Preferences>,
+    pub profile: Profile,
 }
 
 impl SearchQuery {
@@ -201,7 +201,7 @@ impl SearchQuery {
             timeout_ms: Self::DEFAULT_TIMEOUT_MS,
             adult: false,
             fresh: false,
-            preferences: None,
+            profile: Profile::default(),
         }
     }
 }

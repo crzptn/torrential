@@ -82,10 +82,14 @@ const FIELDS: [FieldSchema; 3] = [
                Vision tag",
     },
     FieldSchema {
-        name: "result.query.preferences",
-        help: "The torrential setup answers the results were ranked with. Null when nobody has answered, and every \
-               field null when the user chose not to. Within equal relevance, results within max_size that the \
-               player handles come first, then official and lawful sources, then the resolution closest to the screen",
+        name: "result.query.profile",
+        help: "What the results were ranked for. screen and playback each carry a value and a source, detected or \
+               override, and are null when nothing is known. max_size comes from the preferences that torrential \
+               setup saves. room, arch, and language are detected, and room is the bytes a download may take in the \
+               download folder. detected is null until the engine finishes detecting the machine after it starts. \
+               Within equal relevance, results that fit max_size, the room, and the player come first, then \
+               official and lawful sources, then the resolution closest to the screen, then the machine's CPU \
+               architecture, then releases in the system language",
     },
 ];
 

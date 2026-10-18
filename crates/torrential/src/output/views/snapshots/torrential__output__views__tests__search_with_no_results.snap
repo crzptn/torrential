@@ -22,7 +22,35 @@ next: torrential search <other words>
       "timeout_ms": 6000,
       "adult": false,
       "fresh": false,
-      "preferences": null
+      "profile": {
+        "screen": {
+          "value": "1080p",
+          "source": "detected"
+        },
+        "playback": {
+          "value": "hevc-hdr",
+          "source": "detected"
+        },
+        "max_size": null,
+        "room": 429496729600,
+        "arch": "arm64",
+        "language": "en",
+        "detected": {
+          "os": "macos",
+          "display": {
+            "width": 3024,
+            "height": 1964,
+            "hdr": true
+          },
+          "arch": "arm64",
+          "language": "en"
+        },
+        "preferences": {
+          "screen": null,
+          "max_size": null,
+          "playback": null
+        }
+      }
     },
     "releases": [],
     "total": 0,

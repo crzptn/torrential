@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use torrential_core::protocol::{GetRequest, Request, Response};
-use torrential_core::{Error, ErrorCode, Preferences, SearchQuery, Target};
+use torrential_core::{Error, ErrorCode, Preferences, Profile, SearchQuery, Target};
 
 use crate::cli::{Command, DaemonCommand, GetArgs, SearchArgs, Until};
 use crate::daemon::server::METADATA_WAIT;
@@ -157,7 +157,7 @@ fn search(mut conn: Conn, args: SearchArgs, preferences: Option<Preferences>, mo
         timeout_ms: args.timeout.as_millis().min(u128::from(u32::MAX)) as u32,
         adult: args.adult,
         fresh: args.fresh,
-        preferences,
+        profile: Profile { preferences: preferences.unwrap_or_default(), ..Profile::default() },
     };
     let within = args.timeout + Duration::from_secs(10);
     match answer(conn.call_within(&Request::Search { query, stream: false }, within)?)? {
@@ -440,7 +440,7 @@ fn doctor(env: &Env, mode: Mode, network: bool) -> u8 {
         Err(error) => checks.push(check("skill", CheckStatus::Fail, error.message)),
     }
     let profile = match (&settings, crate::machine::detect(env)) {
-        (Ok(settings), Ok(machine)) => views::profile_check(&torrential_core::Profile {
+        (Ok(settings), Ok(machine)) => views::profile_check(&Profile {
             detected: Some(machine),
             preferences: settings.preferences.unwrap_or_default(),
             room: None,

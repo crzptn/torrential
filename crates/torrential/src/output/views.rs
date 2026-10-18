@@ -6,9 +6,8 @@ use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
 use torrential_core::units::{format_limit, format_size, size_text};
 use torrential_core::{
-    Category, ErrorCode, Job, JobStatus, Preferences, Profile, Release, ReleaseId, SearchResult, Selection,
-    SourceOutcome,
-    TorrentId,
+    Arch, Category, ErrorCode, Job, JobStatus, Preferences, Profile, Release, ReleaseId, SearchResult, Selection,
+    SourceOutcome, TorrentId,
 };
 
 use super::format::{self, NONE};
@@ -136,12 +135,11 @@ pub fn search(result: &SearchResult, now: i64) -> Doc {
         header.insert(3, "QUALITY");
     }
     let mut summary = vec![line.join(" · ")];
+    let profile = &result.query.profile;
     if is_video(result) {
-        match result.query.preferences {
-            None => summary.push("preferences: not set · torrential setup".to_string()),
-            Some(p) if !p.is_empty() => summary.push(format!("ranked for {}", p.describe())),
-            Some(_) => {}
-        }
+        summary.push(format!("ranked for {}", ranked_for(profile)));
+    } else if result.releases.iter().any(|r| !Arch::named_in(&r.name).is_empty()) {
+        summary.push(format!("ranked for {}", profile.describe_arch()));
     }
     Doc { body: Body::Table { header, rows }, summary, next: Some(next.to_string()) }
 }

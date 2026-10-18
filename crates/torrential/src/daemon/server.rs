@@ -19,6 +19,7 @@ use super::files;
 use super::magnet::{self, Magnet};
 use super::owner::{Command, FileBytes, FilesInfo, GetCommand, MetaTarget, Origin, Reply, Resolved, Source, Update};
 use super::search_port::{Progress, SearchPort};
+use crate::machine::Detector;
 use crate::wire;
 
 /// The largest `.torrent` file torrential reads.
@@ -50,6 +51,7 @@ fn stopping() -> Error {
 pub struct Ctx {
     pub owner: OwnerHandle,
     pub search: Arc<dyn SearchPort>,
+    pub machine: Arc<Detector>,
     pub engine: EngineHandle,
     pub parse: ParseTorrent,
     pub version: String,
@@ -94,7 +96,8 @@ pub async fn handle(ctx: &Ctx, request: Request) -> Response {
 }
 
 async fn search(ctx: &Ctx, query: SearchQuery) -> Result<SearchResult, Error> {
-    let mut result = ctx.search.search(query).await?;
+    let preferences = query.profile.preferences;
+    let mut result = ctx.search.search(query, &|| ctx.machine.profile(preferences)).await?;
     record(ctx, &mut result);
     Ok(result)
 }
@@ -110,14 +113,16 @@ fn record(ctx: &Ctx, result: &mut SearchResult) {
 
 async fn stream_search(ctx: &Ctx, query: SearchQuery, wr: &mut OwnedWriteHalf) -> std::io::Result<()> {
     let (progress_tx, mut progress) = mpsc::unbounded_channel();
-    let search = ctx.search.search_stream(query, progress_tx);
+    let preferences = query.profile.preferences;
+    let rank_for = || ctx.machine.profile(preferences);
+    let search = ctx.search.search_stream(query, &rank_for, progress_tx);
     tokio::pin!(search);
     let result = loop {
         tokio::select! {
             biased;
             Some(Progress { mut result, pending }) = progress.recv() => {
                 record(ctx, &mut result);
-                wire::write_async(wr, &Event::SearchUpdate { result, pending }).await?;
+                wire::write_async(wr, &Event::SearchUpdate { result: Box::new(result), pending }).await?;
             }
             result = &mut search => break result,
         }

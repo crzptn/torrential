@@ -127,6 +127,10 @@ impl Run {
     }
 }
 
+/// This MacBook Pro: a 3024x1964 XDR panel, arm64, and English.
+const MAC: &str =
+    r#"{"os": "macos", "display": {"width": 3024, "height": 1964, "hdr": true}, "arch": "arm64", "language": "en"}"#;
+
 impl Home {
     fn new(server: &Server, enabled: &[&str], sources: &str) -> Home {
         let dir = tempfile::tempdir().unwrap();
@@ -141,6 +145,7 @@ impl Home {
                 ("TORRENTIAL_TEST_NETWORK", "loopback".into()),
                 ("TORRENTIAL_TEST_DISK", "roomy".into()),
                 ("TORRENTIAL_TEST_ENDPOINTS", endpoints.join(",")),
+                ("TORRENTIAL_TEST_MACHINE", MAC.into()),
             ],
             dir,
         };
@@ -497,7 +502,7 @@ fn files_on_an_archive_org_result_reads_its_torrent_url_not_the_bare_magnet() {
 }
 
 #[test]
-fn setup_answers_rank_a_film_search_and_say_so() {
+fn the_machine_and_preferences_rank_a_film_search_and_say_so() {
     let server = Server::start(|_| {
         vec![(
             "/archive.org/advancedsearch.php",
@@ -525,17 +530,19 @@ fn setup_answers_rank_a_film_search_and_say_so() {
     assert_eq!(home.run(&["setup", "--screen", "laptop", "--max-size", "2GB", "--playback", "h264"]).code, 0);
     let after = home.run(&search);
 
+    // The Spanish dub ranks below the other 1080p releases for an English Mac, and an 8.3 MiB
+    // file tagged 1080p is too small to be the film, so it leaves the top.
     assert_eq!(
         shown(&before),
         [
-            "SIZE | NAME",
-            "1.1 GiB | Night of the Living Dead (1968)",
-            "1.1 GiB | Night of the Living Dead (1968)",
-            "528.0 MiB | Night of the Living Dead (1968)",
-            "1.8 GiB | Night of the Living Dead (1968)",
-            "3.5 GiB | Night Of The Living Dead ( 1968)",
-            "742.1 MiB | Night Of The Living Dead ( 1968)",
-            "# preferences: not set · torrential setup",
+            "SIZE | QUALITY | NAME",
+            "3.4 GiB | 1080p | Night Of The Living Dead ( 1968) English FULL HD",
+            "16.8 GiB | 1080p | Night of the Living Dead (1968) [P&M] 1080p Alternate Crop (16GB)",
+            "3.4 GiB | 1080p | Night Of The Living Dead ( 1968) Doblada Al Español FULL HD",
+            "1.0 GiB | 720p | Night Of The Living Dead 720p 1968",
+            "54.7 GiB | 2160p | Night of the Living Dead (1968) (4k Remaster)",
+            "6.4 GiB | 2160p | Night of the Living Dead (1968) [colorised, 4k, 60FPS]",
+            "# ranked for this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English",
         ]
     );
     // Trailers tagged 1080p and 720p stay below the film, and so does an 8.3 MiB file tagged 1080p.
@@ -549,7 +556,8 @@ fn setup_answers_rank_a_film_search_and_say_so() {
             "528.0 MiB | - | Night of the Living Dead (1968)",
             "1.8 GiB | - | Night of the Living Dead (1968)",
             "742.1 MiB | - | Night Of The Living Dead ( 1968)",
-            "# ranked for a laptop or monitor, up to 2 GB, avoids HEVC and HDR",
+            "# ranked for this Mac: 1080p screen, no HDR, H.264 only, up to 2 GB, arm64, English · overrides: screen \
+             laptop, max_size 2GB, playback h264",
         ]
     );
 }

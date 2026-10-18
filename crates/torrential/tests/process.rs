@@ -17,6 +17,10 @@ struct Run {
     stderr: String,
 }
 
+/// This MacBook Pro: a 3024x1964 XDR panel, arm64, and English.
+const MAC: &str =
+    r#"{"os": "macos", "display": {"width": 3024, "height": 1964, "hdr": true}, "arch": "arm64", "language": "en"}"#;
+
 impl Home {
     fn new() -> Self {
         Self::with(&[])
@@ -29,6 +33,7 @@ impl Home {
             ("TORRENTIAL_HOME", dir.path().join("th").display().to_string()),
             ("TORRENTIAL_TEST_IDLE_TIMEOUT", "30s".to_string()),
             ("TORRENTIAL_TEST_NETWORK", "loopback".to_string()),
+            ("TORRENTIAL_TEST_MACHINE", MAC.to_string()),
         ];
         all.extend(vars.iter().map(|(k, v)| (*k, v.to_string())));
         Self { dir, vars: all }

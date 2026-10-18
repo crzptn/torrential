@@ -633,7 +633,7 @@ async fn progress_shows_each_answer_and_the_final_ranking_is_unchanged() {
     let streamed = Search::new(&server.config(&sources), ResultCache::new()).unwrap();
     let mut updates: Vec<Progress> = Vec::new();
 
-    let last = streamed.search_with_progress(&q, |p| updates.push(p)).await.unwrap();
+    let last = streamed.search_with_progress(&q, || q.profile.clone(), |p| updates.push(p)).await.unwrap();
     let whole = Search::new(&server.config(&sources), ResultCache::new()).unwrap().search(&q).await.unwrap();
 
     let seen: Vec<String> = updates

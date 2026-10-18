@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use torrential_core::error::Details;
 use torrential_core::{
-    Category, ErrorCode, Flag, Playback, Preferences, Release, ReleaseId, Screen, SearchQuery, Sort, SourceOutcome,
-    SourceReport,
+    Arch, Category, Display, ErrorCode, Flag, Language, Machine, Os, Playback, Preferences, Profile, Release,
+    ReleaseId, Screen, SearchQuery, Sort, SourceOutcome, SourceReport,
 };
 
 use super::*;
@@ -44,7 +44,7 @@ fn failed(source: &Arc<SourceMeta>, failure: Failure) -> Run {
 }
 
 fn search(query: &SearchQuery, runs: &[Run]) -> SearchResult {
-    assemble(query, &Terms::parse(&query.text), runs, 1200).unwrap().0
+    assemble(query, query.profile.clone(), &Terms::parse(&query.text), runs, 1200).unwrap().0
 }
 
 fn names(result: &SearchResult) -> Vec<&str> {
@@ -171,6 +171,7 @@ fn private_links_stay_out_of_results_and_with_their_own_listing() {
 
     let (shown, linked) = assemble(
         &q,
+        Profile::default(),
         &Terms::parse(&q.text),
         &[fresh(&knaben(), vec![public]), fresh(&torznab, vec![private, private_only])],
         0,
@@ -212,7 +213,8 @@ fn locator_rows_get_a_stable_u_ref() {
     let locator = || Observation::new(Identity::Locator { torrent_url: url.into() }, "Ubuntu 26.04 LTS").unwrap();
     let torznab = source("tracker", 8, false, false);
     let q = SearchQuery::new("ubuntu");
-    let (first, linked) = assemble(&q, &Terms::parse(&q.text), &[fresh(&torznab, vec![locator()])], 0).unwrap();
+    let (first, linked) =
+        assemble(&q, Profile::default(), &Terms::parse(&q.text), &[fresh(&torznab, vec![locator()])], 0).unwrap();
     let again = search(&q, &[fresh(&torznab, vec![locator(), locator()])]);
     let digest: [u8; 20] = Sha1::digest(url.as_bytes()).into();
     assert_eq!(first.releases[0].id, ReleaseId::Locator(LocatorId::from_bytes(digest)));
@@ -273,7 +275,10 @@ const GB: u64 = 1_000_000_000;
 /// One film in every quality, each name matching the query as well as the others.
 fn remasters() -> Vec<Run> {
     let film = |byte, tags: &str, seeders, size| {
-        with(row(&h(byte), &format!("Night of the Living Dead 1968 {tags}")), Some(seeders), Some(size), None)
+        let mut o =
+            with(row(&h(byte), &format!("Night of the Living Dead 1968 {tags}")), Some(seeders), Some(size), None);
+        o.category = Some(Category::Video);
+        o
     };
     let mut lawful = with(row(&h(0x10), "Night of the Living Dead 1968 4K Remaster"), None, Some(58 * GB), None);
     lawful.category = Some(Category::Video);
@@ -294,9 +299,23 @@ fn remasters() -> Vec<Run> {
     ]
 }
 
-/// The tags after the title, in rank order, for these preferences.
-fn ranked(preferences: Option<Preferences>) -> Vec<String> {
-    let q = SearchQuery { preferences, ..SearchQuery::new("night of the living dead 1968") };
+fn machine(locale: &str, display: Option<Display>, arch: Arch) -> Machine {
+    Machine { os: Os::Macos, display, arch: Some(arch), language: Language::from_locale(locale) }
+}
+
+/// This MacBook Pro: a 3024x1964 XDR panel, arm64, and English.
+fn mac() -> Profile {
+    let panel = Display { width: 3024, height: 1964, hdr: true };
+    Profile { detected: Some(machine("en-IN", Some(panel), Arch::Arm64)), ..Profile::default() }
+}
+
+fn preferring(preferences: Preferences) -> Profile {
+    Profile { preferences, ..Profile::default() }
+}
+
+/// The tags after the title, in rank order, for this profile.
+fn ranked(profile: Profile) -> Vec<String> {
+    let q = SearchQuery { profile, ..SearchQuery::new("night of the living dead 1968") };
     names(&search(&q, &remasters()))
         .iter()
         .map(|n| n.trim_start_matches("Night of the Living Dead 1968 ").to_string())
@@ -304,26 +323,42 @@ fn ranked(preferences: Option<Preferences>) -> Vec<String> {
 }
 
 #[test]
-fn without_preferences_lawful_sources_then_seeders_lead() {
-    let expected = [
-        "4K Remaster",
-        "Restored",
-        "2160p UHD BluRay HDR10 x265",
-        "2160p WEB x265",
-        "1080p BluRay x264",
-        "1080p WEB x265",
-        "720p BluRay x264",
-        "DVDRip",
-    ];
-    assert_eq!(ranked(None), expected);
-    assert_eq!(ranked(Some(Preferences::default())), expected);
+fn without_a_profile_lawful_sources_then_seeders_lead() {
+    assert_eq!(
+        ranked(Profile::default()),
+        [
+            "4K Remaster",
+            "Restored",
+            "2160p UHD BluRay HDR10 x265",
+            "2160p WEB x265",
+            "1080p BluRay x264",
+            "1080p WEB x265",
+            "720p BluRay x264",
+            "DVDRip",
+        ]
+    );
 }
 
 #[test]
 fn a_screen_ranks_its_resolution_first_and_unknown_resolutions_last() {
-    let for_screen = |screen| ranked(Some(Preferences { screen: Some(screen), ..Preferences::default() }));
     assert_eq!(
-        for_screen(Screen::Tv4k),
+        ranked(mac()),
+        [
+            "4K Remaster",
+            "1080p BluRay x264",
+            "1080p WEB x265",
+            "720p BluRay x264",
+            "2160p UHD BluRay HDR10 x265",
+            "2160p WEB x265",
+            "DVDRip",
+            "Restored",
+        ]
+    );
+    let on = |screen| {
+        ranked(Profile { preferences: Preferences { screen: Some(screen), ..Preferences::default() }, ..mac() })
+    };
+    assert_eq!(
+        on(Screen::Tv4k),
         [
             "4K Remaster",
             "2160p UHD BluRay HDR10 x265",
@@ -336,27 +371,13 @@ fn a_screen_ranks_its_resolution_first_and_unknown_resolutions_last() {
         ]
     );
     assert_eq!(
-        for_screen(Screen::Laptop),
+        on(Screen::Phone),
         [
             "4K Remaster",
-            "1080p BluRay x264",
-            "1080p WEB x265",
-            "720p BluRay x264",
-            "2160p UHD BluRay HDR10 x265",
-            "2160p WEB x265",
-            "DVDRip",
-            "Restored",
-        ]
-    );
-    // A phone takes 720p as readily as 1080p, so seeders decide between them.
-    assert_eq!(
-        for_screen(Screen::Phone),
-        [
-            "4K Remaster",
-            "1080p BluRay x264",
-            "1080p WEB x265",
             "720p BluRay x264",
             "DVDRip",
+            "1080p BluRay x264",
+            "1080p WEB x265",
             "2160p UHD BluRay HDR10 x265",
             "2160p WEB x265",
             "Restored",
@@ -365,27 +386,44 @@ fn a_screen_ranks_its_resolution_first_and_unknown_resolutions_last() {
 }
 
 #[test]
-fn a_size_cap_ranks_what_fits_first_even_before_lawful_sources() {
-    let capped = ranked(Some(Preferences { max_size: Some(8 * GB), ..Preferences::default() }));
+fn an_sdr_display_ranks_hdr_after_everything_it_shows_well() {
+    let monitor = Display { width: 1920, height: 1080, hdr: false };
+    let linux = Profile { detected: Some(machine("en_US.UTF-8", Some(monitor), Arch::X86_64)), ..Profile::default() };
     assert_eq!(
-        capped,
+        ranked(linux),
         [
-            "Restored",
+            "4K Remaster",
             "1080p BluRay x264",
             "1080p WEB x265",
             "720p BluRay x264",
-            "DVDRip",
-            "4K Remaster",
-            "2160p UHD BluRay HDR10 x265",
             "2160p WEB x265",
+            "DVDRip",
+            "Restored",
+            "2160p UHD BluRay HDR10 x265",
         ]
     );
+}
+
+#[test]
+fn a_size_cap_or_a_full_disk_ranks_what_fits_first_even_before_lawful_sources() {
+    let expected = [
+        "Restored",
+        "1080p BluRay x264",
+        "1080p WEB x265",
+        "720p BluRay x264",
+        "DVDRip",
+        "4K Remaster",
+        "2160p UHD BluRay HDR10 x265",
+        "2160p WEB x265",
+    ];
+    assert_eq!(ranked(preferring(Preferences { max_size: Some(8 * GB), ..Preferences::default() })), expected);
+    assert_eq!(ranked(Profile { room: Some(8 * GB), ..Profile::default() }), expected);
 }
 
 #[test]
 fn a_player_ranks_what_it_may_not_play_last() {
-    let for_player = |playback| ranked(Some(Preferences { playback: Some(playback), ..Preferences::default() }));
-    assert_eq!(for_player(Playback::HevcHdr), ranked(None));
+    let for_player = |playback| ranked(preferring(Preferences { playback: Some(playback), ..Preferences::default() }));
+    assert_eq!(for_player(Playback::HevcHdr), ranked(Profile::default()));
     assert_eq!(
         for_player(Playback::Hevc),
         [
@@ -415,10 +453,10 @@ fn a_player_ranks_what_it_may_not_play_last() {
 }
 
 #[test]
-fn every_answer_together_ranks_fit_then_lawful_then_screen() {
+fn every_preference_together_ranks_fit_then_lawful_then_screen() {
     let laptop = Preferences { screen: Some(Screen::Laptop), max_size: Some(2 * GB), playback: Some(Playback::H264) };
     assert_eq!(
-        ranked(Some(laptop)),
+        ranked(Profile { preferences: laptop, ..mac() }),
         [
             "720p BluRay x264",
             "DVDRip",
@@ -437,21 +475,104 @@ fn a_tagged_trailer_ranks_after_the_film_on_a_screen() {
     let film = with(row(&h(0x20), "Night of the Living Dead 1968"), Some(40), Some(GB), None);
     let trailer = with(row(&h(0x21), "Night of the Living Dead 1968 Trailer HD 1080p"), Some(40), Some(GB / 10), None);
     let runs = [fresh(&knaben(), vec![trailer, film])];
-    let laptop = Preferences { screen: Some(Screen::Laptop), ..Preferences::default() };
-    let ranked = |preferences| {
-        let q = SearchQuery { preferences, ..SearchQuery::new("night of the living dead 1968") };
+    let ranked = |profile| {
+        let q = SearchQuery { profile, ..SearchQuery::new("night of the living dead 1968") };
         names(&search(&q, &runs)).iter().map(|n| n.to_string()).collect::<Vec<_>>()
     };
     let film_first = ["Night of the Living Dead 1968", "Night of the Living Dead 1968 Trailer HD 1080p"];
-    assert_eq!(ranked(None), film_first);
-    assert_eq!(ranked(Some(laptop)), film_first);
+    assert_eq!(ranked(Profile::default()), film_first);
+    assert_eq!(ranked(mac()), film_first);
+}
+
+#[test]
+fn a_screen_leaves_releases_that_are_not_video_to_seeders() {
+    // Names from knaben/v2-search-ubuntu.json.
+    let mut episode = with(
+        row(&h(0x50), "Celtics City S01E08 Chapter VIII Ubuntu 1080p AMZN WEB-DL DDP5 1 H 264-Kits"),
+        Some(1),
+        Some(4 * GB),
+        None,
+    );
+    episode.category = Some(Category::Video);
+    let iso = with(row(&h(0x51), "ubuntu-26.04-desktop-amd64.iso"), Some(143), Some(6 * GB), None);
+    let runs = [fresh(&knaben(), vec![episode, iso])];
+    let q = SearchQuery { profile: mac(), ..SearchQuery::new("ubuntu") };
+    assert_eq!(
+        names(&search(&q, &runs)),
+        [
+            "ubuntu-26.04-desktop-amd64.iso",
+            "Celtics City S01E08 Chapter VIII Ubuntu 1080p AMZN WEB-DL DDP5 1 H 264-Kits"
+        ]
+    );
+}
+
+#[test]
+fn the_machines_architecture_breaks_a_tie_before_seeders() {
+    // Names from debian/debian-cd-current-*-bt-cd.html.
+    let runs = [fresh(
+        &knaben(),
+        vec![
+            with(row(&h(0x30), "debian-13.7.0-amd64-netinst.iso"), Some(50), Some(GB), None),
+            with(row(&h(0x31), "debian-13.7.0-arm64-netinst.iso"), Some(10), Some(GB), None),
+            with(row(&h(0x32), "debian-13.7.0-source-netinst.iso"), Some(30), Some(GB), None),
+        ],
+    )];
+    let ranked = |profile| {
+        let q = SearchQuery { profile, ..SearchQuery::new("debian 13.7 netinst") };
+        names(&search(&q, &runs)).iter().map(|n| n.to_string()).collect::<Vec<_>>()
+    };
+    let pc = Profile { detected: Some(machine("en", None, Arch::X86_64)), ..Profile::default() };
+    assert_eq!(
+        ranked(mac()),
+        ["debian-13.7.0-arm64-netinst.iso", "debian-13.7.0-amd64-netinst.iso", "debian-13.7.0-source-netinst.iso"]
+    );
+    assert_eq!(
+        ranked(pc),
+        ["debian-13.7.0-amd64-netinst.iso", "debian-13.7.0-source-netinst.iso", "debian-13.7.0-arm64-netinst.iso"]
+    );
+    assert_eq!(
+        ranked(Profile::default()),
+        ["debian-13.7.0-amd64-netinst.iso", "debian-13.7.0-source-netinst.iso", "debian-13.7.0-arm64-netinst.iso"]
+    );
+}
+
+#[test]
+fn the_system_language_breaks_a_tie_before_seeders() {
+    // Names from archive.org/advancedsearch.php-night-of-the-living-dead-1968.json.
+    let runs = [fresh(
+        &archive(),
+        vec![
+            with(row(&h(0x40), "Night Of The Living Dead ( 1968) Doblada Al Español FULL HD"), Some(9), None, None),
+            with(row(&h(0x41), "Night Of The Living Dead ( 1968) English FULL HD"), Some(3), None, None),
+        ],
+    )];
+    let ranked = |profile| {
+        let q = SearchQuery { profile, ..SearchQuery::new("night of the living dead 1968") };
+        names(&search(&q, &runs)).iter().map(|n| n.to_string()).collect::<Vec<_>>()
+    };
+    let english_first = [
+        "Night Of The Living Dead ( 1968) English FULL HD",
+        "Night Of The Living Dead ( 1968) Doblada Al Español FULL HD",
+    ];
+    let spanish_first = [english_first[1], english_first[0]];
+    let mexico = Profile { detected: Some(machine("es-MX", None, Arch::Arm64)), ..Profile::default() };
+    assert_eq!(ranked(mac()), english_first);
+    assert_eq!(ranked(mexico), spanish_first);
+    assert_eq!(ranked(Profile::default()), spanish_first);
+}
+
+#[test]
+fn the_result_carries_the_profile_it_ranked_for_in_place_of_the_querys() {
+    let q = SearchQuery::new("night of the living dead 1968");
+    let (result, _) = assemble(&q, mac(), &Terms::parse(&q.text), &remasters(), 0).unwrap();
+    assert_eq!((q.profile, result.query.profile), (Profile::default(), mac()));
 }
 
 #[test]
 fn a_file_too_small_for_its_tag_ranks_as_untagged_on_a_screen() {
     let laptop = Preferences { screen: Some(Screen::Laptop), ..Preferences::default() };
     let ranked = |text: &str, rows: Vec<Observation>| {
-        let q = SearchQuery { preferences: Some(laptop), ..SearchQuery::new(text) };
+        let q = SearchQuery { profile: preferring(laptop), ..SearchQuery::new(text) };
         names(&search(&q, &[fresh(&knaben(), rows)])).iter().map(|n| n.to_string()).collect::<Vec<_>>()
     };
     let sized = |byte, name, size| with(row(&h(byte), name), Some(40), Some(size), None);
@@ -584,7 +705,7 @@ fn every_source_failing_is_an_error_not_an_empty_list() {
         failed(&knaben(), Failure::Timeout),
         failed(&archive(), Failure::Irrelevant),
     ];
-    let err = assemble(&q, &Terms::parse("ubuntu"), &runs, 6000).unwrap_err();
+    let err = assemble(&q, Profile::default(), &Terms::parse("ubuntu"), &runs, 6000).unwrap_err();
     assert_eq!(err.code, ErrorCode::ProvidersUnavailable);
     assert_eq!(err.message, "no source answered (archive.org, knaben, apibay)");
     assert_eq!(
@@ -673,7 +794,7 @@ fn a_thousand_shuffles_give_one_order() {
     let runs_from = |groups: &[(Arc<SourceMeta>, Vec<Observation>)]| -> Vec<Run> {
         groups.iter().map(|(s, rows)| fresh(s, rows.clone())).collect()
     };
-    let (expected, expected_linked) = assemble(&query, &terms, &runs_from(&base), 0).unwrap();
+    let (expected, expected_linked) = assemble(&query, Profile::default(), &terms, &runs_from(&base), 0).unwrap();
     assert_eq!(expected.releases.len(), 25);
     // The hybrid's group joins its v2 listing and keeps its longest listing name.
     let hybrid = expected.releases.iter().find(|r| r.id.to_ref() == h(0x01)).unwrap();
@@ -688,7 +809,7 @@ fn a_thousand_shuffles_give_one_order() {
         for (_, rows) in &mut groups {
             rng.shuffle(rows);
         }
-        let (shuffled, linked) = assemble(&query, &terms, &runs_from(&groups), 0).unwrap();
+        let (shuffled, linked) = assemble(&query, Profile::default(), &terms, &runs_from(&groups), 0).unwrap();
         assert_eq!(shuffled.releases, expected.releases);
         assert_eq!(linked, expected_linked);
         assert_eq!(shuffled.sources, expected.sources);

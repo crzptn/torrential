@@ -27,7 +27,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, timeout_at};
-use torrential_core::{Error, ErrorCode, SearchQuery, SearchResult, text};
+use torrential_core::{Error, ErrorCode, Profile, SearchQuery, SearchResult, text};
 use url::Url;
 
 use crate::assemble::{Answer, Run, assemble, merged, vet};
@@ -120,18 +120,22 @@ impl Search {
             .collect()
     }
 
-    /// Returns by the query's deadline. A source that has not answered by then is
-    /// reported as `timeout`. Fails with `providers_unavailable` when no source
-    /// answered, and with `usage` for a query without words or an unknown source.
+    /// Returns by the query's deadline, ranked for the query's profile. A source that has
+    /// not answered by then is reported as `timeout`. Fails with `providers_unavailable`
+    /// when no source answered, and with `usage` for a query without words or an unknown
+    /// source.
     pub async fn search(&self, query: &SearchQuery) -> Result<SearchResult, Error> {
-        self.search_with_progress(query, |_| {}).await
+        self.search_with_progress(query, || query.profile.clone(), |_| {}).await
     }
 
-    /// Like [`Search::search`], and calls `progress` each time sources answer while
-    /// others are still pending. Answers that arrive together make one call.
+    /// Like [`Search::search`], ranked for what `rank_for` returns each time results
+    /// change, so a profile that becomes known during the search applies. Calls
+    /// `progress` each time sources answer while others are still pending. Answers that
+    /// arrive together make one call.
     pub async fn search_with_progress(
         &self,
         query: &SearchQuery,
+        rank_for: impl Fn() -> Profile + Send,
         mut progress: impl FnMut(Progress) + Send,
     ) -> Result<SearchResult, Error> {
         let started = Instant::now();
@@ -180,7 +184,7 @@ impl Search {
                 runs.push(run);
             }
             if runs.len() < selected.len() {
-                let (result, linked) = merged(query, &terms, &runs, millis(started.elapsed()));
+                let (result, linked) = merged(query, rank_for(), &terms, &runs, millis(started.elapsed()));
                 cache.remember(&linked);
                 let pending = selected
                     .iter()
@@ -191,7 +195,7 @@ impl Search {
             }
         }
         self.inner.stores.save().await;
-        let (result, linked) = assemble(query, &terms, &runs, millis(started.elapsed()))?;
+        let (result, linked) = assemble(query, rank_for(), &terms, &runs, millis(started.elapsed()))?;
         cache.remember(&linked);
         Ok(result)
     }

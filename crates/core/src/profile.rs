@@ -263,14 +263,11 @@ impl Profile {
         }
     }
 
-    /// 0 for a name that mentions this machine's architecture, 1 for one that mentions none,
-    /// and 2 for one that mentions only others.
+    /// 0 for a name that mentions this machine's architecture, and 1 for any other. A name
+    /// for another architecture ranks no lower than one without, so on an arm64 Mac a search
+    /// for Ubuntu still leads with its amd64 ISOs, not with TV episodes that mention Ubuntu.
     pub fn arch_rank(&self, named: &[Arch]) -> u8 {
-        match self.arch() {
-            Some(host) if !named.is_empty() && !named.contains(&host) => 2,
-            Some(_) if named.is_empty() => 1,
-            _ => 0,
-        }
+        u8::from(self.arch().is_some_and(|host| !named.contains(&host)))
     }
 
     /// 0 for a name that marks the system language, 1 for one in the original language, and
@@ -290,11 +287,6 @@ impl Profile {
 
     /// `this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English`.
     pub fn describe(&self) -> String {
-        let machine = match &self.detected {
-            Some(Machine { os: Os::Macos, .. }) => "this Mac",
-            Some(_) => "this computer",
-            None => "this machine, not detected yet",
-        };
         let screen = match self.screen() {
             Some(screen) => Some(format!("{} screen", screen_label(screen.value))),
             None => self.detected.as_ref().map(|_| "no screen".to_string()),
@@ -309,6 +301,20 @@ impl Profile {
         .into_iter()
         .flatten()
         .collect();
+        self.labeled(&parts)
+    }
+
+    /// `this Mac: arm64`, for software, where only the architecture matters.
+    pub fn describe_arch(&self) -> String {
+        self.labeled(&self.arch().map(|a| a.as_str().to_string()).into_iter().collect::<Vec<_>>())
+    }
+
+    fn labeled(&self, parts: &[String]) -> String {
+        let machine = match &self.detected {
+            Some(Machine { os: Os::Macos, .. }) => "this Mac",
+            Some(_) => "this computer",
+            None => "this machine, not detected yet",
+        };
         if parts.is_empty() { machine.to_string() } else { format!("{machine}: {}", parts.join(", ")) }
     }
 
@@ -465,12 +471,12 @@ mod tests {
     }
 
     #[test]
-    fn the_host_architecture_ranks_first_and_another_last() {
+    fn the_host_architecture_ranks_first() {
         let arm = profile(Some(mac()), Preferences::default());
         let ranks = |p: &Profile| {
             [&[Arch::Arm64][..], &[], &[Arch::X86_64], &[Arch::X86_64, Arch::Arm64]].map(|n| p.arch_rank(n))
         };
-        assert_eq!(ranks(&arm), [0, 1, 2, 0]);
+        assert_eq!(ranks(&arm), [0, 1, 1, 0]);
         assert_eq!(ranks(&profile(None, Preferences::default())), [0, 0, 0, 0]);
     }
 
@@ -537,6 +543,7 @@ mod tests {
             ("this computer: no screen, x86_64".into(), None)
         );
         assert_eq!(line(profile(None, Preferences::default())), ("this machine, not detected yet".into(), None));
+        assert_eq!(profile(Some(mac()), tv).describe_arch(), "this Mac: arm64");
     }
 
     #[test]
