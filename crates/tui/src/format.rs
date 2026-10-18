@@ -81,32 +81,37 @@ fn separator(c: char) -> bool {
 /// version, resolution, and edition sit. A cut inside a word moves to a nearby break, so no
 /// fragment like `80p` is left.
 pub fn name(s: &str, max: usize) -> String {
-    if width(s) <= max || max < 8 {
+    let chars: Vec<char> = s.chars().collect();
+    let cells = |part: &[char]| part.iter().map(|&c| char_width(c)).sum::<usize>();
+    if width(s) <= max || max < 8 || cells(&chars) <= max {
         return ellipsize(s, max);
     }
-    let chars: Vec<char> = s.chars().collect();
     let inside = |at: usize| at > 0 && at < chars.len() && in_word(chars[at - 1]) && in_word(chars[at]);
     let room = max - 1;
     let (mut start, mut used) = (chars.len(), 0);
-    while used + char_width(chars[start - 1]) <= room * 2 / 3 {
+    while start > 0 && used + char_width(chars[start - 1]) <= room * 2 / 3 {
         start -= 1;
         used += char_width(chars[start]);
     }
     if inside(start) {
         start = (start..(start + NEAR).min(chars.len())).find(|&i| !in_word(chars[i])).unwrap_or(start);
     }
-    let tail: String = chars[start..].iter().collect();
-    let tail = tail.trim_start_matches(separator);
+    while start < chars.len() && separator(chars[start]) {
+        start += 1;
+    }
     let (mut end, mut used) = (0, 0);
-    while used + char_width(chars[end]) <= room - width(tail) {
+    while end < start && used + char_width(chars[end]) <= room - cells(&chars[start..]) {
         used += char_width(chars[end]);
         end += 1;
     }
     if inside(end) {
         end = (end.saturating_sub(NEAR)..end).rev().find(|&i| !in_word(chars[i])).unwrap_or(end);
     }
-    let head: String = chars[..end].iter().collect();
-    format!("{}…{tail}", head.trim_end_matches(separator))
+    while end > 0 && separator(chars[end - 1]) {
+        end -= 1;
+    }
+    let (head, tail): (String, String) = (chars[..end].iter().collect(), chars[start..].iter().collect());
+    format!("{head}…{tail}")
 }
 
 /// `now` under a minute, then `45m`, `5h`, `17d`, `2mo`, `3y`.
@@ -195,6 +200,8 @@ mod tests {
         assert_eq!(name("ubuntu-24.04.5-desktop-amd64.iso", 20), "ubuntu-24…amd64.iso");
         assert_eq!(name("Night of the Living Dead", 31), "Night of the Living Dead");
         assert_eq!(name("日本語のタイトル 第1話 1080p", 16), "日本語のタ…1080p");
+        let flags = "🏳\u{fe0f}".repeat(6);
+        assert_eq!((width(&flags), name(&flags, 10)), (12, format!("{flags}…")), "wider than its characters");
     }
 
     #[test]
