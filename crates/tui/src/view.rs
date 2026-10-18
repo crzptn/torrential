@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use torrential_core::units::format_duration;
-use torrential_core::{Flag, Job, JobStatus, Release, ReleaseId, SourceOutcome};
+use torrential_core::{Flag, Job, JobStatus, Release, ReleaseId, SourceOutcome, TorrentFile};
 
 use crate::format::{self, age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
 use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
@@ -87,9 +87,41 @@ fn rule(buf: &mut Buffer, top: u16, bottom: u16) {
     }
 }
 
-/// A rule that fills with ink as the bytes arrive, in half cells. `None` draws it empty.
-fn progress(buf: &mut Buffer, x: u16, y: u16, cells: u16, fraction: Option<f64>, ink: Color) {
-    let halves = (fraction.unwrap_or(0.0).clamp(0.0, 1.0) * f64::from(cells) * 2.0).floor() as u16;
+/// What a progress mark measures: the bytes verified out of a size, for a download or one of its
+/// files, and whether the download is getting bytes.
+#[derive(Clone, Copy)]
+struct Meter {
+    verified: u64,
+    /// Unknown until a peer sends the file list.
+    size: Option<u64>,
+    downloading: bool,
+}
+
+impl Meter {
+    fn job(job: &Job) -> Self {
+        let p = &job.progress;
+        Self { verified: p.verified, size: p.size, downloading: job.status == JobStatus::Downloading }
+    }
+
+    fn file(job: &Job, file: &TorrentFile) -> Self {
+        Self { verified: file.verified, size: Some(file.size), ..Self::job(job) }
+    }
+
+    fn fraction(self) -> f64 {
+        match self.size {
+            Some(0) => 1.0,
+            Some(size) => self.verified as f64 / size as f64,
+            None => 0.0,
+        }
+    }
+}
+
+/// The one place progress is drawn: a rule `cells` wide that fills in half cells, sage while the
+/// download gets bytes and pencil otherwise. A rain gauge can replace the rule here for rows
+/// getting bytes once the engine reports which pieces have arrived.
+fn progress_mark(buf: &mut Buffer, x: u16, y: u16, cells: u16, meter: Meter) {
+    let ink = if meter.downloading { ACTION } else { PENCIL };
+    let halves = (meter.fraction().clamp(0.0, 1.0) * f64::from(cells) * 2.0).floor() as u16;
     for i in 0..cells {
         let (glyph, color) = match halves.saturating_sub(i * 2) {
             0 => ("─", RULE),
@@ -433,8 +465,7 @@ fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
     }
     let room = g.rule - 2 - CONTENT;
     put(buf, CONTENT, y, room, &format::name(&name, room.into()), ink);
-    let moving = job.status == JobStatus::Downloading;
-    progress(buf, g.rule, y, g.rule_cells, p.fraction(), if moving { ACTION } else { PENCIL });
+    progress_mark(buf, g.rule, y, g.rule_cells, Meter::job(job));
     let pct = p.size.map_or("–".to_string(), |size| percent(p.verified, size));
     put_right(buf, g.percent, y, &pct, ink);
     if let Some(action) = state.pending.get(&job.id) {
@@ -498,7 +529,6 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
     let picked = files.picked();
     let inside = layout::in_files(state, job.id);
     let skip = if inside { files.scroll } else { 0 };
-    let ink = if job.status == JobStatus::Downloading { ACTION } else { PENCIL };
     let first = row;
     for (k, file) in picked.iter().enumerate().skip(skip).take(shown) {
         let here = inside && k == files.cursor;
@@ -511,8 +541,7 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
         let name = file.path.rsplit('/').next().unwrap_or(&file.path);
         let room = g.rule - 2 - DETAIL;
         put(buf, DETAIL, row, room, &middle(name, room as usize), if here { bold(INK) } else { fg(TEXT) });
-        let fraction = if file.size == 0 { 1.0 } else { file.verified as f64 / file.size as f64 };
-        progress(buf, g.rule, row, g.rule_cells, Some(fraction), ink);
+        progress_mark(buf, g.rule, row, g.rule_cells, Meter::file(job, file));
         put_right(buf, g.percent, row, &percent(file.verified, file.size), fg(PENCIL));
         put_right(buf, g.right, row, &size(file.size), fg(PENCIL));
         row += 1;
