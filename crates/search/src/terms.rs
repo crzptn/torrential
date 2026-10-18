@@ -97,7 +97,7 @@ impl Terms {
         // "spiderman" match "Spider-Man".
         let mut set: HashSet<String> = name_tokens.iter().cloned().collect();
         for run in 2..=3 {
-            set.extend(name_tokens.windows(run).map(|w| w.concat()));
+            set.extend(name_tokens.windows(run).filter(|w| joinable(w)).map(|w| w.concat()));
         }
         // Scripts written without spaces never split into whole words, so a
         // non-ASCII word matches anywhere in the name.
@@ -109,13 +109,20 @@ impl Terms {
             .collect();
         for run in 2..=3 {
             for (start, window) in self.words.windows(run).enumerate() {
-                if set.contains(&window.concat()) {
+                if joinable(window) && set.contains(&window.concat()) {
                     hits[start..start + run].fill(true);
                 }
             }
         }
         hits
     }
+}
+
+/// Two numbers side by side are a version or a channel count, as in "5.1", not
+/// one word: joined, "DD 5.1" would match a query for "area 51".
+fn joinable(run: &[String]) -> bool {
+    let number = |t: &String| t.bytes().all(|b| b.is_ascii_digit());
+    run.windows(2).all(|pair| !(number(&pair[0]) && number(&pair[1])))
 }
 
 fn tokens(s: &str) -> Vec<String> {
@@ -158,6 +165,16 @@ mod tests {
         assert!(terms.covers("Spider-Man No Way Home 2021"));
         assert_eq!(Terms::parse("wifi driver").relevance("Wi-Fi Driver Pack").matched, 2);
         assert!(!terms.covers("Spider Monkey Documentary"));
+        assert!(Terms::parse("h264").covers("Movie 2024 1080p H.264"));
+    }
+
+    #[test]
+    fn numbers_side_by_side_stay_apart() {
+        let area51 = Terms::parse("area 51");
+        assert!(!area51.is_relevant("Some Movie 2024 1080p BluRay DTS-HD MA 5.1 x264"));
+        assert_eq!(area51.relevance("Area 52 2024 DD 5.1").matched, 1);
+        assert_eq!(area51.relevance("Area 51 2015").matched, 2);
+        assert!(!Terms::parse("cifar 10").covers("CIFAR-100 python version 1.0"));
     }
 
     #[test]
