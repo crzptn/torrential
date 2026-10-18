@@ -139,20 +139,37 @@ fn wikipedia_with(status: JobStatus, map: Option<&str>) -> (State, Buffer, u16) 
     (state, buf, y)
 }
 
-/// Sixteen runs of four slices, one per cell of a 16-cell gauge.
+/// Thirty-two wanted slices among unwanted ones, two to each cell of a 16-cell gauge.
 const SCATTERED: &str = concat!(
-    "8888", "4444", "0000", "----", "88--", "0001", "8887", "1234", "8888", "8888", "----", "----", "2222", "6666",
-    "0000", "0000",
+    "8-8-", "--44", "0--0", "-01-", "8--7", "12--", "----", "6666", "-22-", "3-4-", "----", "8888", "0-0-", "--0-",
+    "-0--", "4444",
 );
+
+/// One small file in a large torrent: five wanted slices.
+const ONE_FILE: &str = concat!("----------------------------------------", "84026", "-------------------");
 
 #[test]
 fn a_download_getting_bytes_shows_where_its_pieces_sit() {
     let (state, buf, y) = wikipedia_with(JobStatus::Downloading, Some(SCATTERED));
-    assert!(line(&buf, y).contains(" █▄▁ █▁▇▃██  ▂▆▁▁ "), "{}", line(&buf, y));
-    let (x, _) = find(&buf, "█▄▁ █▁▇▃██");
+    assert_eq!(
+        line(&buf, y),
+        "    getting ● wikipedia-en-2026-09-text                       █▄▁▁▇▂▆▆▂▄██▁▁▄▄   22%      30m left"
+    );
+    let (x, _) = find(&buf, "█▄▁▁▇");
     let plain = render_in(&state, ColorMode::NoColor);
     assert!(plain[(x + 2, y)].modifier.contains(Modifier::DIM), "nothing has arrived: a faint floor");
-    assert!(!plain[(x + 5, y)].modifier.contains(Modifier::DIM), "an eighth has arrived: a full-ink floor");
+    assert!(!plain[(x + 3, y)].modifier.contains(Modifier::DIM), "an eighth has arrived: a full-ink floor");
+}
+
+#[test]
+fn a_gauge_spreads_a_few_wanted_slices_across_every_cell() {
+    let (_, buf, y) = wikipedia_with(JobStatus::Downloading, Some(ONE_FILE));
+    assert_eq!(
+        line(&buf, y),
+        "    getting ● wikipedia-en-2026-09-text                       ████▄▄▄▁▁▁▂▂▂▆▆▆   22%      30m left"
+    );
+    let (_, buf, y) = wikipedia_with(JobStatus::Downloading, Some(&"-".repeat(64)));
+    assert!(line(&buf, y).contains(" ━━━╸──────────── "), "nothing wanted: {}", line(&buf, y));
 }
 
 #[test]

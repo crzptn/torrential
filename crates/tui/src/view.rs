@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use torrential_core::units::format_duration;
-use torrential_core::{Flag, Job, JobStatus, PieceMap, Release, ReleaseId, Slice, SourceOutcome, TorrentFile};
+use torrential_core::{Eighths, Flag, Job, JobStatus, Release, ReleaseId, Slice, SourceOutcome, TorrentFile};
 
 use crate::format::{self, age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
 use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
@@ -95,22 +95,33 @@ fn rule(buf: &mut Buffer, top: u16, bottom: u16) {
 }
 
 /// What a progress mark shows.
-#[derive(Clone, Copy)]
 enum Meter {
     /// Bytes verified out of a size, drawn as a rule. `size` is unknown until a peer sends the
     /// file list. `getting` while the download gets bytes.
     Share { verified: u64, size: Option<u64>, getting: bool },
-    /// Where a downloading torrent's pieces sit.
-    Pieces(PieceMap),
+    /// Where a downloading torrent's pieces sit: its wanted slices in torrent order, never empty.
+    Pieces(Vec<Eighths>),
 }
 
 impl Meter {
     fn job(job: &Job) -> Self {
         let p = &job.progress;
         let getting = job.status == JobStatus::Downloading;
-        match p.piece_map {
-            Some(map) if getting => Self::Pieces(map),
-            _ => Self::Share { verified: p.verified, size: p.size, getting },
+        let wanted: Vec<Eighths> = match p.piece_map {
+            Some(map) if getting => map
+                .slices()
+                .iter()
+                .filter_map(|slice| match slice {
+                    Slice::Wanted(eighths) => Some(*eighths),
+                    Slice::Unwanted => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        if wanted.is_empty() {
+            Self::Share { verified: p.verified, size: p.size, getting }
+        } else {
+            Self::Pieces(wanted)
         }
     }
 
@@ -120,9 +131,8 @@ impl Meter {
 }
 
 /// The one place progress is drawn, `cells` wide. A share is a rule that fills in half cells,
-/// sage while the download gets bytes and pencil otherwise. Pieces are a rain gauge: each cell
-/// pools a run of the map's slices into one, counting only the wanted ones, and shows its eighths
-/// as a bar, an unfilled floor when nothing has arrived, or a gap when nothing there is wanted.
+/// sage while the download gets bytes and pencil otherwise. Pieces are a rain gauge of the
+/// wanted slices alone, stretched over every cell, so one slice can fill several cells.
 fn progress_mark(buf: &mut Buffer, x: u16, y: u16, cells: u16, meter: Meter) {
     match meter {
         Meter::Share { verified, size, getting } => {
@@ -142,24 +152,17 @@ fn progress_mark(buf: &mut Buffer, x: u16, y: u16, cells: u16, meter: Meter) {
                 put(buf, x + i, y, 1, glyph, fg(color));
             }
         }
-        Meter::Pieces(map) => {
+        Meter::Pieces(wanted) => {
             const BARS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-            let slices = map.slices();
-            let span = |i: u16| usize::from(i) * slices.len() / usize::from(cells);
+            let span = |i: u16| usize::from(i) * wanted.len() / usize::from(cells);
             for i in 0..cells {
-                let run = &slices[span(i)..span(i + 1).max(span(i) + 1)];
-                let (got, wanted) = run.iter().fold((0, 0), |(got, wanted), slice| match slice {
-                    Slice::Wanted(eighths) => (got + u32::from(eighths.get()), wanted + 8),
-                    Slice::Unwanted => (got, wanted),
-                });
-                let (glyph, style) = match Slice::of(got, wanted) {
-                    Slice::Unwanted => (" ", Style::new()),
-                    Slice::Wanted(eighths) => match eighths.get() {
-                        0 => ("▁", fg(RULE)),
-                        n => (BARS[usize::from(n) - 1], fg(ACTION)),
-                    },
+                let run = &wanted[span(i)..span(i + 1).max(span(i) + 1)];
+                let got = run.iter().map(|eighths| u32::from(eighths.get())).sum();
+                let (glyph, color) = match Slice::of(got, 8 * run.len() as u32) {
+                    Slice::Wanted(eighths) if eighths.get() > 0 => (BARS[usize::from(eighths.get()) - 1], ACTION),
+                    _ => ("▁", RULE),
                 };
-                put(buf, x + i, y, 1, glyph, style);
+                put(buf, x + i, y, 1, glyph, fg(color));
             }
         }
     }
