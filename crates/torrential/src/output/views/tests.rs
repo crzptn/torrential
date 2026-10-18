@@ -1,0 +1,650 @@
+//! Golden output for every command and every error class, rendered from fixture values.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use torrential_core::error::{Details, EXIT_PENDING};
+use torrential_core::protocol::{Change, DownloadPlan, FilesReply, GetOutcome, GetReply, Response};
+use torrential_core::{
+    Error, ErrorCode, FileRisk, Flag, InfoHash, Job, JobStatus, LocatorId, Progress, Release, ReleaseId, SearchQuery,
+    SearchResult, Selection, SourceOutcome, SourceReport, TorrentFile, TorrentId,
+};
+
+use super::*;
+use crate::client::wait::Printer;
+use crate::output::{Mode, render};
+
+const NOW: i64 = 1_792_314_723;
+const DAY: i64 = 86_400;
+const GIB: u64 = 1024 * 1024 * 1024;
+const ARCH: &str = "9b521219bc48550140a666f74a29048ed78e933b";
+
+fn tid(hex: &str) -> TorrentId {
+    format!("{hex}{}", "0".repeat(40 - hex.len())).parse().unwrap()
+}
+
+/// Both renderings of one command result: plain text, then the JSON document pretty-printed.
+fn both(doc: &Doc, payload: &impl serde::Serialize) -> String {
+    let json = render(Mode::Json, doc, payload);
+    assert_eq!(json.matches('\n').count(), 1, "a JSON document is one line");
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    format!("{}\n--- json\n{}\n", render(Mode::Plain, doc, payload), serde_json::to_string_pretty(&value).unwrap())
+}
+
+fn release(id: ReleaseId, name: &str) -> Release {
+    Release {
+        id,
+        name: name.into(),
+        size: None,
+        seeders: None,
+        leechers: None,
+        published: None,
+        category: None,
+        flags: BTreeSet::new(),
+        sources: vec!["knaben".into()],
+        magnet: None,
+        torrent_url: None,
+        info_url: None,
+    }
+}
+
+fn search_result(releases: Vec<Release>, total: u32, sources: Vec<SourceReport>) -> SearchResult {
+    SearchResult {
+        query: SearchQuery::new("arch linux iso"),
+        releases,
+        total,
+        hidden_adult: 0,
+        sources,
+        elapsed_ms: 1432,
+    }
+}
+
+fn report(source: &str, outcome: SourceOutcome) -> SourceReport {
+    SourceReport { source: source.into(), outcome, elapsed_ms: 300 }
+}
+
+#[test]
+fn search_with_a_failed_source() {
+    let arch = Release {
+        size: Some(1_640_497_152),
+        seeders: Some(412),
+        published: Some(NOW - 17 * DAY),
+        flags: [Flag::Official].into(),
+        sources: vec!["archlinux".into(), "knaben".into()],
+        magnet: Some(format!("magnet:?xt=urn:btih:{ARCH}")),
+        ..release(ReleaseId::Torrent(ARCH.parse().unwrap()), "archlinux-2026.10.01-x86_64.iso")
+    };
+    let older = Release {
+        size: Some(1_503_238_553),
+        seeders: Some(37),
+        published: Some(NOW - 47 * DAY),
+        ..release(ReleaseId::Torrent(tid("51e0c7")), "archlinux-2026.09.01-x86_64.iso")
+    };
+    let unknown = Release {
+        sources: vec!["jackett".into()],
+        ..release(ReleaseId::Locator(LocatorId::from_bytes([0xd4; 20])), "Arch Linux 2026.10.01 x86_64 ISO + checksums")
+    };
+    let hostile = Release {
+        seeders: Some(3),
+        size: Some(2 * GIB),
+        published: Some(NOW - 3 * 365 * DAY),
+        ..release(ReleaseId::Torrent(tid("9b5213")), "arch\u{1b}[31m linux\tISO\u{202e}gpj.exe")
+    };
+    let mut result = search_result(
+        vec![arch, older, unknown, hostile],
+        14,
+        vec![
+            report("archlinux", SourceOutcome::Ok { results: 1 }),
+            report("knaben", SourceOutcome::Ok { results: 12 }),
+            report("apibay", SourceOutcome::Http { status: 503 }),
+            report("nyaa", SourceOutcome::Timeout),
+        ],
+    );
+    result.hidden_adult = 1;
+    let doc = search(&result, NOW);
+    insta::assert_snapshot!(both(&doc, &Response::Search { result }));
+}
+
+#[test]
+fn search_with_no_results() {
+    let result = search_result(Vec::new(), 0, vec![report("archlinux", SourceOutcome::Ok { results: 0 })]);
+    insta::assert_snapshot!(both(&search(&result, NOW), &Response::Search { result }));
+}
+
+fn file(index: u32, path: &str, size: u64) -> TorrentFile {
+    TorrentFile { index, path: path.into(), size, selected: false, verified: 0, risk: None }
+}
+
+#[test]
+fn files_from_a_torrent_url_mark_executables() {
+    let mut installer = file(3, "Codec Installer.exe", 1_200_000);
+    installer.risk = Some(FileRisk::Executable);
+    let reply = FilesReply {
+        id: "6bc1af".to_string() + &"0".repeat(34),
+        name: Some("night_of_the_living_dead_dvd".into()),
+        total_size: 5_046_586_573,
+        files: vec![
+            file(0, "Night.asr.srt", 52_633),
+            file(1, "Night.mp4", 596_399_542),
+            file(2, "VTS_01_1.mp4", 262_668_288),
+            installer,
+        ],
+        metadata_source: "torrent_url".into(),
+        elapsed_ms: 412,
+    };
+    insta::assert_snapshot!(both(&files(&reply), &Response::Files { files: reply }));
+}
+
+#[test]
+fn files_of_a_download_show_progress_per_file() {
+    let selected = |f: TorrentFile, verified| TorrentFile { selected: true, verified, ..f };
+    let reply = FilesReply {
+        id: ARCH.into(),
+        name: Some("debian-13.1.0-amd64-DVD".into()),
+        total_size: 12 * GIB,
+        files: vec![
+            selected(file(0, "debian-13.1.0-amd64-DVD-1.iso", 4 * GIB), 4 * GIB),
+            selected(file(1, "debian-13.1.0-amd64-DVD-2.iso", 4 * GIB), GIB),
+            file(2, "debian-13.1.0-amd64-DVD-3.iso", 4 * GIB),
+        ],
+        metadata_source: "download".into(),
+        elapsed_ms: 3,
+    };
+    insta::assert_snapshot!(both(&files(&reply), &Response::Files { files: reply }));
+}
+
+fn job(hex: &str, name: Option<&str>, status: JobStatus, progress: Progress) -> Job {
+    let id = tid(hex);
+    let dir = PathBuf::from("/Users/ada/Downloads/torrential");
+    Job {
+        id,
+        info_hash: InfoHash::V1(*id.as_bytes()),
+        name: name.map(String::from),
+        path: name.map(|n| dir.join(n)),
+        dir,
+        status,
+        progress,
+        selection: Selection::All,
+        added_at: NOW - 3600,
+    }
+}
+
+fn downloading() -> Progress {
+    Progress {
+        size: Some(1_640_497_152),
+        verified: 50_855_411,
+        down_rate: 32_715_571,
+        up_rate: 120_000,
+        peers: 48,
+        seeds: 31,
+        eta: Some(49),
+    }
+}
+
+fn get_reply(outcome: GetOutcome, job: Job, plan: Option<DownloadPlan>) -> GetReply {
+    GetReply { outcome, job, plan, previous_selection: None }
+}
+
+fn plan(conflicts: Vec<PathBuf>) -> DownloadPlan {
+    DownloadPlan {
+        selected_files: 2,
+        total_files: 255,
+        selected_size: 596_452_175,
+        destination: "/Users/ada/Movies/night_of_the_living_dead_dvd".into(),
+        free_space: 410 * GIB,
+        conflicts,
+    }
+}
+
+#[test]
+fn get_outcomes() {
+    let movies = |mut j: Job| {
+        j.dir = "/Users/ada/Movies".into();
+        j.path = j.name.as_ref().map(|n| j.dir.join(n));
+        j.selection = Selection::Patterns(vec!["Night.mp4".into(), "*.srt".into()]);
+        j
+    };
+    let film = || movies(job("6bc1af", Some("night_of_the_living_dead_dvd"), JobStatus::Checking, Progress::default()));
+    let cases = [
+        (
+            "started from a magnet",
+            get_reply(GetOutcome::Started, job(ARCH, None, JobStatus::Metadata, Progress::default()), None),
+        ),
+        (
+            "queued",
+            get_reply(
+                GetOutcome::Queued,
+                movies(job("6bc1af", Some("night_of_the_living_dead_dvd"), JobStatus::Queued, Progress::default())),
+                Some(plan(vec![])),
+            ),
+        ),
+        (
+            "existing",
+            get_reply(
+                GetOutcome::Existing,
+                job(ARCH, Some("archlinux-2026.10.01-x86_64.iso"), JobStatus::Downloading, downloading()),
+                None,
+            ),
+        ),
+        (
+            "existing and done",
+            get_reply(
+                GetOutcome::Existing,
+                job(ARCH, Some("archlinux-2026.10.01-x86_64.iso"), JobStatus::Done { finished_at: NOW }, downloading()),
+                None,
+            ),
+        ),
+        (
+            "updated",
+            GetReply {
+                previous_selection: Some(Selection::All),
+                ..get_reply(GetOutcome::Updated, film(), Some(plan(vec![])))
+            },
+        ),
+        ("planned", get_reply(GetOutcome::Planned, film(), Some(plan(vec![])))),
+        (
+            "planned with conflicts",
+            get_reply(
+                GetOutcome::Planned,
+                film(),
+                Some(plan(vec!["/Users/ada/Movies/night_of_the_living_dead_dvd/Night.mp4".into()])),
+            ),
+        ),
+    ];
+    let mut out = String::new();
+    for (name, reply) in cases {
+        out.push_str(&format!("=== {name}\n{}", both(&get(&reply), &Response::Get { reply: Box::new(reply.clone()) })));
+    }
+    insta::assert_snapshot!(out);
+}
+
+fn fleet() -> Vec<Job> {
+    let full = |size| Progress { size: Some(size), verified: size, ..Progress::default() };
+    vec![
+        job(ARCH, Some("archlinux-2026.10.01-x86_64.iso"), JobStatus::Downloading, downloading()),
+        job(
+            "c32cdd",
+            Some("stackexchange"),
+            JobStatus::Interrupted,
+            Progress { size: Some(99_535_000_000), verified: 79_130_000_000, ..Progress::default() },
+        ),
+        job(
+            "6bc1af",
+            Some("night_of_the_living_dead_dvd"),
+            JobStatus::Done { finished_at: NOW - 600 },
+            full(596_452_175),
+        ),
+        job(
+            "e3a1f0",
+            Some("ubuntu-24.04.5-desktop-amd64.iso"),
+            JobStatus::Error {
+                error: Error::new(ErrorCode::DiskFull, "needs 5.9 GiB more on this disk")
+                    .with_hint("free some space, or choose another disk with --dir"),
+            },
+            Progress { size: Some(6_345_887_744), ..Progress::default() },
+        ),
+        job("d40a19", None, JobStatus::Metadata, Progress { peers: 4, ..Progress::default() }),
+        job(
+            "51e0c7",
+            Some("archlinux-2026.09.01-x86_64.iso"),
+            JobStatus::Queued,
+            Progress { size: Some(1_503_238_553), ..Progress::default() },
+        ),
+        job(
+            "a282c6",
+            Some("Night Of The Living Dead"),
+            JobStatus::Paused,
+            Progress { size: Some(2_899_102_924), verified: 1_000_000_000, ..Progress::default() },
+        ),
+    ]
+}
+
+#[test]
+fn status_lists_every_state() {
+    let jobs = fleet();
+    insta::assert_snapshot!(both(&super::jobs(&jobs), &Response::Jobs { jobs }));
+}
+
+#[test]
+fn status_with_no_downloads() {
+    insta::assert_snapshot!(both(&super::jobs(&[]), &Response::Jobs { jobs: Vec::new() }));
+}
+
+#[test]
+fn status_of_one_download() {
+    let mut out = String::new();
+    for job in fleet().into_iter().take(4) {
+        let name = job.status.name();
+        out.push_str(&format!("=== {name}\n{}", both(&super::job(&job), &Response::Jobs { jobs: vec![job.clone()] })));
+    }
+    insta::assert_snapshot!(out);
+}
+
+fn change(hex: &str, name: &str, result: &str, path: Option<&str>) -> Change {
+    Change { id: tid(hex).to_hex(), name: Some(name.into()), result: result.into(), path: path.map(PathBuf::from) }
+}
+
+#[test]
+fn pause_resume_rm_and_verify() {
+    let cases = [
+        (
+            ChangeCommand::Pause,
+            vec![
+                change(ARCH, "archlinux-2026.10.01-x86_64.iso", "paused", None),
+                change("c32cdd", "stackexchange", "already_paused", None),
+            ],
+        ),
+        (
+            ChangeCommand::Resume,
+            vec![
+                change("c32cdd", "stackexchange", "resumed", None),
+                change("6bc1af", "night_of_the_living_dead_dvd", "already_done", None),
+            ],
+        ),
+        (
+            ChangeCommand::Remove,
+            vec![
+                change(
+                    ARCH,
+                    "archlinux-2026.10.01-x86_64.iso",
+                    "removed",
+                    Some("/Users/ada/isos/archlinux-2026.10.01-x86_64.iso"),
+                ),
+                change("c32cdd", "stackexchange", "already_removed", Some("/Users/ada/datasets/stackexchange")),
+            ],
+        ),
+        (ChangeCommand::Verify, vec![change("6bc1af", "night_of_the_living_dead_dvd", "checking", None)]),
+    ];
+    let mut out = String::new();
+    for (command, list) in cases {
+        out.push_str(&format!(
+            "=== {command:?}\n{}",
+            both(&changes(command, &list), &Response::Changed { changes: list.clone() })
+        ));
+    }
+    insta::assert_snapshot!(out);
+}
+
+fn wait_transcript(mode: Mode, end: WaitEnd, frames: &[(u64, Job)], elapsed: u64) -> String {
+    let printer = Printer { mode };
+    let jobs: Vec<Job> = {
+        let mut latest: Vec<Job> = Vec::new();
+        for (_, job) in frames {
+            match latest.iter_mut().find(|j| j.id == job.id) {
+                Some(j) => *j = job.clone(),
+                None => latest.push(job.clone()),
+            }
+        }
+        latest
+    };
+    let ids = short_ids(&jobs.iter().map(|j| j.id).collect::<Vec<_>>());
+    let mut out = printer.header();
+    for (at, job) in frames {
+        let id = &ids[jobs.iter().position(|j| j.id == job.id).unwrap()];
+        out.push_str(&printer.row(Duration::from_secs(*at), id, job));
+    }
+    out.push_str(&printer.end(&end, Duration::from_secs(elapsed), &jobs, &ids));
+    out
+}
+
+#[test]
+fn wait_until_done_timeout_error_and_stop() {
+    let arch = |status, progress| job(ARCH, Some("archlinux-2026.10.01-x86_64.iso"), status, progress);
+    let done = Progress { size: Some(1_640_497_152), verified: 1_640_497_152, ..Progress::default() };
+    let later = Progress { verified: 1_240_000_000, eta: Some(12), ..downloading() };
+    let failed = JobStatus::Error {
+        error: Error::new(
+            ErrorCode::DiskFull,
+            "needs 1.5 GiB more on this disk, but only 900.0 MiB is free and 2.0 GiB stays in reserve",
+        )
+        .with_hint("free some space, or choose another disk with --dir"),
+    };
+    let cases = [
+        (
+            "done",
+            WaitEnd::Done,
+            vec![
+                (0, arch(JobStatus::Downloading, downloading())),
+                (44, arch(JobStatus::Done { finished_at: NOW }, done)),
+            ],
+            44,
+        ),
+        (
+            "timeout",
+            WaitEnd::Timeout,
+            vec![(0, arch(JobStatus::Downloading, downloading())), (60, arch(JobStatus::Downloading, later))],
+            100,
+        ),
+        (
+            "error",
+            WaitEnd::Failed { id: "9b5212".into() },
+            vec![(0, arch(JobStatus::Metadata, Progress::default())), (3, arch(failed, Progress::default()))],
+            3,
+        ),
+        ("stopped", WaitEnd::Stopped { id: "9b5212".into() }, vec![(0, arch(JobStatus::Interrupted, later))], 0),
+        (
+            "metadata",
+            WaitEnd::Metadata,
+            vec![(0, arch(JobStatus::Metadata, Progress::default())), (2, arch(JobStatus::Downloading, downloading()))],
+            2,
+        ),
+    ];
+    let mut out = String::new();
+    for (name, end, frames, elapsed) in cases {
+        let exit = end.exit_code();
+        out.push_str(&format!(
+            "=== {name}, exit {exit}\n{}",
+            wait_transcript(Mode::Plain, end.clone(), &frames, elapsed)
+        ));
+        out.push_str(&format!("--- ndjson\n{}", wait_transcript(Mode::Json, end, &frames, elapsed)));
+    }
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn daemon_status_running_and_stopped() {
+    let running = DaemonReport {
+        engine: "running",
+        pid: Some(4242),
+        version: Some("0.1.0".into()),
+        socket: "/tmp/torrential-501/engine.sock".into(),
+        log: "/Users/ada/.local/state/torrential/engine.log".into(),
+        downloads: Some(2),
+    };
+    let stopped = DaemonReport { engine: "stopped", pid: None, version: None, downloads: None, ..running.clone() };
+    let mut out = String::new();
+    for report in [running, stopped] {
+        out.push_str(&both(&daemon_status(&report), &crate::output::Typed { kind: "daemon", body: &report }));
+    }
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn doctor_report() {
+    let checks = vec![
+        Check { check: "sandbox", status: CheckStatus::Fail, detail: "CODEX_SANDBOX_NETWORK_DISABLED=1".into() },
+        Check {
+            check: "disk",
+            status: CheckStatus::Ok,
+            detail: "410.2 GiB free in /Users/ada/Downloads/torrential".into(),
+        },
+        Check { check: "state", status: CheckStatus::Ok, detail: "/Users/ada/.local/state/torrential".into() },
+        Check { check: "engine", status: CheckStatus::Ok, detail: "not running; the next command starts it".into() },
+        Check {
+            check: "sources",
+            status: CheckStatus::Skipped,
+            detail: "search is not wired into this build yet".into(),
+        },
+    ];
+    let fix = Some(
+        "in interactive Codex, rerun with sandbox_permissions \"require_escalated\" and prefix_rule [\"torrential\"]"
+            .into(),
+    );
+    insta::assert_snapshot!(both(
+        &doctor(&checks, fix),
+        &crate::output::Typed { kind: "doctor", body: serde_json::json!({"checks": checks}) }
+    ));
+}
+
+#[test]
+fn completions_setup_is_valid_shell() {
+    let setup = crate::completions::setup(crate::cli::Shell::Zsh);
+    assert_eq!(crate::completions::script(&setup), "# add this line to ~/.zshrc\nsource <(COMPLETE=zsh torrential)\n");
+}
+
+#[test]
+fn schema_document() {
+    use clap::CommandFactory;
+    let schema = crate::schema::build(&crate::cli::Cli::command(), "0.1.0".into());
+    let value: serde_json::Value = serde_json::from_str(&crate::output::json_document(&schema, None)).unwrap();
+    insta::assert_snapshot!(serde_json::to_string_pretty(&value).unwrap());
+}
+
+/// One error of every class, built by the code that raises it where that code exists.
+fn sample(code: ErrorCode) -> Error {
+    use crate::daemon::admission::{self, Plan, Space};
+    use crate::daemon::engine_port::FakeTorrentFile;
+    let film = || {
+        FakeTorrentFile {
+            info_hash: InfoHash::V1([0x6b; 20]),
+            name: "night".into(),
+            files: vec![("Night.mp4".into(), 70 * GIB)],
+        }
+        .metainfo()
+    };
+    let disk = Space { device: 1, total: 100 * GIB, free: 3 * GIB };
+    let plan = |conflicts| Plan {
+        wanted: vec![true],
+        selected_size: 70 * GIB,
+        destination: "/Users/ada/Movies/night".into(),
+        conflicts,
+        space: disk,
+    };
+    let ubuntu = |hex: &str| Release {
+        name: "ubuntu-24.04.5-desktop-amd64.iso".into(),
+        ..release(ReleaseId::Torrent(tid(hex)), "")
+    };
+    let given = |code, message: &str, hint: &str| Error::new(code, message).with_hint(hint);
+    match code {
+        ErrorCode::Usage => crate::usage_error(
+            &<crate::cli::Cli as clap::Parser>::try_parse_from(["torrential", "wait", "9b5212", "--timeout", "soon"])
+                .unwrap_err(),
+            &["torrential".into(), "wait".into()],
+        ),
+        ErrorCode::ConfirmationRequired => given(code, "deleting files needs confirmation", "add --yes to confirm"),
+        ErrorCode::InvalidRef => torrential_core::Target::parse("9b5", Path::new("/")).unwrap_err(),
+        ErrorCode::InvalidTorrent => crate::daemon::engine_port::parse_fake(b"<html>").unwrap_err(),
+        ErrorCode::NotFound => {
+            let prefix = "9b52".parse().unwrap();
+            crate::daemon::resolve::prefix(&prefix, &[], &[], crate::daemon::resolve::Scope::Downloads, "pause")
+                .unwrap_err()
+        }
+        ErrorCode::AmbiguousRef => {
+            let results =
+                [ubuntu("e3a1f0"), Release { name: "Ubuntu 24.04.5 LTS Desktop (repack)".into(), ..ubuntu("e3a1c4") }];
+            let prefix = "e3a1".parse().unwrap();
+            crate::daemon::resolve::prefix(
+                &prefix,
+                &[],
+                &results,
+                crate::daemon::resolve::Scope::DownloadsAndResults,
+                "get",
+            )
+            .unwrap_err()
+        }
+        ErrorCode::JobConflict => given(
+            code,
+            "d40a19 has no file list yet, so there is nothing to verify",
+            "torrential wait d40a19 --until metadata",
+        ),
+        ErrorCode::PathConflict => {
+            admission::check_conflicts(&plan(vec!["/Users/ada/Movies/night/Night.mp4".into()])).unwrap_err()
+        }
+        ErrorCode::ProvidersUnavailable => {
+            given(code, "every search source failed", "try again in a minute, or pick a source with --source")
+                .with_details(Details::Sources(vec![
+                    report("knaben", SourceOutcome::Http { status: 502 }),
+                    report("apibay", SourceOutcome::Timeout),
+                ]))
+        }
+        ErrorCode::MetadataTimeout => given(
+            code,
+            "no peer sent the file list for 9b5212 in time",
+            "try again later, or run torrential get 9b5212 to keep looking in the background",
+        ),
+        ErrorCode::NetworkUnavailable => {
+            given(code, "no network route to any DHT node", "check the network connection, then run the command again")
+        }
+        ErrorCode::FetchFailed => given(
+            code,
+            "could not fetch https://archive.org/download/x/x_archive.torrent: http 404",
+            "try the magnet link instead",
+        ),
+        ErrorCode::SandboxNetworkBlocked => crate::client::launch::sandbox_error(
+            crate::client::launch::Blocked::Network { signal: "CODEX_SANDBOX_NETWORK_DISABLED=1".into() },
+            &crate::env::Env::from_pairs([("CODEX_THREAD_ID", "t-1")]),
+        ),
+        ErrorCode::SandboxWriteBlocked => given(
+            code,
+            "cannot write /Users/ada/Library/LaunchAgents/dev.torrential.engine.plist: operation not permitted",
+            "run torrential daemon install from a terminal outside any sandbox",
+        ),
+        ErrorCode::DaemonUnavailable => {
+            let deep = format!("/tmp/{}", "d".repeat(120));
+            crate::paths::Paths::resolve(
+                &crate::env::Env::from_pairs([("HOME", "/Users/ada"), ("TORRENTIAL_HOME", deep.as_str())]),
+                501,
+                None,
+            )
+            .unwrap_err()
+        }
+        ErrorCode::DaemonVersion => {
+            given(code, "the engine speaks wire 2, the client 1", "torrential daemon stop, then run the command again")
+                .with_details(Details::Versions { client: "0.1.0".into(), daemon: "0.2.0".into() })
+        }
+        ErrorCode::StateCorrupt => given(
+            code,
+            "the state database /Users/ada/.local/state/torrential/state.db is damaged: file is not a database",
+            "torrential never resets state on its own; move /Users/ada/.local/state/torrential/state.db aside to start fresh, or restore a backup",
+        ),
+        ErrorCode::DiskFull => admission::check_disk(disk, 70 * GIB, 0).unwrap_err(),
+        ErrorCode::TooLarge => admission::check_size(&plan(vec![]), admission::DEFAULT_MAX_SIZE).unwrap_err(),
+        ErrorCode::NoSelection => {
+            crate::daemon::files::wanted(&film(), &Selection::Patterns(vec!["*.mkv".into()])).unwrap_err()
+        }
+        ErrorCode::StorageError => given(
+            code,
+            "the disk holding /Users/ada/.local/state/torrential/state.db is full",
+            "free some space on that disk",
+        ),
+        ErrorCode::VerificationFailed => given(
+            code,
+            "3 damaged pieces in the selected files",
+            "torrential verify 6bc1af --repair downloads them again",
+        ),
+        ErrorCode::Interrupted => given(code, "interrupted", "run the command again"),
+        ErrorCode::Internal => crate::daemon::engine_port::unwired_error(),
+    }
+}
+
+#[test]
+fn every_error_class() {
+    let mut out = String::new();
+    for code in ErrorCode::ALL {
+        let error = sample(code);
+        assert_eq!(error.code, code);
+        let exit = code.exit_code();
+        assert_ne!(exit, EXIT_PENDING);
+        let plain = crate::output::error(Mode::Plain, &error);
+        let json = crate::output::error(Mode::Json, &error);
+        assert!(plain.stdout.is_empty() && json.stderr.is_empty(), "plain errors use stderr, JSON errors stdout");
+        let value: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+        out.push_str(&format!(
+            "=== {code}, exit {exit}\n{}--- json\n{}\n",
+            plain.stderr,
+            serde_json::to_string_pretty(&value).unwrap()
+        ));
+    }
+    insta::assert_snapshot!(out);
+}

@@ -1,0 +1,500 @@
+---
+source: crates/torrential/src/output/views/tests.rs
+expression: "serde_json::to_string_pretty(&value).unwrap()"
+---
+{
+  "schema": 1,
+  "type": "schema",
+  "version": "0.1.0",
+  "commands": [
+    {
+      "name": "search",
+      "about": "Search the enabled sources",
+      "arguments": [
+        {
+          "name": "WORDS",
+          "help": "Words to search for",
+          "required": true,
+          "repeatable": true
+        }
+      ],
+      "flags": [
+        {
+          "name": "--source",
+          "help": "Search only this source. Repeat to add more",
+          "takes_value": true,
+          "repeatable": true,
+          "value_name": "NAME"
+        },
+        {
+          "name": "--category",
+          "help": "Show only this kind of content",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "CATEGORY",
+          "values": [
+            "video",
+            "audio",
+            "software",
+            "book",
+            "game",
+            "dataset",
+            "other"
+          ]
+        },
+        {
+          "name": "--min-seeds",
+          "help": "Hide results with fewer reported seeders, and results with unknown seeders",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "N"
+        },
+        {
+          "name": "--max-size",
+          "help": "Hide larger results, and results with unknown size, such as 8GiB",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "SIZE"
+        },
+        {
+          "name": "--sort",
+          "help": "Order of the results. Relevance comes before popularity",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "SORT",
+          "values": [
+            "relevance",
+            "seeds",
+            "size",
+            "age"
+          ],
+          "default": "relevance"
+        },
+        {
+          "name": "--limit",
+          "help": "Number of results to show",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "N",
+          "default": "10"
+        },
+        {
+          "name": "--timeout",
+          "help": "Stop waiting for slow sources after this long",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "DURATION",
+          "default": "6s"
+        },
+        {
+          "name": "--adult",
+          "help": "Include adult results",
+          "takes_value": false,
+          "repeatable": false
+        },
+        {
+          "name": "--fresh",
+          "help": "Skip the result cache",
+          "takes_value": false,
+          "repeatable": false
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "about": "List the files in a torrent, fetching its metadata if needed",
+      "arguments": [
+        {
+          "name": "REF",
+          "help": "An ID prefix, infohash, magnet link, .torrent file, or .torrent URL",
+          "required": true,
+          "repeatable": false
+        }
+      ],
+      "flags": []
+    },
+    {
+      "name": "get",
+      "about": "Start a download, or change its file selection",
+      "arguments": [
+        {
+          "name": "REF",
+          "help": "An ID prefix, infohash, magnet link, .torrent file, or .torrent URL",
+          "required": true,
+          "repeatable": false
+        }
+      ],
+      "flags": [
+        {
+          "name": "--files",
+          "help": "Download only files matching this glob or exact path. Repeat to add more",
+          "takes_value": true,
+          "repeatable": true,
+          "value_name": "GLOB"
+        },
+        {
+          "name": "--dir",
+          "help": "The folder the download goes into",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "DIR"
+        },
+        {
+          "name": "--max-size",
+          "help": "Allow a download larger than the 50 GiB cap, such as 120GiB",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "SIZE"
+        },
+        {
+          "name": "--dry-run",
+          "help": "Print the selected size, destination, free space, and conflicts without downloading",
+          "takes_value": false,
+          "repeatable": false
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "about": "List downloads, or show one in detail",
+      "arguments": [
+        {
+          "name": "ID",
+          "help": "Download IDs from torrential status. None lists every download",
+          "required": false,
+          "repeatable": true
+        }
+      ],
+      "flags": []
+    },
+    {
+      "name": "wait",
+      "about": "Follow downloads until they finish or the timeout passes",
+      "arguments": [
+        {
+          "name": "ID",
+          "help": "Download IDs from torrential status",
+          "required": true,
+          "repeatable": true
+        }
+      ],
+      "flags": [
+        {
+          "name": "--until",
+          "help": "Stop when the download is done, or as soon as its file list is known",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "UNTIL",
+          "values": [
+            "done",
+            "metadata"
+          ],
+          "default": "done"
+        },
+        {
+          "name": "--timeout",
+          "help": "Give up after this long. Defaults to 100s off a terminal and no limit on one",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "DURATION"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "about": "Pause downloads, returning once writes stop",
+      "arguments": [
+        {
+          "name": "ID",
+          "help": "Download IDs from torrential status",
+          "required": true,
+          "repeatable": true
+        }
+      ],
+      "flags": []
+    },
+    {
+      "name": "resume",
+      "about": "Resume downloads, or retry failed ones",
+      "arguments": [
+        {
+          "name": "ID",
+          "help": "Download IDs from torrential status",
+          "required": false,
+          "repeatable": true
+        }
+      ],
+      "flags": [
+        {
+          "name": "--all",
+          "help": "Resume every paused, interrupted, or failed download",
+          "takes_value": false,
+          "repeatable": false
+        }
+      ]
+    },
+    {
+      "name": "rm",
+      "about": "Stop tracking downloads and keep their files",
+      "arguments": [
+        {
+          "name": "ID",
+          "help": "Download IDs from torrential status",
+          "required": true,
+          "repeatable": true
+        }
+      ],
+      "flags": []
+    },
+    {
+      "name": "verify",
+      "about": "Re-hash the data on disk and report damaged pieces",
+      "arguments": [
+        {
+          "name": "ID",
+          "help": "A download ID from torrential status",
+          "required": true,
+          "repeatable": false
+        }
+      ],
+      "flags": [
+        {
+          "name": "--repair",
+          "help": "Download damaged pieces again",
+          "takes_value": false,
+          "repeatable": false
+        }
+      ]
+    },
+    {
+      "name": "doctor",
+      "about": "Diagnose sandbox, disk, state, engine, and sources",
+      "arguments": [],
+      "flags": []
+    },
+    {
+      "name": "daemon",
+      "about": "Inspect or manage the engine process",
+      "arguments": [],
+      "flags": [],
+      "subcommands": [
+        {
+          "name": "status",
+          "about": "Show whether the engine is running",
+          "arguments": [],
+          "flags": []
+        },
+        {
+          "name": "stop",
+          "about": "Ask the engine to save its state and exit",
+          "arguments": [],
+          "flags": []
+        },
+        {
+          "name": "install",
+          "about": "Start the engine at login with launchd or systemd",
+          "arguments": [],
+          "flags": []
+        },
+        {
+          "name": "uninstall",
+          "about": "Remove the login service",
+          "arguments": [],
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "schema",
+      "about": "Print every command, flag, exit code, and error code as JSON",
+      "arguments": [],
+      "flags": []
+    },
+    {
+      "name": "completions",
+      "about": "Print shell completion setup",
+      "arguments": [
+        {
+          "name": "SHELL",
+          "help": "",
+          "required": true,
+          "repeatable": false
+        }
+      ],
+      "flags": []
+    }
+  ],
+  "global_flags": [
+    {
+      "name": "--json",
+      "help": "Print one JSON document on stdout instead of text",
+      "takes_value": false,
+      "repeatable": false
+    }
+  ],
+  "exit_codes": [
+    {
+      "code": 0,
+      "meaning": "success, including an empty search"
+    },
+    {
+      "code": 1,
+      "meaning": "internal error"
+    },
+    {
+      "code": 2,
+      "meaning": "usage error"
+    },
+    {
+      "code": 3,
+      "meaning": "the reference matched nothing, matched several, or is malformed"
+    },
+    {
+      "code": 4,
+      "meaning": "conflict with an existing download or file"
+    },
+    {
+      "code": 5,
+      "meaning": "network or search provider failure"
+    },
+    {
+      "code": 6,
+      "meaning": "environment, sandbox, engine, or state failure"
+    },
+    {
+      "code": 7,
+      "meaning": "disk, size, selection, or verification failure, or a download that stopped with an error"
+    },
+    {
+      "code": 8,
+      "meaning": "still pending: the download is running or stopped without finishing"
+    },
+    {
+      "code": 130,
+      "meaning": "interrupted"
+    }
+  ],
+  "errors": [
+    {
+      "code": "usage",
+      "exit": 2,
+      "retryable": false
+    },
+    {
+      "code": "confirmation_required",
+      "exit": 2,
+      "retryable": false
+    },
+    {
+      "code": "invalid_ref",
+      "exit": 3,
+      "retryable": false
+    },
+    {
+      "code": "invalid_torrent",
+      "exit": 3,
+      "retryable": false
+    },
+    {
+      "code": "not_found",
+      "exit": 3,
+      "retryable": false
+    },
+    {
+      "code": "ambiguous_ref",
+      "exit": 3,
+      "retryable": false
+    },
+    {
+      "code": "job_conflict",
+      "exit": 4,
+      "retryable": false
+    },
+    {
+      "code": "path_conflict",
+      "exit": 4,
+      "retryable": false
+    },
+    {
+      "code": "providers_unavailable",
+      "exit": 5,
+      "retryable": true
+    },
+    {
+      "code": "metadata_timeout",
+      "exit": 5,
+      "retryable": true
+    },
+    {
+      "code": "network_unavailable",
+      "exit": 5,
+      "retryable": true
+    },
+    {
+      "code": "fetch_failed",
+      "exit": 5,
+      "retryable": true
+    },
+    {
+      "code": "sandbox_network_blocked",
+      "exit": 6,
+      "retryable": false
+    },
+    {
+      "code": "sandbox_write_blocked",
+      "exit": 6,
+      "retryable": false
+    },
+    {
+      "code": "daemon_unavailable",
+      "exit": 6,
+      "retryable": true
+    },
+    {
+      "code": "daemon_version",
+      "exit": 6,
+      "retryable": false
+    },
+    {
+      "code": "state_corrupt",
+      "exit": 6,
+      "retryable": false
+    },
+    {
+      "code": "disk_full",
+      "exit": 7,
+      "retryable": false
+    },
+    {
+      "code": "too_large",
+      "exit": 7,
+      "retryable": false
+    },
+    {
+      "code": "no_selection",
+      "exit": 7,
+      "retryable": false
+    },
+    {
+      "code": "storage_error",
+      "exit": 7,
+      "retryable": false
+    },
+    {
+      "code": "verification_failed",
+      "exit": 7,
+      "retryable": false
+    },
+    {
+      "code": "interrupted",
+      "exit": 130,
+      "retryable": true
+    },
+    {
+      "code": "internal",
+      "exit": 1,
+      "retryable": false
+    }
+  ],
+  "next": null
+}
