@@ -78,7 +78,7 @@ const BUILTIN: [Row; 8] = [
     Row { name: "nyaa", default_on: true, lawful: false, base: "https://nyaa.si/", adapter: Adapter::Nyaa },
 ];
 
-#[derive(Clone, Debug)]
+/// Not `Debug`: the Torznab variant holds the user's API key.
 pub(crate) enum Adapter {
     Archlinux,
     Ubuntu,
@@ -190,11 +190,11 @@ pub(crate) fn registry(config: &SearchConfig) -> Result<Vec<Arc<Source>>, Error>
             return Err(config_error(format!("endpoints names an unknown source {name:?}")));
         }
     }
-    let mut sources = Vec::new();
+    let mut sources: Vec<Arc<Source>> = Vec::new();
     for row in BUILTIN {
-        let base = config.endpoints.get(row.name).map_or(row.base, String::as_str);
-        let meta = SourceMeta { name: row.name.into(), authority: 0, lawful: row.lawful, public: true };
-        sources.push((meta, row.default_on, base_url(row.name, base)?, row.adapter));
+        let base = base_url(row.name, config.endpoints.get(row.name).map_or(row.base, String::as_str))?;
+        let meta = SourceMeta { name: row.name.into(), authority: next(&sources), lawful: row.lawful, public: true };
+        sources.push(Arc::new(Source { meta: Arc::new(meta), default_on: row.default_on, base, adapter: row.adapter }));
     }
     for TorznabConfig { name, url, api_key } in &config.torznab {
         let valid = !name.is_empty()
@@ -204,24 +204,22 @@ pub(crate) fn registry(config: &SearchConfig) -> Result<Vec<Arc<Source>>, Error>
                 "torznab source name {name:?} must be lowercase letters, digits, '-', '_', or '.'"
             )));
         }
-        if sources.iter().any(|(meta, ..)| meta.name == *name) {
+        if sources.iter().any(|s| s.meta.name == *name) {
             return Err(config_error(format!("source name {name:?} is used twice")));
         }
-        let meta = SourceMeta { name: name.clone(), authority: 0, lawful: false, public: false };
-        let url = url::Url::parse(url)
+        let meta = SourceMeta { name: name.clone(), authority: next(&sources), lawful: false, public: false };
+        let base = url::Url::parse(url)
             .ok()
             .filter(|u| matches!(u.scheme(), "http" | "https"))
             .ok_or_else(|| config_error(format!("torznab source {name:?} needs an http or https URL")))?;
-        sources.push((meta, true, url, Adapter::Torznab { api_key: api_key.clone() }));
+        let adapter = Adapter::Torznab { api_key: api_key.clone() };
+        sources.push(Arc::new(Source { meta: Arc::new(meta), default_on: true, base, adapter }));
     }
-    Ok(sources
-        .into_iter()
-        .enumerate()
-        .map(|(i, (mut meta, default_on, base, adapter))| {
-            meta.authority = u16::try_from(i).unwrap_or(u16::MAX);
-            Arc::new(Source { meta: Arc::new(meta), default_on, base, adapter })
-        })
-        .collect())
+    Ok(sources)
+}
+
+fn next(sources: &[Arc<Source>]) -> u16 {
+    u16::try_from(sources.len()).unwrap_or(u16::MAX)
 }
 
 fn base_url(name: &str, raw: &str) -> Result<Url, Error> {

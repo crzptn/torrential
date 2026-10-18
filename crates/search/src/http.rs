@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::time::{Instant, timeout_at};
 use url::Url;
 
-pub(crate) const USER_AGENT: &str = concat!("torrential/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("torrential/", env!("CARGO_PKG_VERSION"));
 
 /// Response bodies by URL, in arrival order.
 pub type Recorded = Vec<(String, Vec<u8>)>;

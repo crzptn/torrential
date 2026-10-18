@@ -15,14 +15,16 @@ mod observation;
 mod sources;
 mod terms;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt;
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::FutureExt;
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
-use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout_at};
 use torrential_core::{Error, ErrorCode, SearchQuery, SearchResult};
 
@@ -109,44 +111,35 @@ impl Search {
     /// answered, and with `usage` for a query without words or an unknown source.
     pub async fn search(&self, query: &SearchQuery) -> Result<SearchResult, Error> {
         let started = Instant::now();
-        let terms = Arc::new(Terms::parse(&query.text));
+        let terms = Terms::parse(&query.text);
         if terms.is_empty() {
             return Err(
                 Error::new(ErrorCode::Usage, "a search needs at least one word").with_hint("torrential search <words>")
             );
         }
         let deadline = started + Duration::from_millis(query.timeout_ms.into());
-        let mut runs = Vec::new();
-        let mut tasks = JoinSet::new();
-        let mut pending = HashMap::new();
-        for source in self.select(&query.sources)? {
+        let cache = &self.inner.cache;
+        let lookups = self.select(&query.sources)?.into_iter().map(|source| {
             let key =
                 AnswerKey { source: source.meta.name.clone(), text: terms.text().to_string(), adult: query.adult };
-            if !query.fresh
-                && let Some(rows) = self.inner.cache.answer(&key, std::time::Instant::now())
-            {
-                runs.push(Run { source: source.meta.clone(), answer: Answer::Cached(rows), elapsed_ms: 0 });
-                continue;
+            let cached = if query.fresh { None } else { cache.answer(&key, std::time::Instant::now()) };
+            let terms = &terms;
+            async move {
+                if let Some(rows) = cached {
+                    return Run { source: source.meta.clone(), answer: Answer::Cached(rows), elapsed_ms: 0 };
+                }
+                let answer = AssertUnwindSafe(self.inner.run(&source, terms, query.adult, deadline))
+                    .catch_unwind()
+                    .await
+                    // A parser bug on hostile input costs that source, not the search.
+                    .unwrap_or_else(|_| Answer::Failed(Failure::BadResponse("the source adapter crashed".into())));
+                if let Answer::Fresh(rows) = &answer {
+                    cache.store(key, rows.clone(), std::time::Instant::now());
+                }
+                Run { source: source.meta.clone(), answer, elapsed_ms: millis(started.elapsed()) }
             }
-            let meta = source.meta.clone();
-            let (inner, terms, adult) = (self.inner.clone(), terms.clone(), query.adult);
-            let task = tasks.spawn(async move { inner.run(&source, &terms, adult, deadline).await });
-            pending.insert(task.id(), (meta, key));
-        }
-        while let Some(joined) = tasks.join_next_with_id().await {
-            let (id, answer) = match joined {
-                Ok((id, answer)) => (id, answer),
-                // A parser bug on hostile input costs that source, not the search.
-                Err(e) => (e.id(), Answer::Failed(Failure::BadResponse("the source adapter crashed".into()))),
-            };
-            let Some((meta, key)) = pending.remove(&id) else {
-                continue;
-            };
-            if let Answer::Fresh(rows) = &answer {
-                self.inner.cache.store(key, rows.clone(), std::time::Instant::now());
-            }
-            runs.push(Run { source: meta, answer, elapsed_ms: millis(started.elapsed()) });
-        }
+        });
+        let runs = join_all(lookups).await;
         let result = assemble(query, &terms, &runs, millis(started.elapsed()))?;
         self.inner.cache.remember(&result.releases);
         Ok(result)
