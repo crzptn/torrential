@@ -47,9 +47,12 @@ impl Default for Config {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dht {
     Off,
-    /// `bootstrap_nodes` are `host:port` pairs. With none, the node starts
-    /// from the routing table in `Config::dht_state` alone.
-    On { bootstrap_nodes: Vec<String> },
+    /// `bootstrap_nodes` are `host:port` pairs. libtorrent 2.1.2 ignores
+    /// `Config::dht_state` when the list is empty, so `Session::new` rejects
+    /// that combination.
+    On {
+        bootstrap_nodes: Vec<String>,
+    },
 }
 
 /// How much payload this session sends to peers. The limits apply to every

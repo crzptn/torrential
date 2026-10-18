@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::alert::Alert;
 use crate::bridge::{self, ffi};
-use crate::config::{Config, DhtState};
+use crate::config::{Config, Dht, DhtState};
 use crate::error::{EngineError, ErrorKind};
 use crate::identity::TorrentId;
 use crate::torrent::{
@@ -25,13 +25,25 @@ pub struct Session {
 
 impl Session {
     pub fn new(config: Config) -> Result<Session, EngineError> {
+        if let (Dht::On { bootstrap_nodes }, Some(_)) = (&config.dht, &config.dht_state)
+            && bootstrap_nodes.is_empty()
+        {
+            return Err(EngineError::new(
+                ErrorKind::InvalidInput,
+                "dht_state needs at least one DHT bootstrap node",
+            ));
+        }
         let native = ffi::new_session(&bridge::settings(&config)).map_err(bridge::error)?;
         Ok(Session { native })
     }
 
     pub fn add(&mut self, torrent: AddTorrent) -> Result<Added, EngineError> {
         let params = bridge::add_params(&torrent)?;
-        let result = self.native.pin_mut().add_torrent(&params).map_err(bridge::error)?;
+        let result = self
+            .native
+            .pin_mut()
+            .add_torrent(&params)
+            .map_err(bridge::error)?;
         let info_hash = bridge::info_hash(&result.hashes)?;
         Ok(if result.existed {
             Added::Existing(info_hash)
@@ -66,7 +78,10 @@ impl Session {
                 priority: bridge::priority(priority),
             })
             .collect();
-        let r = self.native.pin_mut().set_file_priorities(id.as_bytes(), &records);
+        let r = self
+            .native
+            .pin_mut()
+            .set_file_priorities(id.as_bytes(), &records);
         r.map_err(|e| with_id(e, id))
     }
 
@@ -104,24 +119,36 @@ impl Session {
     /// The info dictionary, plus piece layers for v2 and hybrid torrents, as
     /// a `.torrent` file. Trackers and web seeds are not included.
     pub fn metainfo(&self, id: TorrentId) -> Result<Metainfo, EngineError> {
-        let bytes = self.native.metainfo(id.as_bytes()).map_err(|e| with_id(e, id))?;
+        let bytes = self
+            .native
+            .metainfo(id.as_bytes())
+            .map_err(|e| with_id(e, id))?;
         Metainfo::from_bytes(bytes)
     }
 
     /// Needs metadata.
     pub fn files(&self, id: TorrentId) -> Result<Vec<FileEntry>, EngineError> {
-        let records = self.native.files(id.as_bytes()).map_err(|e| with_id(e, id))?;
+        let records = self
+            .native
+            .files(id.as_bytes())
+            .map_err(|e| with_id(e, id))?;
         Ok(bridge::file_entries(records))
     }
 
     pub fn status(&self, id: TorrentId) -> Result<TorrentStatus, EngineError> {
-        let record = self.native.status(id.as_bytes()).map_err(|e| with_id(e, id))?;
+        let record = self
+            .native
+            .status(id.as_bytes())
+            .map_err(|e| with_id(e, id))?;
         bridge::status(record)
     }
 
     /// Asks for session counters. `Alert::SessionStats` delivers them.
     pub fn post_session_stats(&mut self) -> Result<(), EngineError> {
-        self.native.pin_mut().post_session_stats().map_err(bridge::error)
+        self.native
+            .pin_mut()
+            .post_session_stats()
+            .map_err(bridge::error)
     }
 
     /// The DHT routing table and node ids, for `Config::dht_state`.
@@ -141,7 +168,11 @@ impl Session {
     /// empty list means the wait timed out.
     pub fn wait_alerts(&mut self, timeout: Duration) -> Result<Vec<Alert>, EngineError> {
         let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
-        let records = self.native.pin_mut().wait_alerts(millis).map_err(bridge::error)?;
+        let records = self
+            .native
+            .pin_mut()
+            .wait_alerts(millis)
+            .map_err(bridge::error)?;
         records.into_iter().map(bridge::alert).collect()
     }
 }
