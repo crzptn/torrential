@@ -308,6 +308,12 @@ impl State {
         self.quiet(job).is_some_and(|at| at + STALL_AFTER <= self.now)
     }
 
+    /// Whether bytes are arriving for a download. A brief pause in them does not count until the
+    /// download has stalled.
+    pub fn getting(&self, job: &Job) -> bool {
+        job.status == JobStatus::Downloading && !self.stalled(job)
+    }
+
     /// When the next quiet download counts as stalled, so the screen can say so unprompted.
     pub fn next_stall(&self) -> Option<Instant> {
         self.downloads.iter().filter_map(|j| self.quiet(j)).map(|at| at + STALL_AFTER).filter(|at| *at > self.now).min()

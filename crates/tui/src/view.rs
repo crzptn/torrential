@@ -104,9 +104,11 @@ enum Meter {
 }
 
 impl Meter {
-    fn job(job: &Job) -> Self {
+    /// The gauge shows only while bytes arrive, so a stalled download draws the rule instead of
+    /// a gauge frozen at its last map.
+    fn job(state: &State, job: &Job) -> Self {
         let p = &job.progress;
-        let getting = job.status == JobStatus::Downloading;
+        let getting = state.getting(job);
         let wanted: Vec<Eighths> = match p.piece_map {
             Some(map) if getting => map
                 .slices()
@@ -125,8 +127,8 @@ impl Meter {
         }
     }
 
-    fn file(job: &Job, file: &TorrentFile) -> Self {
-        Self::Share { verified: file.verified, size: Some(file.size), getting: job.status == JobStatus::Downloading }
+    fn file(state: &State, job: &Job, file: &TorrentFile) -> Self {
+        Self::Share { verified: file.verified, size: Some(file.size), getting: state.getting(job) }
     }
 }
 
@@ -496,7 +498,7 @@ fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
     }
     let room = g.rule - 2 - CONTENT;
     put(buf, CONTENT, y, room, &format::name(&name, room.into()), ink);
-    progress_mark(buf, g.rule, y, g.rule_cells, Meter::job(job));
+    progress_mark(buf, g.rule, y, g.rule_cells, Meter::job(state, job));
     let pct = p.size.map_or("–".to_string(), |size| percent(p.verified, size));
     put_right(buf, g.percent, y, &pct, ink);
     if let Some(action) = state.pending.get(&job.id) {
@@ -572,7 +574,7 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
         let name = file.path.rsplit('/').next().unwrap_or(&file.path);
         let room = g.rule - 2 - DETAIL;
         put(buf, DETAIL, row, room, &middle(name, room as usize), if here { bold(INK) } else { fg(TEXT) });
-        progress_mark(buf, g.rule, row, g.rule_cells, Meter::file(job, file));
+        progress_mark(buf, g.rule, row, g.rule_cells, Meter::file(state, job, file));
         put_right(buf, g.percent, row, &percent(file.verified, file.size), fg(PENCIL));
         put_right(buf, g.right, row, &size(file.size), fg(PENCIL));
         row += 1;

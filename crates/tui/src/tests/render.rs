@@ -173,6 +173,35 @@ fn a_gauge_spreads_a_few_wanted_slices_across_every_cell() {
 }
 
 #[test]
+fn a_stalled_download_draws_the_rule_until_bytes_arrive_again() {
+    let mut state = with_downloads((100, 30));
+    state.update(Msg::Files { item: Item::Download(id("6f2c81")), result: Ok(wikipedia_files()) });
+    let wikipedia = |rate: u64| {
+        let mut job = jobs()[0].clone();
+        job.progress.down_rate = rate;
+        job.progress.eta = None;
+        Msg::Watch(Event::Job { job: Box::new(job) })
+    };
+    let gauge = "    getting ● wikipedia-en-2026-09-text                       ▃▂▁▄▂▂▁▃▂▁▃▂▂▂▁▁   22%";
+    let file_ink = |buf: &Buffer, x: u16| buf[(x, find(buf, "s-multistream.xml.bz2").1)].fg;
+    state.update(wikipedia(600));
+    let buf = render(&state);
+    let (x, _) = find(&buf, "▃▂▁▄");
+    assert_eq!((line(&buf, 4), file_ink(&buf, x)), (gauge.to_string(), theme::ACTION), "bytes arrive");
+    later(&mut state, 20_000);
+    state.update(wikipedia(0));
+    assert_eq!(line(&render(&state), 4), gauge, "quiet for 20 s");
+    later(&mut state, 10_000);
+    state.update(Msg::Tick);
+    let buf = render(&state);
+    let stalled = "    getting ● wikipedia-en-2026-09-text                       ━━━╸────────────   22%       stalled";
+    assert_eq!(line(&buf, 4), stalled);
+    assert_eq!((buf[(x, 4)].fg, file_ink(&buf, x)), (theme::PENCIL, theme::PENCIL), "no bytes: pencil, not sage");
+    state.update(wikipedia(600));
+    assert_eq!(line(&render(&state), 4), gauge, "bytes again");
+}
+
+#[test]
 fn a_download_keeps_the_rule_until_it_has_a_map_and_while_it_is_not_getting_bytes() {
     let (_, buf, y) = wikipedia_with(JobStatus::Downloading, None);
     assert!(line(&buf, y).contains(" ━━━╸──────────── "), "no map yet: {}", line(&buf, y));
