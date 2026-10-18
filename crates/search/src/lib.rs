@@ -121,8 +121,12 @@ impl Search {
         let deadline = started + Duration::from_millis(query.timeout_ms.into());
         let cache = &self.inner.cache;
         let lookups = self.select(&query.sources)?.into_iter().map(|source| {
-            let key =
-                AnswerKey { source: source.meta.name.clone(), text: terms.text().to_string(), adult: query.adult };
+            let key = AnswerKey {
+                source: source.meta.name.clone(),
+                endpoint: source.endpoint().to_string(),
+                text: terms.text().to_string(),
+                adult: query.adult,
+            };
             let cached = if query.fresh { None } else { cache.answer(&key, std::time::Instant::now()) };
             let terms = &terms;
             async move {

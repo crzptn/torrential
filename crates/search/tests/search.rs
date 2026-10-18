@@ -295,6 +295,20 @@ async fn a_repeat_search_is_served_from_the_cache_unless_fresh() {
 }
 
 #[tokio::test]
+async fn a_shared_cache_does_not_answer_for_another_endpoint() {
+    let first = Server::start(vec![("/apibay/", vec![ok(fixture("apibay/q.php-ubuntu.json"))])]).await;
+    let mirror = Server::start(vec![("/apibay/", vec![ok(fixture("apibay/q.php-ubuntu.json"))])]).await;
+    let cache = ResultCache::new();
+    let q = query("ubuntu", &["apibay"]);
+
+    Search::new(&first.config(&["apibay"]), cache.clone()).unwrap().search(&q).await.unwrap();
+    let moved = Search::new(&mirror.config(&["apibay"]), cache).unwrap().search(&q).await.unwrap();
+
+    assert_eq!(outcomes(&moved), [("apibay".into(), SourceOutcome::Ok { results: 100 })]);
+    assert_eq!(mirror.hits("/apibay/"), 1);
+}
+
+#[tokio::test]
 async fn returned_releases_resolve_by_id_prefix() {
     let server = Server::start(vec![("/apibay/", vec![ok(fixture("apibay/q.php-ubuntu.json"))])]).await;
     let cache = ResultCache::new();

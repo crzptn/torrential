@@ -33,6 +33,8 @@ struct State {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct AnswerKey {
     pub source: String,
+    /// A `Search` rebuilt with a new endpoint for the source must not reuse old answers.
+    pub endpoint: String,
     pub text: String,
     pub adult: bool,
 }
@@ -103,7 +105,12 @@ mod tests {
     #[test]
     fn answers_expire_after_five_minutes() {
         let cache = ResultCache::new();
-        let key = AnswerKey { source: "knaben".into(), text: "ubuntu".into(), adult: false };
+        let key = AnswerKey {
+            source: "knaben".into(),
+            endpoint: "https://api.knaben.org/".into(),
+            text: "ubuntu".into(),
+            adult: false,
+        };
         let t0 = Instant::now();
         cache.store(key.clone(), rows("Ubuntu 24.04"), t0);
         let hit = cache.answer(&key, t0 + Duration::from_secs(299)).map(|r| r[0].name().to_string());

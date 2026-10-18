@@ -175,6 +175,10 @@ impl Ctx<'_> {
 }
 
 impl Source {
+    pub fn endpoint(&self) -> &str {
+        self.base.as_str()
+    }
+
     pub async fn search(&self, ctx: &Ctx<'_>) -> Result<Vec<Observation>, Failure> {
         let base = &self.base;
         match &self.adapter {
