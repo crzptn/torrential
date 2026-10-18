@@ -10,14 +10,15 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use torrential_core::units::{count, format_duration};
 use torrential_core::{
-    Codec, Eighths, Flag, Job, JobStatus, Quality, Release, ReleaseId, Resolution, Slice, SourceOutcome, TorrentFile,
+    Codec, Eighths, Flag, Job, JobStatus, Machine, Preferences, Profile, Quality, Release, ReleaseId, Resolution,
+    Slice, SourceOutcome, TorrentFile,
 };
 
 use crate::format::{
     self, age, ellipsize, first_fit, home_path, middle, percent, rate, seeds, shortenings, size, width,
 };
 use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
-use crate::state::{Engine, Files, Focus, Item, RankedFor, SearchPhase, Sort, State, Tone, label};
+use crate::state::{Engine, Files, Focus, Item, ROWS, RankedFor, Ranking, Row, SearchPhase, Sort, State, Tone, label};
 use crate::theme::*;
 use crate::tree::{Check, NodeKind, Tree};
 
@@ -441,6 +442,12 @@ fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
                 put(&mut sheet, CONTENT, y, right - CONTENT, &count(n, "download"), fg(PENCIL));
             }
             Block::Gap => last = None,
+            Block::Ranking => {
+                last = Some("ranking");
+                if let Some(ranking) = &state.ranking {
+                    ranking_rows(&mut sheet, state, ranking, right, y);
+                }
+            }
             Block::Heads => {
                 last = Some("found");
                 heads(&mut sheet, state, &columns, y);
@@ -484,7 +491,61 @@ fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
 }
 
 fn selected(state: &State, item: Item) -> bool {
-    state.cursor == Some(item) && state.focus != Focus::Query
+    state.cursor == Some(item) && state.focus != Focus::Query && state.ranking.is_none()
+}
+
+/// The ranking panel as ledger rows. The first says what search would rank for with the picks,
+/// so it reads "ranking for this Mac: …" across the margin, as `torrential setup` prints it. Then
+/// a row for each override, its choices in a line with the pick in brackets and bold, and what
+/// `auto` stands for at its end.
+fn ranking_rows(buf: &mut Buffer, state: &State, ranking: &Ranking, right: u16, y: u16) {
+    margin(buf, y, "ranking", fg(PENCIL));
+    let room = right - CONTENT;
+    let profile = Profile { detected: state.machine.clone(), preferences: ranking.picks, room: None };
+    let heads = first_fit(shortenings(&profile.describe()), usize::from(room) - "for ".len());
+    put(buf, CONTENT, y, room, &heads.map(|heads| format!("for {heads}")).unwrap_or_default(), fg(PENCIL));
+    for (row, y) in ROWS.into_iter().zip(y + 1..) {
+        let current = row == ranking.row;
+        if current {
+            mark(buf, y);
+        }
+        put(buf, CONTENT, y, room, row.name(), if current { bold(INK) } else { fg(TEXT) });
+        // Every choice takes a cell on each side, which the pick's brackets fill, so moving the
+        // pick moves no word.
+        let picked = ranking.picked(row);
+        let mut x = CONTENT + 10;
+        for (k, choice) in ranking.choices(row).into_iter().enumerate() {
+            let (text, style) = match row.value(choice) {
+                value if k == picked => (format!("[{value}]"), bold(INK)),
+                value => (format!(" {value} "), fg(PENCIL)),
+            };
+            x += put(buf, x, y, right.saturating_sub(x), &text, style);
+        }
+        if let Some(note) = auto_note(row, ranking, state.machine.as_ref())
+            && x + 2 + width(&note) as u16 <= right
+        {
+            put_right(buf, right, y, &note, fg(PENCIL));
+        }
+    }
+}
+
+/// What `auto` stands for on a row: the detected display's resolution, the detected playback, or
+/// "plays anything" while the screen is another one, since nothing detected that screen's player.
+/// A size cap notes that it also refuses larger downloads.
+fn auto_note(row: Row, ranking: &Ranking, machine: Option<&Machine>) -> Option<String> {
+    match (row, machine) {
+        (Row::MaxSize, _) => ranking.picks.max_size.map(|_| "refuses larger downloads".into()),
+        (_, None) => Some("not detected yet".into()),
+        (Row::Screen, Some(machine)) => Some(match machine.display {
+            Some(display) => format!("detected {}", display.target().as_str()),
+            None => "no screen detected".into(),
+        }),
+        (Row::Playback, Some(machine)) => {
+            let preferences = Preferences { playback: None, ..ranking.picks };
+            let auto = Profile { detected: Some(machine.clone()), preferences, room: None };
+            Some(auto.playback().map_or_else(|| "plays anything".into(), |p| format!("detected {}", p.value.as_str())))
+        }
+    }
 }
 
 fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
@@ -861,7 +922,7 @@ const HELP: [(&str, &[(&str, &str)]); 6] = [
             ("y", "copy path"),
         ],
     ),
-    ("always", &[("? f1", "keys"), ("esc", "back"), ("q", "quit"), ("ctrl+c", "quit")]),
+    ("always", &[("? f1", "keys"), ("esc", "back"), ("S", "ranking"), ("q", "quit"), ("ctrl+c", "quit")]),
 ];
 
 const NOTES: [&str; 4] = [
@@ -913,6 +974,8 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
     let downloaded = matches!(state.cursor, Some(Item::Result(ReleaseId::Torrent(t))) if state.job(t).is_some());
     let pairs: Vec<(&str, &str)> = match (state.focus, state.cursor) {
         _ if state.confirm.is_some() => Vec::new(),
+        // The arrows drop first beside a long toast, since the brackets in each row show the picks.
+        _ if state.ranking.is_some() => vec![("enter", "save"), ("esc", "close"), ("← →", "choose")],
         _ if state.help => vec![("esc", "close")],
         (Focus::Query, _) if state.items().is_empty() => vec![("enter", "search"), ("f1", "keys")],
         (Focus::Query, _) => vec![("enter", "search"), ("↓", "list"), ("f1", "keys")],

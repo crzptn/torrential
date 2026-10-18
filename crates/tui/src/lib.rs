@@ -19,3 +19,4 @@ mod tests;
 
 pub use backend::Backend;
 pub use runtime::run;
+pub use state::Edit;

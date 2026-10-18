@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use torrential_core::protocol::{Change, Event, FilesReply, GetReply, GetRequest, Request, Response};
-use torrential_core::{Error, ErrorCode, Profile, SearchQuery, SearchResult, Target};
+use torrential_core::{Error, ErrorCode, Machine, Preferences, Profile, SearchQuery, SearchResult, Target};
+
+use torrential_tui::Edit;
 
 use super::connect::{self, Conn, DEFAULT_REPLY_WITHIN};
 use crate::config::{self, Config};
@@ -14,6 +16,7 @@ use crate::daemon::admission::{Disk, RealDisk};
 use crate::daemon::server::METADATA_WAIT;
 use crate::env::Env;
 use crate::paths::Paths;
+use crate::skill::Writes;
 use crate::wire;
 
 /// Runs the TUI. It never stops the engine, so downloads keep going after it quits.
@@ -136,5 +139,20 @@ impl torrential_tui::Backend for EngineBackend {
 
     fn free_space(&self) -> Option<u64> {
         RealDisk.space(&self.downloads).ok().map(|space| space.free)
+    }
+
+    fn preferences(&self) -> Result<Preferences, Error> {
+        config::preferences(&self.paths)
+    }
+
+    fn machine(&self) -> Option<Machine> {
+        crate::machine::detect(&self.env).ok()
+    }
+
+    fn save_preferences(&self, edit: Edit) -> Result<Preferences, Error> {
+        let preferences = edit.apply(config::preferences(&self.paths)?);
+        let writes = Writes::new(&self.env, "torrential setup".into());
+        config::save_preferences(&self.paths, &preferences, &writes)?;
+        Ok(preferences)
     }
 }

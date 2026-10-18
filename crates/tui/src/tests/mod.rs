@@ -2,6 +2,7 @@
 //! data and fed to the app as the messages the runtime would send.
 
 mod keys;
+mod ranking;
 mod render;
 
 use std::path::PathBuf;

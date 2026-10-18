@@ -6,12 +6,16 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use torrential_core::protocol::{Change, Event, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
-use torrential_core::{Arch, Error, Job, JobStatus, ReleaseId, SearchQuery, SearchResult, TorrentId};
+use torrential_core::units::count;
+use torrential_core::{
+    Arch, Error, Job, JobStatus, Machine, Preferences, ReleaseId, SearchQuery, SearchResult, TorrentId,
+};
 
-use crate::format::home_path;
-use crate::layout;
+use crate::format::{first_fit, home_path};
+use crate::layout::{self, CONTENT};
 use crate::state::{
-    DownloadFiles, Engine, Files, Focus, Input, Item, JobAction, RankedFor, Search, SearchPhase, State, Tone,
+    DownloadFiles, Edit, Engine, Files, Focus, Input, Item, JobAction, RankedFor, Ranking, Search, SearchPhase, State,
+    Tone,
 };
 use crate::tree::Tree;
 
@@ -46,6 +50,14 @@ pub enum Msg {
         action: JobAction,
         result: Result<Vec<Change>, Error>,
     },
+    /// The overrides in config.yaml, read at start.
+    Preferences(Preferences),
+    /// This machine, detected at start.
+    Machine(Machine),
+    Saved {
+        edit: Edit,
+        result: Result<Preferences, Error>,
+    },
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -57,6 +69,7 @@ pub enum Effect {
     FreeSpace,
     Open(PathBuf),
     Copy(String),
+    SavePreferences(Edit),
 }
 
 /// Everything a key can do.
@@ -82,6 +95,7 @@ pub enum Action {
     CopyPath,
     Pick,
     PickAll,
+    Ranking,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -147,6 +161,16 @@ impl State {
             Msg::Files { item, result } => self.files_arrived(item, result),
             Msg::Started { release, result } => self.started(release, result),
             Msg::Changed { id, action, result } => self.changed(id, action, result),
+            // A search reply or a save is newer than what was read or detected at start.
+            Msg::Preferences(preferences) => {
+                self.preferences.get_or_insert(preferences);
+                Vec::new()
+            }
+            Msg::Machine(machine) => {
+                self.machine.get_or_insert(machine);
+                Vec::new()
+            }
+            Msg::Saved { edit, result } => self.saved(edit, result),
         });
         self.plan_prefetch();
         self.settle(before);
@@ -184,9 +208,10 @@ impl State {
         }
     }
 
-    /// The cursor's screen row, so new results above it do not move it.
+    /// The cursor's screen row, so new results above it do not move it. The ranking panel keeps
+    /// itself in view instead.
     fn anchor(&self) -> Option<(Item, i32)> {
-        let item = self.cursor?;
+        let item = self.cursor.filter(|_| self.ranking.is_none())?;
         let placed = layout::blocks(self, layout::list_height(self));
         let (top, _) = layout::span(&placed, item)?;
         Some((item, i32::from(top) - i32::from(self.scroll)))
@@ -217,7 +242,11 @@ impl State {
         {
             scroll = i32::from(top) - row;
         }
-        self.scroll = layout::settle(&placed, self.cursor, scroll, viewport);
+        let lines = match self.ranking {
+            Some(_) => layout::ranking_span(&placed),
+            None => self.cursor.and_then(|item| layout::span(&placed, item)),
+        };
+        self.scroll = layout::settle(&placed, lines, scroll, viewport);
     }
 
     fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
@@ -233,6 +262,9 @@ impl State {
         }
         if let Some(id) = self.confirm {
             return self.confirm_key(id, key);
+        }
+        if let Some(ranking) = self.ranking {
+            return self.ranking_key(ranking, key);
         }
         // F1 works while typing, where `?` is a character.
         if key.code == KeyCode::F(1) {
@@ -277,6 +309,7 @@ impl State {
             Char('a') if picking => Action::PickAll,
             Char('D') => Action::Download,
             Char('s') => Action::Sort,
+            Char('S') => Action::Ranking,
             Char(' ' | 'p') if download => Action::TogglePause,
             Char('v') if download => Action::Verify,
             Char('x') if download => Action::Remove,
@@ -365,8 +398,67 @@ impl State {
                     tree.toggle_all();
                 }
             }
+            Action::Ranking => {
+                self.ranking = Some(Ranking::new(self.preferences.unwrap_or_default()));
+                self.help = false;
+                self.focus = Focus::List;
+            }
         }
         Vec::new()
+    }
+
+    /// Arrows or `h j k l` choose, `enter` saves what changed, and `esc` or `S` closes without
+    /// saving. `q` quits, as in the list.
+    fn ranking_key(&mut self, mut ranking: Ranking, key: KeyEvent) -> Vec<Effect> {
+        use KeyCode::*;
+        match key.code {
+            Char('q') => self.quit = true,
+            Up | Char('k') => ranking.move_row(-1),
+            Down | Char('j') => ranking.move_row(1),
+            Left | Char('h') => ranking.choose(-1),
+            Right | Char('l') => ranking.choose(1),
+            Enter => {
+                self.ranking = None;
+                let changed = ranking.picks != ranking.saved;
+                return if changed { vec![Effect::SavePreferences(ranking.edit())] } else { Vec::new() };
+            }
+            Esc | Char('S') => {
+                self.ranking = None;
+                return Vec::new();
+            }
+            _ => return Vec::new(),
+        }
+        self.ranking = Some(ranking);
+        Vec::new()
+    }
+
+    /// Says what the save changed, and searches again with the new order. A filter typed over
+    /// the results stays.
+    fn saved(&mut self, edit: Edit, result: Result<Preferences, Error>) -> Vec<Effect> {
+        let preferences = match result {
+            Ok(preferences) => preferences,
+            Err(error) => {
+                self.say(Tone::Error, format!("Saving failed: {}", error.message));
+                return Vec::new();
+            }
+        };
+        self.preferences = Some(preferences);
+        let changes = edit.changes();
+        let listed = (1..=changes.len()).rev().map(|n| match changes.len() - n {
+            0 => format!("Saved {}.", changes[..n].join(", ")),
+            more => format!("Saved {} and {more} more.", changes[..n].join(", ")),
+        });
+        // The footer leaves a toast its width less 16 cells, the longest first hint and its gap.
+        let room = layout::screen(self.size).map_or(0, |s| s.right - CONTENT - 16);
+        let counted = format!("Saved {}.", count(changes.len(), "change"));
+        self.say(Tone::Success, first_fit(listed.chain([counted]), room.into()).unwrap_or_else(|| "Saved.".into()));
+        let Some(text) = self.search.as_ref().map(|s| s.text.clone()) else { return Vec::new() };
+        let typed = self.filtering().then(|| self.query.clone());
+        let effects = self.search_for(text);
+        if let Some(typed) = typed {
+            self.query = typed;
+        }
+        effects
     }
 
     fn selected_job(&self) -> Option<Job> {
@@ -672,6 +764,11 @@ impl State {
         if text.is_empty() {
             return Vec::new();
         }
+        self.search_for(text)
+    }
+
+    /// Starts a search for `text`, which replaces the last one.
+    fn search_for(&mut self, text: String) -> Vec<Effect> {
         let id = self.next_search;
         self.next_search += 1;
         self.search = Some(Search {
@@ -703,6 +800,9 @@ impl State {
         search.sources = result.sources;
         search.elapsed_ms = result.elapsed_ms;
         search.phase = phase;
+        let profile = result.query.profile;
+        self.preferences = Some(profile.preferences);
+        self.machine = profile.detected.or(self.machine.take());
         if self.follow_top
             && self.focus != Focus::Query
             && let Some(first) = self.results().first().map(|r| Item::Result(r.id))

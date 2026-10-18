@@ -48,6 +48,16 @@ fn session<B: Backend>(terminal: &mut ratatui::DefaultTerminal, backend: Arc<B>,
     let (tx, rx) = mpsc::channel();
     listen(tx.clone());
     watch(backend.clone(), tx.clone());
+    let (reader, sender) = (backend.clone(), tx.clone());
+    thread::spawn(move || {
+        // A config that cannot be read fails each search too, which says why.
+        if let Ok(preferences) = reader.preferences() {
+            let _ = sender.send(Msg::Preferences(preferences));
+        }
+        if let Some(machine) = reader.machine() {
+            let _ = sender.send(Msg::Machine(machine));
+        }
+    });
     run_loop(terminal, &mut state, &rx, &tx, &backend, mode)?;
     Ok(state)
 }
@@ -217,6 +227,12 @@ fn perform<B: Backend>(effect: Effect, backend: &Arc<B>, tx: &Sender<Msg>) {
                 Command::new(opener).arg(path).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
         }
         Effect::Copy(text) => copy(&text),
+        Effect::SavePreferences(edit) => {
+            thread::spawn(move || {
+                let result = backend.save_preferences(edit);
+                let _ = tx.send(Msg::Saved { edit, result });
+            });
+        }
     }
 }
 

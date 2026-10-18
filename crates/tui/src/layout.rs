@@ -4,7 +4,7 @@
 use ratatui::layout::Rect;
 use torrential_core::{Job, JobStatus, ReleaseId, TorrentId};
 
-use crate::state::{Engine, Files, Focus, Item, SearchPhase, State, label};
+use crate::state::{Engine, Files, Focus, Item, ROWS, SearchPhase, State, label};
 
 pub const MIN_SIZE: (u16, u16) = (60, 16);
 /// Margin labels are right-aligned in cells 1 to 10. `torrential` is the longest.
@@ -54,6 +54,8 @@ pub enum Block {
     /// Paused or done downloads counted on one line, under the margin label they share.
     Folded(&'static str),
     Gap,
+    /// The ranking panel: what search would rank for, then a row for each override.
+    Ranking,
     /// The results' margin label, the order they are in, and the column heads.
     Heads,
     Result(ReleaseId),
@@ -69,9 +71,10 @@ pub struct Placed {
     pub height: u16,
 }
 
-/// Whether the item under the cursor shows its details.
+/// Whether the item under the cursor shows its details. They close while the ranking panel has
+/// the keys.
 pub fn expanded(state: &State, item: Item) -> bool {
-    state.cursor == Some(item) && !state.collapsed && state.focus != Focus::Query
+    state.cursor == Some(item) && !state.collapsed && state.focus != Focus::Query && state.ranking.is_none()
 }
 
 /// The list from top to bottom, for a list area `viewport` rows tall.
@@ -96,6 +99,10 @@ pub fn blocks(state: &State, viewport: u16) -> Vec<Placed> {
                 }
             }
         }
+        push(Block::Gap, 1);
+    }
+    if state.ranking.is_some() {
+        push(Block::Ranking, 1 + ROWS.len() as u16);
         push(Block::Gap, 1);
     }
     let results = state.results();
@@ -189,16 +196,21 @@ pub fn span(placed: &[Placed], item: Item) -> Option<(u16, u16)> {
     Some((placed[at].top, placed[at].height + detail.map_or(0, |d| d.height)))
 }
 
+/// The rows the ranking panel takes.
+pub fn ranking_span(placed: &[Placed]) -> Option<(u16, u16)> {
+    placed.iter().find(|b| b.block == Block::Ranking).map(|b| (b.top, b.height))
+}
+
 pub fn total(placed: &[Placed]) -> u16 {
     placed.last().map_or(0, |b| b.top + b.height)
 }
 
-/// The scroll that shows the cursor's lines with context, starting from `scroll`.
-pub fn settle(placed: &[Placed], cursor: Option<Item>, scroll: i32, viewport: u16) -> u16 {
+/// The scroll that shows `lines`, a top row and a height, with context, starting from `scroll`.
+pub fn settle(placed: &[Placed], lines: Option<(u16, u16)>, scroll: i32, viewport: u16) -> u16 {
     let viewport = i32::from(viewport);
     let max = (i32::from(total(placed)) - viewport).max(0);
     let mut scroll = scroll.clamp(0, max);
-    if let Some((top, height)) = cursor.and_then(|item| span(placed, item)) {
+    if let Some((top, height)) = lines {
         let context = i32::from(CONTEXT).min((viewport - i32::from(height)).max(0) / 2);
         let (top, bottom) = (i32::from(top), i32::from(top + height));
         if bottom + context > scroll + viewport {

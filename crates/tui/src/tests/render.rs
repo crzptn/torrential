@@ -65,6 +65,18 @@ fn download(size: (u16, u16)) -> State {
     state
 }
 
+/// The ranking panel over the night search, on the playback row with h264 picked.
+fn ranking(size: (u16, u16)) -> State {
+    let mut state = searched(size);
+    press(&mut state, "Sjjlll");
+    state
+}
+
+#[test]
+fn ranking_screens() {
+    snapshots("ranking", ranking);
+}
+
 #[test]
 fn idle_screens() {
     snapshots("idle", idle);
@@ -415,6 +427,104 @@ fn a_search_with_overrides_names_them_or_only_the_machine() {
         "      found │ ranked for this Mac                            size  seeds   age",
         "not \"1080p screen, no HDR\" without the H.264 that the override set"
     );
+}
+
+fn panel_rows(state: &State) -> Vec<String> {
+    let buf = render(state);
+    let (_, y) = find(&buf, "ranking │");
+    (y..y + 4).map(|y| line(&buf, y)).collect()
+}
+
+#[test]
+fn the_ranking_panel_shows_what_was_detected_and_takes_the_one_mark() {
+    let mut state = searched((80, 24));
+    press(&mut state, "S");
+    assert_eq!(
+        panel_rows(&state),
+        [
+            "    ranking │ for this Mac: 1080p screen, shows HDR, plays HEVC, arm64",
+            "            ● screen    [auto] phone  laptop  tv  tv-4k         detected 1080p",
+            "            │ max size  [none] 2 GB  8 GB  20 GB",
+            "            │ playback  [auto] hevc-hdr  hevc  h264          detected hevc-hdr",
+        ]
+    );
+    let buf = render(&state);
+    let marks: Vec<u16> = (0..24).filter(|&y| buf[(MARK, y)].symbol() == "●").collect();
+    assert_eq!(marks, [find(&buf, "screen    [auto]").1], "the panel has the keys, not the result under the cursor");
+    assert!(!shot(&state).contains("archive.org · public domain"), "the cursor's details close");
+    assert!(line(&buf, 23).ends_with("enter save   esc close   ← → choose"), "{}", line(&buf, 23));
+    press(&mut state, "l");
+    let plain = render_in(&state, ColorMode::NoColor);
+    let (x, y) = find(&plain, "[phone]");
+    assert!(plain[(x, y)].modifier.contains(Modifier::BOLD), "the pick is bold without color");
+    assert!(plain[(x - 5, y)].modifier.contains(Modifier::DIM), "the other choices are faint");
+    assert!(line(&plain, y).contains("screen     auto [phone] laptop  tv"), "the words stay put: {}", line(&plain, y));
+}
+
+#[test]
+fn the_panel_previews_what_search_would_rank_for() {
+    let mut state = searched((100, 30));
+    press(&mut state, "Sllll");
+    assert_eq!(
+        panel_rows(&state),
+        [
+            "    ranking │ for this Mac: 2160p screen, arm64, English",
+            "            ● screen     auto  phone  laptop  tv [tv-4k]                            detected 1080p",
+            "            │ max size  [none] 2 GB  8 GB  20 GB",
+            "            │ playback  [auto] hevc-hdr  hevc  h264                                 plays anything",
+        ],
+        "a TV's player is not this Mac's, so nothing limits playback"
+    );
+    assert!(heads_row(&state).contains("ranked for this Mac: 1080p screen"), "the list keeps its order until a save");
+    press(&mut state, "jl");
+    assert_eq!(
+        panel_rows(&state)[2],
+        "            ● max size   none [2 GB] 8 GB  20 GB                          refuses larger downloads"
+    );
+}
+
+#[test]
+fn before_any_search_the_panel_shows_the_machine_detected_at_start() {
+    let mut state = with_downloads((100, 30));
+    press(&mut state, "S");
+    assert_eq!(panel_rows(&state)[0], "    ranking │ for this machine, not detected yet");
+    assert!(panel_rows(&state)[1].ends_with("not detected yet"), "{}", panel_rows(&state)[1]);
+    state.update(Msg::Machine(mac()));
+    assert_eq!(
+        panel_rows(&state)[0],
+        "    ranking │ for this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English"
+    );
+    assert!(panel_rows(&state)[1].ends_with("detected 1080p"));
+}
+
+#[test]
+fn the_panel_opens_on_the_saved_overrides_and_fits_60_columns() {
+    let five = Preferences {
+        screen: Some(torrential_core::Screen::Laptop),
+        max_size: Some(5_000_000_000),
+        playback: Some(torrential_core::Playback::H264),
+    };
+    let mut state = searched_for((60, 16), Profile { detected: Some(mac()), preferences: five, room: None });
+    press(&mut state, "S");
+    assert_eq!(
+        panel_rows(&state),
+        [
+            "    ranking │ for this Mac: 1080p screen, no HDR",
+            "            ● screen     auto  phone [laptop] tv  tv-4k",
+            "            │ max size   none  2 GB [5 GB] 8 GB  20 GB",
+            "            │ playback   auto  hevc-hdr  hevc [h264]",
+        ],
+        "the notes at the ends drop where they do not fit"
+    );
+}
+
+#[test]
+fn help_lists_the_ranking_key() {
+    let mut state = searched((100, 30));
+    press(&mut state, "?");
+    assert!(shot(&state).contains("S ranking"), "{}", shot(&state));
+    press(&mut state, "S");
+    assert_eq!((state.help, state.ranking.is_some()), (false, true), "help gives way to the panel");
 }
 
 #[test]

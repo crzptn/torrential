@@ -4,7 +4,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use torrential_core::{Error, Job, JobStatus, Release, ReleaseId, SourceReport, TorrentFile, TorrentId};
+use torrential_core::units::format_limit;
+use torrential_core::{
+    Error, Job, JobStatus, Machine, Playback, Preferences, Release, ReleaseId, Screen, SourceReport, TorrentFile,
+    TorrentId,
+};
 
 use crate::tree::Tree;
 
@@ -60,6 +64,122 @@ pub struct RankedFor {
     pub profile: String,
     /// `Profile::overrides`, for a film or show search with any.
     pub overrides: Option<String>,
+}
+
+/// A row of the ranking panel. Each overrides one part of what search ranks for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Row {
+    Screen,
+    MaxSize,
+    Playback,
+}
+
+pub const ROWS: [Row; 3] = [Row::Screen, Row::MaxSize, Row::Playback];
+
+/// The size caps the panel offers besides none.
+const CAPS: [u64; 3] = [2_000_000_000, 8_000_000_000, 20_000_000_000];
+
+impl Row {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Screen => "screen",
+            Self::MaxSize => "max size",
+            Self::Playback => "playback",
+        }
+    }
+
+    /// The row's value in `preferences`, in the words `torrential setup` takes: `auto`, `tv-4k`,
+    /// `none`, `8 GB`.
+    pub fn value(self, preferences: Preferences) -> String {
+        match self {
+            Self::Screen => preferences.screen.map_or("auto", Screen::as_str).into(),
+            Self::MaxSize => preferences.max_size.map_or_else(|| "none".into(), format_limit),
+            Self::Playback => preferences.playback.map_or("auto", Playback::as_str).into(),
+        }
+    }
+}
+
+/// The open ranking panel. The keys change `picks`, which start as `saved`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Ranking {
+    pub row: Row,
+    pub picks: Preferences,
+    /// The overrides when the panel opened. A saved cap the panel does not offer stays a choice.
+    pub saved: Preferences,
+}
+
+impl Ranking {
+    pub fn new(saved: Preferences) -> Self {
+        Self { row: Row::Screen, picks: saved, saved }
+    }
+
+    pub fn edit(&self) -> Edit {
+        Edit { from: self.saved, to: self.picks }
+    }
+
+    /// What each of the row's choices would save, `auto` or `none` first.
+    pub fn choices(&self, row: Row) -> Vec<Preferences> {
+        let with = self.picks;
+        match row {
+            Row::Screen => [None, Some(Screen::Phone), Some(Screen::Laptop), Some(Screen::Tv), Some(Screen::Tv4k)]
+                .map(|screen| Preferences { screen, ..with })
+                .to_vec(),
+            Row::MaxSize => {
+                let mut caps: Vec<u64> = CAPS.into_iter().chain(self.saved.max_size).collect();
+                caps.sort_unstable();
+                caps.dedup();
+                let caps = caps.into_iter().map(Some);
+                std::iter::once(None).chain(caps).map(|max_size| Preferences { max_size, ..with }).collect()
+            }
+            Row::Playback => [None, Some(Playback::HevcHdr), Some(Playback::Hevc), Some(Playback::H264)]
+                .map(|playback| Preferences { playback, ..with })
+                .to_vec(),
+        }
+    }
+
+    pub fn picked(&self, row: Row) -> usize {
+        self.choices(row).iter().position(|choice| *choice == self.picks).unwrap_or(0)
+    }
+
+    /// Moves the pick on the current row, stopping at either end.
+    pub fn choose(&mut self, delta: isize) {
+        let choices = self.choices(self.row);
+        self.picks = choices[self.picked(self.row).saturating_add_signed(delta).min(choices.len() - 1)];
+    }
+
+    /// Moves to the row above or below, stopping at either end.
+    pub fn move_row(&mut self, delta: isize) {
+        let at = ROWS.iter().position(|row| *row == self.row).unwrap_or(0);
+        self.row = ROWS[at.saturating_add_signed(delta).min(ROWS.len() - 1)];
+    }
+}
+
+/// What a save changes: the rows whose pick moved from what the panel opened on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Edit {
+    pub from: Preferences,
+    pub to: Preferences,
+}
+
+impl Edit {
+    /// `current` with this edit's changed rows, so a save keeps every row the panel left alone,
+    /// even one it opened on before the overrides were read, or one saved since.
+    pub fn apply(&self, current: Preferences) -> Preferences {
+        fn row<T: PartialEq>(from: T, to: T, current: T) -> T {
+            if from == to { current } else { to }
+        }
+        Preferences {
+            screen: row(self.from.screen, self.to.screen, current.screen),
+            max_size: row(self.from.max_size, self.to.max_size, current.max_size),
+            playback: row(self.from.playback, self.to.playback, current.playback),
+        }
+    }
+
+    /// Each changed row with its new value, as `screen tv-4k` or `max size none`.
+    pub fn changes(&self) -> Vec<String> {
+        let changed = ROWS.into_iter().filter(|row| row.value(self.from) != row.value(self.to));
+        changed.map(|row| format!("{} {}", row.name(), row.value(self.to))).collect()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -246,6 +366,12 @@ pub struct State {
     pub help: bool,
     /// A download whose removal waits for the user to confirm it.
     pub confirm: Option<TorrentId>,
+    pub ranking: Option<Ranking>,
+    /// The overrides in config.yaml, from the read at start, the latest search, or the latest
+    /// save. `None` until one of them arrives.
+    pub preferences: Option<Preferences>,
+    /// The machine search ranks for, from the detection at start or the latest search.
+    pub machine: Option<Machine>,
     /// The footer's message. A new one replaces it.
     pub toast: Option<Toast>,
     pub quit: bool,
@@ -290,6 +416,9 @@ impl State {
             scroll: 0,
             help: false,
             confirm: None,
+            ranking: None,
+            preferences: None,
+            machine: None,
             toast: None,
             quit: false,
             next_search: 1,

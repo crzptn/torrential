@@ -1,5 +1,7 @@
 use torrential_core::protocol::{Change, Event, FilesReply, GetReply};
-use torrential_core::{Error, SearchQuery, SearchResult};
+use torrential_core::{Error, Machine, Preferences, SearchQuery, SearchResult};
+
+use crate::state::Edit;
 
 /// What the screen asks of the engine. Every method blocks; the TUI calls each one on its own
 /// thread, so an implementation can hold one connection per call.
@@ -24,4 +26,12 @@ pub trait Backend: Send + Sync + 'static {
     fn watch(&self, event: &mut dyn FnMut(Event)) -> Result<(), Error>;
     /// Free bytes in the default download folder.
     fn free_space(&self) -> Option<u64>;
+    /// The overrides saved in config.yaml.
+    fn preferences(&self) -> Result<Preferences, Error>;
+    /// This machine, detected by the engine's code, so the ranking panel can show it before any
+    /// search.
+    fn machine(&self) -> Option<Machine>;
+    /// Applies `edit` to the overrides in config.yaml, read fresh, and saves the result, which it
+    /// returns. Later searches rank with it, and downloads take their size cap from it.
+    fn save_preferences(&self, edit: Edit) -> Result<Preferences, Error>;
 }
