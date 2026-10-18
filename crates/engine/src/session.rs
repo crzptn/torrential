@@ -98,6 +98,15 @@ impl Session {
         r.map_err(|e| with_id(e, id))
     }
 
+    /// Asks the DHT for peers now. libtorrent announces a torrent when it is
+    /// added and then once per `dht_announce_interval` (15 minutes) divided
+    /// by the number of torrents, so a torrent added before
+    /// `Alert::DhtBootstrapped` otherwise waits that long for DHT peers.
+    pub fn announce_to_dht(&mut self, id: TorrentId) -> Result<(), EngineError> {
+        let r = self.native.pin_mut().announce_to_dht(id.as_bytes());
+        r.map_err(|e| with_id(e, id))
+    }
+
     /// Asks for resume data, including the info dictionary.
     /// `Alert::ResumeDataSaved` or `Alert::ResumeDataFailed` follows. The data
     /// lists only pieces already written to disk, which can trail the verified

@@ -211,6 +211,7 @@ pub(crate) mod ffi {
             priorities: &[PriorityRecord],
         ) -> Result<()>;
         fn force_recheck(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
+        fn announce_to_dht(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn save_resume_data(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn remove(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn connect_peer(self: Pin<&mut Session>, id: &[u8], address: &str, port: u16)

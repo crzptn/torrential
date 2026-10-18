@@ -378,6 +378,8 @@ void Session::set_file_priorities(rust::Slice<const std::uint8_t> id,
 
 void Session::force_recheck(rust::Slice<const std::uint8_t> id) { find_with_metadata(id).force_recheck(); }
 
+void Session::announce_to_dht(rust::Slice<const std::uint8_t> id) { find(id).force_dht_announce(); }
+
 void Session::save_resume_data(rust::Slice<const std::uint8_t> id) {
   find(id).save_resume_data(lt::torrent_handle::flush_disk_cache | lt::torrent_handle::save_info_dict);
 }

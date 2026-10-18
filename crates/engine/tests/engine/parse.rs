@@ -65,10 +65,17 @@ fn torrent_calls_name_what_is_missing() {
     let err = node.session.pause(unknown).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::UnknownTorrent);
     assert_eq!(err.message(), "0707070707070707070707070707070707070707");
+    assert_eq!(
+        node.session.announce_to_dht(unknown).unwrap_err().kind(),
+        ErrorKind::UnknownTorrent
+    );
 
     let lonely = Magnet::parse(&magnet(Some([9; 20]), None)).unwrap();
     let id = node.add(AddTorrent::new(TorrentSource::Magnet(lonely), save.path()));
     assert_eq!(node.status(id).progress, Progress::AwaitingMetadata);
+    node.session
+        .announce_to_dht(id)
+        .expect("a torrent announces with the DHT off");
     assert_eq!(
         node.session.files(id).unwrap_err().kind(),
         ErrorKind::NoMetadata
