@@ -812,6 +812,8 @@ impl Owner {
             return Err(Error::new(ErrorCode::JobConflict, format!("{short} is busy saving its state"))
                 .with_hint(format!("try torrential verify {short} again in a few seconds")));
         }
+        self.check_writes(id, "verify")?;
+        let job = &self.jobs[&id];
         let wanted = job.wanted().unwrap_or_else(|| vec![true; metainfo.files.len()]);
         let in_engine = job.observed.in_engine();
         let dir = job.record.dir.clone();
@@ -1215,6 +1217,10 @@ impl Owner {
 
     fn start(&mut self, id: TorrentId) {
         self.jobs.get_mut(&id).expect("scheduled").forget_sources();
+        if let Err(error) = self.check_writes(id, "resume") {
+            self.fail(id, error);
+            return;
+        }
         let job = &self.jobs[&id];
         if job.observed == Observed::InEngine(Phase::Paused) {
             self.engine.send(EngineCommand::Resume(id));
@@ -1248,6 +1254,16 @@ impl Owner {
         }));
         self.jobs.get_mut(&id).expect("scheduled").observed = Observed::InEngine(phase);
         self.publish(id);
+    }
+
+    /// What a download's files looked like when it was admitted can change before the engine
+    /// writes them, so this runs again whenever the engine adds or resumes it. `command` runs it
+    /// again once the user has cleared the way.
+    fn check_writes(&self, id: TorrentId, command: &str) -> Result<(), Error> {
+        let job = &self.jobs[&id];
+        let (Some(metainfo), Some(wanted)) = (job.metainfo.as_deref(), job.wanted()) else { return Ok(()) };
+        let (dir, retry) = (&job.record.dir, format!("torrential {command} {}", &id.to_hex()[..6]));
+        admission::check_links(&admission::links(metainfo, dir, &wanted, self.disk.as_ref()), dir, Some(&retry))
     }
 
     fn tick(&mut self) {

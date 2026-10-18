@@ -634,3 +634,28 @@ fn wait_exits_8_on_a_short_timeout_and_0_when_done() {
     assert_eq!(wait.code, 0, "{}{}", wait.stdout, wait.stderr);
     assert_eq!(state(&home.job(&fixture.id())), "done");
 }
+
+#[test]
+fn a_symbolic_link_inside_the_download_folder_is_refused_and_nothing_lands_where_it_points() {
+    let fixture = Fixture::new("set", &SET, 16);
+    let seeder = Seeder::start(&fixture, None);
+    let home = Home::new(&seeder);
+    let outside = home.dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(home.downloads()).unwrap();
+    let link = home.downloads().join("set");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let dir = home.downloads().display().to_string();
+    let get = home.run(&["get", &fixture.torrent_file(), "--dir", &dir, "--json"]);
+    std::thread::sleep(Duration::from_secs(2));
+    let landed: Vec<PathBuf> = snapshot(&outside).into_keys().collect();
+    assert_eq!((get.code, landed), (4, Vec::new()), "{}{}", get.stdout, get.stderr);
+    let error = &serde_json::from_str::<Value>(&get.stdout).unwrap()["error"];
+    assert_eq!(error["code"], "path_conflict");
+    assert_eq!(
+        error["message"],
+        format!("{} is a symbolic link, and torrential writes only inside {dir}", link.display())
+    );
+    assert_eq!(error["hint"], "remove the link, or choose another folder with --dir");
+    assert_eq!(home.ok(&["status"])["jobs"], Value::Array(Vec::new()));
+}

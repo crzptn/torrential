@@ -1,5 +1,6 @@
 //! Disk state comes in through [`Disk`], so tests run the checks against a fake filesystem.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use torrential_core::error::Details;
@@ -27,6 +28,7 @@ pub trait Disk: Send {
     /// The filesystem holding `path`, or its nearest existing ancestor.
     fn space(&self, path: &Path) -> std::io::Result<Space>;
     fn exists(&self, path: &Path) -> bool;
+    fn is_link(&self, path: &Path) -> bool;
 }
 
 /// 2%, at least 2 GiB so a small disk keeps room for the system, at most 10 GiB so a big disk stays usable.
@@ -39,6 +41,9 @@ pub struct Plan {
     pub wanted: Vec<bool>,
     pub selected_size: u64,
     pub destination: PathBuf,
+    /// Symbolic links on the way to the selected files. See [`links`].
+    pub links: Vec<PathBuf>,
+    /// Files that already exist.
     pub conflicts: Vec<PathBuf>,
     pub space: Space,
 }
@@ -51,7 +56,7 @@ impl Plan {
             selected_size: self.selected_size,
             destination: self.destination.clone(),
             free_space: self.space.free,
-            conflicts: self.conflicts.clone(),
+            conflicts: self.links.iter().chain(&self.conflicts).cloned().collect(),
         }
     }
 }
@@ -74,7 +79,33 @@ pub fn plan(
     let space = disk.space(dir).map_err(|e| {
         Error::new(ErrorCode::StorageError, format!("cannot read free space at {}: {e}", dir.display()))
     })?;
-    Ok(Plan { wanted, selected_size, destination: dir.join(&metainfo.name), conflicts, space })
+    let links = links(metainfo, dir, &wanted, disk);
+    Ok(Plan { wanted, selected_size, destination: dir.join(&metainfo.name), links, conflicts, space })
+}
+
+/// Symbolic links between `dir` and the files `wanted` picks. A write follows a link wherever it
+/// points, so none may sit inside the download folder, though `dir` itself may be one, such as a
+/// Downloads folder on another disk. An empty file's own path is left out: libtorrent never writes
+/// into an empty file that exists, and creates a torrent's symbolic links as empty files whose
+/// targets it keeps inside the torrent's folder.
+pub fn links(metainfo: &Metainfo, dir: &Path, wanted: &[bool], disk: &dyn Disk) -> Vec<PathBuf> {
+    let mut links = BTreeSet::new();
+    for (file, _) in metainfo.files.iter().zip(wanted).filter(|(_, w)| **w) {
+        let relative = files::relative(metainfo, file);
+        let mut parts: Vec<_> = relative.components().collect();
+        if file.size == 0 {
+            parts.pop();
+        }
+        let mut path = dir.to_path_buf();
+        for part in parts {
+            path.push(part);
+            if disk.is_link(&path) {
+                links.insert(path);
+                break;
+            }
+        }
+    }
+    links.into_iter().collect()
 }
 
 /// A download's size cap: `--max-size`, else the max size from `torrential setup`, else
@@ -118,6 +149,8 @@ pub fn check_size(selected: u64, cap: Cap, job: Option<TorrentId>) -> Result<(),
 }
 
 pub fn check_conflicts(plan: &Plan) -> Result<(), Error> {
+    let dir = plan.destination.parent().unwrap_or(&plan.destination);
+    check_links(&plan.links, dir, None)?;
     let n = plan.conflicts.len();
     if n == 0 {
         return Ok(());
@@ -133,6 +166,22 @@ pub fn check_conflicts(plan: &Plan) -> Result<(), Error> {
     )
     .with_details(Details::Paths(plan.conflicts.iter().map(|p| p.display().to_string()).collect()))
     .with_hint("choose another folder with --dir, or move the existing files; torrential never overwrites"))
+}
+
+/// `retry` is the command that runs a refused download again, for a download that already exists.
+pub fn check_links(links: &[PathBuf], dir: &Path, retry: Option<&str>) -> Result<(), Error> {
+    let what = match links {
+        [] => return Ok(()),
+        [link] => format!("{} is a symbolic link", link.display()),
+        _ => format!("{} paths are symbolic links", links.len()),
+    };
+    let hint = match retry {
+        None => "remove the link, or choose another folder with --dir".to_string(),
+        Some(retry) => format!("remove the link, then run {retry}"),
+    };
+    Err(Error::new(ErrorCode::PathConflict, format!("{what}, and torrential writes only inside {}", dir.display()))
+        .with_details(Details::Paths(links.iter().map(|p| p.display().to_string()).collect()))
+        .with_hint(hint))
 }
 
 pub fn check_disk(space: Space, needed: u64, others_remaining: u64) -> Result<(), Error> {
@@ -177,6 +226,10 @@ impl Disk for RealDisk {
     fn exists(&self, path: &Path) -> bool {
         path.symlink_metadata().is_ok()
     }
+
+    fn is_link(&self, path: &Path) -> bool {
+        path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+    }
 }
 
 /// Plenty of space, and the real filesystem for conflicts: for the fake engine, which writes nothing,
@@ -191,35 +244,61 @@ impl Disk for RoomyDisk {
     fn exists(&self, path: &Path) -> bool {
         RealDisk.exists(path)
     }
+
+    fn is_link(&self, path: &Path) -> bool {
+        RealDisk.is_link(path)
+    }
 }
 
 #[cfg(test)]
 #[derive(Clone)]
-pub struct FakeDisk(std::sync::Arc<std::sync::Mutex<(Space, std::collections::BTreeSet<PathBuf>)>>);
+pub struct FakeDisk(std::sync::Arc<std::sync::Mutex<FakeFiles>>);
+
+#[cfg(test)]
+struct FakeFiles {
+    space: Space,
+    paths: BTreeSet<PathBuf>,
+    links: BTreeSet<PathBuf>,
+}
 
 #[cfg(test)]
 impl FakeDisk {
     pub fn new(space: Space) -> Self {
-        Self(std::sync::Arc::new(std::sync::Mutex::new((space, Default::default()))))
+        Self(std::sync::Arc::new(std::sync::Mutex::new(FakeFiles {
+            space,
+            paths: BTreeSet::new(),
+            links: BTreeSet::new(),
+        })))
     }
 
     pub fn create(&self, path: impl Into<PathBuf>) {
-        self.0.lock().unwrap().1.insert(path.into());
+        self.0.lock().unwrap().paths.insert(path.into());
+    }
+
+    pub fn link(&self, path: impl Into<PathBuf>) {
+        let path = path.into();
+        let mut files = self.0.lock().unwrap();
+        files.paths.insert(path.clone());
+        files.links.insert(path);
     }
 
     pub fn set_free(&self, free: u64) {
-        self.0.lock().unwrap().0.free = free;
+        self.0.lock().unwrap().space.free = free;
     }
 }
 
 #[cfg(test)]
 impl Disk for FakeDisk {
     fn space(&self, _: &Path) -> std::io::Result<Space> {
-        Ok(self.0.lock().unwrap().0)
+        Ok(self.0.lock().unwrap().space)
     }
 
     fn exists(&self, path: &Path) -> bool {
-        self.0.lock().unwrap().1.contains(path)
+        self.0.lock().unwrap().paths.contains(path)
+    }
+
+    fn is_link(&self, path: &Path) -> bool {
+        self.0.lock().unwrap().links.contains(path)
     }
 }
 
@@ -298,6 +377,49 @@ mod tests {
         );
         let flagged = check_size(2_254_911_385, Cap::new(Some(GIB), Some(2_000_000_000)), None).unwrap_err();
         assert_eq!(flagged.message, "the selection is 2.1 GiB, over the 1 GiB cap");
+    }
+
+    #[test]
+    fn links_below_the_download_folder_are_found_though_the_folder_itself_may_be_one() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let (real, outside) = (tmp.path().join("disk/Downloads"), tmp.path().join("outside"));
+        std::fs::create_dir_all(real.join("set/docs")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let dir = tmp.path().join("Downloads");
+        symlink(&real, &dir).unwrap();
+        let set = FakeTorrentFile {
+            info_hash: InfoHash::V1([8; 20]),
+            name: "set".into(),
+            files: vec![("a.bin".into(), 5), ("docs/b.txt".into(), 5), ("link".into(), 0)],
+        }
+        .metainfo()
+        .unwrap();
+        let found = |wanted: &[bool]| links(&set, &dir, wanted, &RealDisk);
+        assert_eq!(found(&[true, true, true]), Vec::<PathBuf>::new());
+        symlink("a.bin", real.join("set/link")).unwrap();
+        assert_eq!(found(&[true, true, true]), Vec::<PathBuf>::new(), "a torrent's own link, as libtorrent makes it");
+        std::fs::remove_dir(real.join("set/docs")).unwrap();
+        symlink(&outside, real.join("set/docs")).unwrap();
+        symlink(outside.join("a.bin"), real.join("set/a.bin")).unwrap();
+        assert_eq!(found(&[true, true, true]), [dir.join("set/a.bin"), dir.join("set/docs")]);
+        assert_eq!(found(&[false, false, true]), Vec::<PathBuf>::new(), "nothing is written through them");
+        std::fs::rename(real.join("set"), tmp.path().join("elsewhere")).unwrap();
+        symlink(tmp.path().join("elsewhere"), real.join("set")).unwrap();
+        assert_eq!(found(&[false, false, true]), [dir.join("set")]);
+        let err = check_links(&found(&[true, true, true]), &dir, None).unwrap_err();
+        assert_eq!(
+            (err.code, err.message, err.hint.as_deref()),
+            (
+                ErrorCode::PathConflict,
+                format!(
+                    "{} is a symbolic link, and torrential writes only inside {}",
+                    dir.join("set").display(),
+                    dir.display()
+                ),
+                Some("remove the link, or choose another folder with --dir")
+            )
+        );
     }
 
     #[test]

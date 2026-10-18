@@ -4,7 +4,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use torrential_core::text::sanitize;
 use torrential_core::{Error, ErrorCode, FileRisk, Selection};
 
-use super::engine_port::Metainfo;
+use super::engine_port::{MetaFile, Metainfo};
 
 pub fn compile(patterns: &[String]) -> Result<GlobSet, Error> {
     let mut set = GlobSetBuilder::new();
@@ -37,11 +37,12 @@ pub fn wanted(metainfo: &Metainfo, selection: &Selection) -> Result<Vec<bool>, E
 }
 
 pub fn targets(metainfo: &Metainfo, dir: &Path, wanted: &[bool]) -> Vec<PathBuf> {
-    let root = dir.join(&metainfo.name);
-    if metainfo.single_file {
-        return if wanted.first() == Some(&true) { vec![root] } else { Vec::new() };
-    }
-    metainfo.files.iter().zip(wanted).filter(|(_, w)| **w).map(|(f, _)| root.join(&f.path)).collect()
+    metainfo.files.iter().zip(wanted).filter(|(_, w)| **w).map(|(f, _)| dir.join(relative(metainfo, f))).collect()
+}
+
+/// Where the engine writes `file`, under the download folder.
+pub fn relative(metainfo: &Metainfo, file: &MetaFile) -> PathBuf {
+    if metainfo.single_file { PathBuf::from(&metainfo.name) } else { Path::new(&metainfo.name).join(&file.path) }
 }
 
 const EXECUTABLE: [&str; 25] = [

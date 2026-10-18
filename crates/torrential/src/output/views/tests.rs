@@ -604,6 +604,7 @@ fn sample(code: ErrorCode) -> Error {
         wanted: vec![true],
         selected_size: 70 * GIB,
         destination: "/Users/ada/Movies/night".into(),
+        links: Vec::new(),
         conflicts,
         space: disk,
     };

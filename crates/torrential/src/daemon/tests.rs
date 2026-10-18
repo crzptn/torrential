@@ -326,6 +326,49 @@ async fn disk_size_and_existing_files_refuse_a_download() {
     assert_eq!(h.get_with(only_a).await.unwrap().outcome, GetOutcome::Started);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_symbolic_link_stops_a_download_when_its_file_list_arrives_or_before_it_starts() {
+    let h = Harness::new();
+    let film = torrent(44, "film", &[("film.mkv", GIB)]);
+    h.swarm.publish(film.clone());
+    h.disk.link(h.downloads().join("film"));
+    h.get(magnet(&film), &[]).await.unwrap();
+    let jobs = h.until("the file list arrived", |jobs| jobs[0].status.name() == "error").await;
+    let JobStatus::Error { error } = &jobs[0].status else { unreachable!() };
+    assert_eq!(
+        error.message,
+        format!(
+            "{} is a symbolic link, and torrential writes only inside {}",
+            h.downloads().join("film").display(),
+            h.downloads().display()
+        )
+    );
+    h.changes(Request::Remove { refs: vec![prefix(&film)] }).await.unwrap();
+
+    let busy: Vec<FakeTorrentFile> = (45..48).map(|n| torrent(n, &format!("busy{n}"), &[("f", GIB)])).collect();
+    for t in &busy {
+        h.get(h.torrent_file(t), &[]).await.unwrap();
+    }
+    let set = torrent(48, "set", &[("a.bin", GIB), ("docs/b.bin", GIB)]);
+    assert_eq!(h.get(h.torrent_file(&set), &[]).await.unwrap().outcome, GetOutcome::Queued);
+    h.disk.link(h.downloads().join("set/docs"));
+    h.changes(Request::Remove { refs: vec![prefix(&busy[0])] }).await.unwrap();
+    let jobs = h.until("the queued download stopped", |jobs| jobs[2].status.name() != "queued").await;
+    let JobStatus::Error { error } = &jobs[2].status else { panic!("{jobs:#?}") };
+    assert_eq!(
+        (error.code, error.message.clone(), error.hint.as_deref()),
+        (
+            ErrorCode::PathConflict,
+            format!(
+                "{} is a symbolic link, and torrential writes only inside {}",
+                h.downloads().join("set/docs").display(),
+                h.downloads().display()
+            ),
+            Some("remove the link, then run torrential resume 303030")
+        )
+    );
+}
+
 fn request(h: &Harness, target: Target) -> GetRequest {
     GetRequest {
         target,

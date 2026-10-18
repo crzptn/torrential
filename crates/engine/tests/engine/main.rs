@@ -8,4 +8,5 @@ mod resume_data;
 mod selection;
 mod support;
 mod swarm;
+mod symlinks;
 mod upload;
