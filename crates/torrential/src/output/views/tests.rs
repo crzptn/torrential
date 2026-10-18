@@ -692,6 +692,11 @@ fn sample(code: ErrorCode) -> Error {
             "3 damaged pieces in the selected files",
             "torrential verify 6bc1af --repair downloads them again",
         ),
+        ErrorCode::NoSource => given(
+            code,
+            "no peer or web seed has had the last 2 pieces (488.8 KiB) for 10m",
+            "torrential resume 770e77 looks for them again; the 33.0 MiB verified stays",
+        ),
         ErrorCode::Interrupted => given(code, "interrupted", "run the command again"),
         ErrorCode::Internal => Error::internal("the engine thread stopped"),
     }

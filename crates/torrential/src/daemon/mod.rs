@@ -38,6 +38,8 @@ use store::Store;
 
 const DEFAULT_IDLE: Duration = Duration::from_secs(120);
 const SAVE_RESUME_EVERY: Duration = Duration::from_secs(5 * 60);
+/// Spans twenty web seed retries and ten peer retries, at libtorrent's 30 and 60 seconds.
+const STALL_AFTER: Duration = Duration::from_secs(10 * 60);
 pub const MAX_ACTIVE: usize = 3;
 
 /// The pieces the engine process is built from, so tests can swap in fakes.
@@ -189,6 +191,8 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         .var("TORRENTIAL_TEST_SAVE_RESUME_EVERY")
         .and_then(torrential_core::units::parse_duration)
         .unwrap_or(SAVE_RESUME_EVERY);
+    let stall_after =
+        env.var("TORRENTIAL_TEST_STALL_AFTER").and_then(torrential_core::units::parse_duration).unwrap_or(STALL_AFTER);
     let config = OwnerConfig {
         default_dir,
         probe_dir: paths.cache.join("probes"),
@@ -197,6 +201,7 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         // Seeded downloads start as if a service had restarted, not as interrupted ones.
         resume_on_start: service || seed,
         save_resume_every,
+        stall_after,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

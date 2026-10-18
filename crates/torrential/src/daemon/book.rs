@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use torrential_core::{Error, InfoHash, Job, JobStatus, PieceMap, Progress, Selection, TorrentId};
+use torrential_core::{Error, ErrorCode, InfoHash, Job, JobStatus, PieceMap, Progress, Selection, TorrentId};
 
 use super::engine_port::{Metainfo, Stats};
 use super::files;
@@ -111,6 +111,9 @@ pub struct JobEntry {
     receiving_since: Option<Instant>,
     /// The rate had stayed above zero for `ETA_AFTER` at the last sample.
     rate_settled: bool,
+    /// Since when no connected peer or web seed has had any piece the download still needs, as
+    /// of the last sample while downloading.
+    pub unsourced_since: Option<Instant>,
     pub verify: Option<Verify>,
 }
 
@@ -123,6 +126,7 @@ impl JobEntry {
             stats: Stats::default(),
             receiving_since: None,
             rate_settled: false,
+            unsourced_since: None,
             verify: None,
         }
     }
@@ -130,7 +134,39 @@ impl JobEntry {
     pub fn sample(&mut self, stats: Stats, at: Instant) {
         self.receiving_since = if stats.down_rate > 0 { self.receiving_since.or(Some(at)) } else { None };
         self.rate_settled = self.receiving_since.is_some_and(|since| at - since >= ETA_AFTER);
+        let unsourced = self.observed == Observed::InEngine(Phase::Downloading)
+            && stats.missing.is_some_and(|m| m.pieces > 0 && m.unavailable == m.pieces);
+        self.unsourced_since = if unsourced { self.unsourced_since.or(Some(at)) } else { None };
         self.stats = stats;
+    }
+
+    /// Once no peer or web seed has had any of the pieces still missing for `limit`, the download
+    /// can only wait for a new source, so it stops with this error and `resume` looks again.
+    pub fn stalled(&self, at: Instant, limit: Duration) -> Option<Error> {
+        let since = self.unsourced_since?;
+        if at - since < limit {
+            return None;
+        }
+        let pieces = self.stats.missing?.pieces as usize;
+        let size = self.selected_size()?;
+        let verified = self.verified();
+        let short = &self.record.id.to_hex()[..6];
+        let format = |bytes| crate::output::format::size(Some(bytes));
+        Some(
+            Error::new(
+                ErrorCode::NoSource,
+                format!(
+                    "no peer or web seed has had the last {} ({}) for {}",
+                    crate::output::format::count(pieces, "piece"),
+                    format(size.saturating_sub(verified)),
+                    crate::output::format::elapsed(limit),
+                ),
+            )
+            .with_hint(format!(
+                "torrential resume {short} looks for them again; the {} verified stays",
+                format(verified)
+            )),
+        )
     }
 
     pub fn id(&self) -> TorrentId {

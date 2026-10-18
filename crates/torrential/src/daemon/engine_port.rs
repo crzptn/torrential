@@ -91,10 +91,20 @@ pub struct Stats {
     pub verified: u64,
     /// `None` until the engine has the file list and the owner's selection.
     pub piece_map: Option<PieceMap>,
+    /// `None` until the engine has the file list and the owner's selection.
+    pub missing: Option<Missing>,
     pub down_rate: u64,
     pub up_rate: u64,
     pub peers: u32,
     pub seeds: u32,
+}
+
+/// Wanted pieces that have not passed their hash check.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Missing {
+    pub pieces: u32,
+    /// Those that no connected peer or web seed has.
+    pub unavailable: u32,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -285,6 +295,8 @@ struct SwarmState {
     invent_from_magnets: bool,
     rate: u64,
     damaged: BTreeMap<TorrentId, u32>,
+    /// The last wanted pieces each torrent would land, which no peer has.
+    unavailable: BTreeMap<TorrentId, u32>,
 }
 
 impl Swarm {
@@ -313,6 +325,16 @@ impl Swarm {
     pub fn damage(&self, id: TorrentId, pieces: u32) {
         self.0.lock().unwrap().damaged.insert(id, pieces);
     }
+
+    /// No peer has the last `pieces` wanted pieces of `id`, until this is called again.
+    #[cfg(test)]
+    pub fn withhold(&self, id: TorrentId, pieces: u32) {
+        self.0.lock().unwrap().unavailable.insert(id, pieces);
+    }
+
+    fn unavailable(&self, id: TorrentId) -> u32 {
+        self.0.lock().unwrap().unavailable.get(&id).copied().unwrap_or(0)
+    }
 }
 
 pub struct Fake {
@@ -326,6 +348,8 @@ pub struct Fake {
 const FAKE_STATS_EVERY: Duration = Duration::from_millis(100);
 
 struct FakeTorrent {
+    id: TorrentId,
+    swarm: Swarm,
     magnet: Option<String>,
     metainfo: Option<Metainfo>,
     wanted: Option<Vec<bool>>,
@@ -340,7 +364,8 @@ struct FakeTorrent {
 
 impl FakeTorrent {
     fn landing(&self) -> Option<Landing> {
-        Some(fake_landing(self.metainfo.as_ref()?, self.wanted.as_deref()?, self.arrived as u64))
+        let unavailable = self.swarm.unavailable(self.id);
+        Some(fake_landing(self.metainfo.as_ref()?, self.wanted.as_deref()?, self.arrived as u64, unavailable))
     }
 
     fn progress(&self) -> (u64, Option<PieceMap>) {
@@ -403,6 +428,8 @@ impl EnginePort for Fake {
             torrent.resume_data.as_deref().and_then(|d| std::str::from_utf8(d).ok()?.parse().ok()).unwrap_or(0.0);
         self.events.push_back(EngineEvent::Activity { id: torrent.id, activity });
         let t = FakeTorrent {
+            id: torrent.id,
+            swarm: self.swarm.clone(),
             magnet,
             metainfo,
             wanted: torrent.wanted,
@@ -509,11 +536,12 @@ impl EnginePort for Fake {
                 self.events.push_back(EngineEvent::Activity { id, activity: Activity::Downloading });
             }
             t.arrived = (t.arrived + rate as f64 * dt).min(size as f64);
-            let (verified, piece_map) = t.progress();
-            let done = verified >= size;
+            let landing = t.landing().expect("the file list and the selection are known");
+            let done = landing.verified >= size;
             if stats_due || done {
                 let down_rate = if done { 0 } else { rate };
-                let stats = Stats { verified, piece_map, down_rate, up_rate: 0, peers: 3, seeds: 2 };
+                let (verified, piece_map, missing) = (landing.verified, landing.piece_map, Some(landing.missing));
+                let stats = Stats { verified, piece_map, missing, down_rate, up_rate: 0, peers: 3, seeds: 2 };
                 self.events.push_back(EngineEvent::Stats { id, stats });
             }
             if done {
@@ -538,6 +566,7 @@ pub struct Landing {
     /// Bytes of each file in landed pieces, wanted or not.
     pub files: Vec<u64>,
     pub piece_map: Option<PieceMap>,
+    pub missing: Missing,
 }
 
 fn fake_piece_size(total: u64) -> u64 {
@@ -547,12 +576,13 @@ fn fake_piece_size(total: u64) -> u64 {
 /// Lands `arrived` wanted bytes as whole pieces, the way a real engine verifies them. Runs of
 /// pieces land in an order shuffled by the info hash, the way a swarm scatters them, so a slice
 /// only ever fills and the same bytes always land the same pieces. The map and the files are
-/// counted from the same pieces, so they agree.
-pub fn fake_landing(metainfo: &Metainfo, wanted: &[bool], arrived: u64) -> Landing {
+/// counted from the same pieces, so they agree. The last `unavailable` wanted pieces in that
+/// order have no source and never land.
+pub fn fake_landing(metainfo: &Metainfo, wanted: &[bool], arrived: u64, unavailable: u32) -> Landing {
     let total = metainfo.total();
     let mut files = vec![0; metainfo.files.len()];
     if total == 0 {
-        return Landing { verified: 0, files, piece_map: None };
+        return Landing { verified: 0, files, piece_map: None, missing: Missing { pieces: 0, unavailable: 0 } };
     }
     let piece = fake_piece_size(total);
     let pieces = total.div_ceil(piece) as usize;
@@ -567,15 +597,18 @@ pub fn fake_landing(metainfo: &Metainfo, wanted: &[bool], arrived: u64) -> Landi
     for i in (1..runs.len()).rev() {
         runs.swap(i, (splitmix(&mut seed) % (i as u64 + 1)) as usize);
     }
+    let wanted_pieces = want.iter().filter(|w| **w > 0).count() as u32;
+    let unavailable = unavailable.min(wanted_pieces);
     let mut have = vec![false; pieces];
-    let mut left = arrived;
+    let (mut left, mut landed) = (arrived, 0);
     let order = runs.iter().flat_map(|run| run * FAKE_RUN..((run + 1) * FAKE_RUN).min(pieces));
-    for p in order.filter(|&p| want[p] > 0) {
+    for p in order.filter(|&p| want[p] > 0).take((wanted_pieces - unavailable) as usize) {
         if want[p] > left {
             break;
         }
         have[p] = true;
         left -= want[p];
+        landed += 1;
     }
     for (file, p, bytes) in overlaps(metainfo, piece) {
         if have[p] {
@@ -587,7 +620,8 @@ pub fn fake_landing(metainfo: &Metainfo, wanted: &[bool], arrived: u64) -> Landi
         let run = begin..(begin + 1).max((s + 1) * pieces / PieceMap::SLICES);
         Slice::of(run.clone().filter(|&p| have[p]).count() as u32, run.filter(|&p| want[p] > 0).count() as u32)
     }));
-    Landing { verified: arrived - left, files, piece_map: Some(piece_map) }
+    let missing = Missing { pieces: wanted_pieces - landed, unavailable };
+    Landing { verified: arrived - left, files, piece_map: Some(piece_map), missing }
 }
 
 /// Each file's bytes in each piece it touches, as `(file, piece, bytes)`.
@@ -676,7 +710,8 @@ mod tests {
             files: vec![("a.bin".into(), 1 << 30), ("b.bin".into(), 1 << 30)],
         };
         let metainfo = set.metainfo().unwrap();
-        let map = |percent: u64| fake_landing(&metainfo, &[true, false], (1 << 30) * percent / 100).piece_map.unwrap();
+        let map =
+            |percent: u64| fake_landing(&metainfo, &[true, false], (1 << 30) * percent / 100, 0).piece_map.unwrap();
         let half = map(50).to_string();
         assert_eq!(half[32..], "-".repeat(32), "b.bin is skipped");
         assert!(half.as_bytes()[..32].windows(2).any(|w| w[0] < w[1]), "{half} does not fill from the start");
@@ -700,12 +735,12 @@ mod tests {
         let metainfo = set.metainfo().unwrap();
         let wanted = [true, false, true];
         for arrived in [0, 1, 123_456_789, 600_000_000, 1_199_000_000] {
-            let landing = fake_landing(&metainfo, &wanted, arrived);
+            let landing = fake_landing(&metainfo, &wanted, arrived, 0);
             assert!(landing.verified <= arrived, "{} verified from {arrived} arrived", landing.verified);
             let map = landing.piece_map.unwrap();
             assert_eq!(disagreement(&metainfo, &wanted, landing.verified, &landing.files, &map), None, "{map}");
         }
-        let full = fake_landing(&metainfo, &wanted, 1_200_000_434);
+        let full = fake_landing(&metainfo, &wanted, 1_200_000_434, 0);
         assert_eq!(full.verified, 1_200_000_434);
         assert_eq!(full.files, [700_000_123, 195_787 + 975_850, 500_000_311], "b.bin shares two pieces");
     }

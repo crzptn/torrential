@@ -342,7 +342,7 @@ pub fn seed(store: &mut Store, downloads: &Path, now: i64) -> Result<(), Error> 
         let size: u64 = seed.torrent.files.iter().map(|(_, size)| size).sum();
         let arrived = size / 100 * seed.done_percent;
         let metainfo = seed.torrent.metainfo()?;
-        let landing = fake_landing(&metainfo, &vec![true; metainfo.files.len()], arrived);
+        let landing = fake_landing(&metainfo, &vec![true; metainfo.files.len()], arrived, 0);
         let id = seed.torrent.info_hash.id();
         let added_at = now - seed.added_days_ago * DAY - 3_600;
         let record = JobRecord {

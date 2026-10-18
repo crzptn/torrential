@@ -72,7 +72,7 @@ The download does not depend on you. You can end your turn, and a later session 
 | 4 | `job_conflict`, `path_conflict` | Tell the user. For `path_conflict`, pick another `--dir`. |
 | 5 | `providers_unavailable`, `metadata_timeout`, `network_unavailable`, `fetch_failed` | Retry once after a minute. For `metadata_timeout`, the torrent may be dead, so prefer a result with more seeders. |
 | 6 | `sandbox_network_blocked`, `sandbox_write_blocked`, `daemon_unavailable`, `daemon_version`, `state_corrupt` | See Sandboxes. For the others, run `torrential doctor` and show the user its output. |
-| 7 | `disk_full`, `too_large`, `no_selection`, `storage_error`, `verification_failed` | Tell the user. Never delete files to make room. For `too_large`, raise `--max-size` only if the user agrees. For `no_selection`, run `torrential files <id>` and pick a glob that matches. |
+| 7 | `disk_full`, `too_large`, `no_selection`, `storage_error`, `verification_failed`, `no_source` | Tell the user. Never delete files to make room. For `too_large`, raise `--max-size` only if the user agrees. For `no_selection`, run `torrential files <id>` and pick a glob that matches. For `no_source`, no peer or web seed had the pieces still missing for 10 minutes, and the files are incomplete. `torrential resume <id>` looks again once. If it stops again, prefer another result. |
 | 8 | (none) | `wait` timed out while the download is still running. Wait again. |
 
 ## Sandboxes

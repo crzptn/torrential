@@ -34,12 +34,15 @@ pub enum ErrorCode {
     NoSelection,
     StorageError,
     VerificationFailed,
+    /// No connected peer or web seed had the pieces a download still needed, for long enough
+    /// that the engine stopped it.
+    NoSource,
     Interrupted,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 24] = [
+    pub const ALL: [ErrorCode; 25] = [
         Self::Usage,
         Self::ConfirmationRequired,
         Self::InvalidRef,
@@ -62,6 +65,7 @@ impl ErrorCode {
         Self::NoSelection,
         Self::StorageError,
         Self::VerificationFailed,
+        Self::NoSource,
         Self::Interrupted,
         Self::Internal,
     ];
@@ -78,7 +82,12 @@ impl ErrorCode {
             | Self::DaemonUnavailable
             | Self::DaemonVersion
             | Self::StateCorrupt => 6,
-            Self::DiskFull | Self::TooLarge | Self::NoSelection | Self::StorageError | Self::VerificationFailed => 7,
+            Self::DiskFull
+            | Self::TooLarge
+            | Self::NoSelection
+            | Self::StorageError
+            | Self::VerificationFailed
+            | Self::NoSource => 7,
             Self::Interrupted => 130,
         }
     }
@@ -119,6 +128,7 @@ impl ErrorCode {
             Self::NoSelection => "no_selection",
             Self::StorageError => "storage_error",
             Self::VerificationFailed => "verification_failed",
+            Self::NoSource => "no_source",
             Self::Interrupted => "interrupted",
             Self::Internal => "internal",
         }

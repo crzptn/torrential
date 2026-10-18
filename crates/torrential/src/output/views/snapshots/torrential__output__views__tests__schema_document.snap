@@ -660,6 +660,11 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
       "retryable": false
     },
     {
+      "code": "no_source",
+      "exit": 7,
+      "retryable": false
+    },
+    {
       "code": "interrupted",
       "exit": 130,
       "retryable": true

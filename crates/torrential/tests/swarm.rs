@@ -26,6 +26,8 @@ struct Home {
     seeder: SocketAddr,
     /// `None` keeps the engine's own interval, which no test outlasts.
     save_resume_every: Option<&'static str>,
+    /// `None` keeps the engine's own limit, which no test outlasts.
+    stall_after: Option<&'static str>,
 }
 
 struct Run {
@@ -36,7 +38,7 @@ struct Run {
 
 impl Home {
     fn new(seeder: &Seeder) -> Self {
-        Self { dir: tempfile::tempdir().unwrap(), seeder: seeder.addr, save_resume_every: None }
+        Self { dir: tempfile::tempdir().unwrap(), seeder: seeder.addr, save_resume_every: None, stall_after: None }
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -54,6 +56,9 @@ impl Home {
             .timeout(Duration::from_secs(300));
         if let Some(every) = self.save_resume_every {
             cmd.env("TORRENTIAL_TEST_SAVE_RESUME_EVERY", every);
+        }
+        if let Some(after) = self.stall_after {
+            cmd.env("TORRENTIAL_TEST_STALL_AFTER", after);
         }
         cmd
     }
@@ -447,6 +452,24 @@ fn a_killed_engine_trusts_its_last_periodic_save_instead_of_hashing_the_files() 
     let in_engine: u64 =
         files["files"]["files"].as_array().unwrap().iter().map(|f| f["verified"].as_u64().unwrap()).sum();
     assert_eq!(in_engine, saved, "the engine kept the saved pieces, which a hash of the zeroed files would reject");
+}
+
+#[test]
+fn a_download_whose_only_seeder_leaves_stops_with_no_source() {
+    let fixture = Fixture::new("big", &BIG, 10);
+    let seeder = Seeder::start(&fixture, SLOW);
+    let mut home = Home::new(&seeder);
+    home.stall_after = Some("3s");
+    home.get(&fixture.torrent_file(), &[]);
+    home.until(&fixture.id(), "a third is verified", |j| verified(j) >= fixture.total() / 3);
+    drop(seeder);
+    let wait = home.run(&["wait", &fixture.short(), "--timeout", "60s", "--json"]);
+    assert_eq!(wait.code, 7, "{}{}", wait.stdout, wait.stderr);
+    let result: Value = serde_json::from_str(wait.stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(result["outcome"], "error");
+    let job = home.job(&fixture.id());
+    assert_eq!((state(&job), job["error"]["code"].as_str()), ("error", Some("no_source")), "{job:#}");
+    assert!(verified(&job) < fixture.total(), "nothing unverified counts as done");
 }
 
 #[test]

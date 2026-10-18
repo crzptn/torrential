@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, Slice, TorrentId};
 use torrential_engine as lt;
 
-use super::engine_port::{Activity, AddSource, AddTorrent, EngineEvent, EnginePort, MetaFile, Metainfo, Stats};
+use super::engine_port::{
+    Activity, AddSource, AddTorrent, EngineEvent, EnginePort, MetaFile, Metainfo, Missing, Stats,
+};
 
 const BOOTSTRAP_NODES: [&str; 4] = [
     "router.bittorrent.com:6881",
@@ -351,7 +353,8 @@ impl Libtorrent {
         for (&id, t) in &self.torrents {
             let Ok(status) = self.session.status(engine_id(id)) else { continue };
             if !status.paused {
-                let stats = Stats { piece_map: piece_map(&self.session, id, t), ..sample(&status, t) };
+                let (piece_map, missing) = (piece_map(&self.session, id, t), missing(&self.session, id, t));
+                let stats = Stats { piece_map, missing, ..sample(&status, t) };
                 self.events.push(EngineEvent::Stats { id, stats });
             }
         }
@@ -594,6 +597,7 @@ fn sample(status: &lt::TorrentStatus, t: &Torrent) -> Stats {
     Stats {
         verified: verified(&status.progress, t.files.as_deref(), t.wanted.as_deref()).iter().sum(),
         piece_map: None,
+        missing: None,
         down_rate: status.download_rate,
         up_rate: status.upload_rate,
         peers: status.peers,
@@ -609,6 +613,15 @@ fn piece_map(session: &lt::Session, id: TorrentId, t: &Torrent) -> Option<PieceM
     let slices = session.piece_slices(engine_id(id), PieceMap::SLICES as u32).ok()?;
     let slices: [lt::SelectedPieces; PieceMap::SLICES] = slices.try_into().ok()?;
     Some(PieceMap::new(slices.map(|s| Slice::of(s.verified, s.selected))))
+}
+
+/// Needs the file list and the owner's selection, like [`piece_map`].
+fn missing(session: &lt::Session, id: TorrentId, t: &Torrent) -> Option<Missing> {
+    if t.files.is_none() || t.wanted.is_none() {
+        return None;
+    }
+    let m = session.missing_pieces(engine_id(id)).ok()?;
+    Some(Missing { pieces: m.missing, unavailable: m.unavailable })
 }
 
 fn storage_error(id: TorrentId, file: Option<&Path>, error: &lt::NativeError) -> Error {

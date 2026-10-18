@@ -32,6 +32,7 @@ fn config(dir: &std::path::Path) -> OwnerConfig {
         idle_timeout: None,
         resume_on_start: false,
         save_resume_every: Duration::from_millis(100),
+        stall_after: Duration::from_millis(500),
     }
 }
 
@@ -581,6 +582,41 @@ async fn a_paused_download_keeps_its_file_bytes_across_a_restart() {
     let job = h.status().await.remove(0);
     assert_eq!((job.status.name(), paused[0] + paused[2]), ("paused", job.progress.verified));
     assert_eq!(h.file_bytes(&set).await, paused, "the restarted engine reports the bytes it saved at the pause");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_download_whose_missing_pieces_have_no_source_stops_and_resume_looks_again() {
+    let h = Harness::new();
+    h.swarm.set_rate(100 * GIB);
+    let film = torrent(34, "film", &[("film.mp4", GIB), ("film.ogv", GIB)]);
+    h.swarm.withhold(film.info_hash.id(), 2);
+    h.get(h.torrent_file(&film), &["film.mp4"]).await.unwrap();
+    let jobs = h.until("stopped", |jobs| jobs[0].status.name() == "error").await;
+    let JobStatus::Error { error } = &jobs[0].status else { unreachable!() };
+    let piece = 2 * GIB_PIECE;
+    assert_eq!(jobs[0].progress.verified, GIB - 2 * piece);
+    assert_eq!(
+        (error.code, error.message.as_str(), error.hint.as_deref()),
+        (
+            ErrorCode::NoSource,
+            "no peer or web seed has had the last 2 pieces (4.0 MiB) for 0s",
+            Some("torrential resume 222222 looks for them again; the 1020.0 MiB verified stays")
+        )
+    );
+    h.swarm.withhold(film.info_hash.id(), 0);
+    h.changes(Request::Resume { refs: vec![prefix(&film)], all: false }).await.unwrap();
+    h.until("done", |jobs| jobs[0].status.name() == "done").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_download_that_gets_nothing_from_peers_that_have_its_pieces_keeps_waiting() {
+    let h = Harness::new();
+    let film = torrent(35, "film", &[("film.mp4", GIB)]);
+    h.get(h.torrent_file(&film), &[]).await.unwrap();
+    h.until("downloading", |jobs| jobs[0].status.name() == "downloading").await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let jobs = h.status().await;
+    assert_eq!((jobs[0].status.name(), jobs[0].progress.verified), ("downloading", 0));
 }
 
 #[tokio::test(flavor = "multi_thread")]

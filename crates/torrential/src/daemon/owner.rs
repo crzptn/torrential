@@ -31,6 +31,9 @@ pub struct OwnerConfig {
     pub resume_on_start: bool,
     /// How often running downloads save resume data, so a crash costs this much progress, not a hash of every file.
     pub save_resume_every: Duration,
+    /// How long a download may go with no source for any piece it still needs before it stops
+    /// with `no_source`. Longer than `save_resume_every`, so the last progress is saved first.
+    pub stall_after: Duration,
 }
 
 /// How long pause and shutdown wait for the engine to confirm that writes stopped.
@@ -831,8 +834,12 @@ impl Owner {
             }
             EngineEvent::Stats { id, stats } => {
                 if let Some(job) = self.jobs.get_mut(&id) {
-                    job.sample(stats, Instant::now());
-                    self.publish(id);
+                    let now = Instant::now();
+                    job.sample(stats, now);
+                    match job.stalled(now, self.config.stall_after) {
+                        Some(error) => self.fail(id, error),
+                        None => self.publish(id),
+                    }
                 }
             }
             EngineEvent::Finished { id } => {
@@ -1087,6 +1094,7 @@ impl Owner {
     }
 
     fn start(&mut self, id: TorrentId) {
+        self.jobs.get_mut(&id).expect("scheduled").unsourced_since = None;
         let job = &self.jobs[&id];
         if job.observed == Observed::InEngine(Phase::Paused) {
             self.engine.send(EngineCommand::Resume(id));
