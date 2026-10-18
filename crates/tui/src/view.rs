@@ -45,20 +45,20 @@ fn put_right(buf: &mut Buffer, right: u16, y: u16, text: &str, style: Style) -> 
 }
 
 /// Writes styled pieces one after another, and returns the cells written.
-fn spans(buf: &mut Buffer, x: u16, y: u16, max: u16, parts: &[(&str, Style)]) -> u16 {
+fn spans(buf: &mut Buffer, x: u16, y: u16, max: u16, parts: &[(impl AsRef<str>, Style)]) -> u16 {
     let mut used = 0;
     for (text, style) in parts {
-        used += put(buf, x + used, y, max.saturating_sub(used), text, *style);
+        used += put(buf, x + used, y, max.saturating_sub(used), text.as_ref(), *style);
     }
     used
 }
 
-fn spans_width(parts: &[(&str, Style)]) -> u16 {
-    parts.iter().map(|(t, _)| width(t) as u16).sum()
+fn spans_width(parts: &[(impl AsRef<str>, Style)]) -> u16 {
+    parts.iter().map(|(t, _)| width(t.as_ref()) as u16).sum()
 }
 
 /// Writes styled pieces so they end just before `right`, and returns where they start.
-fn spans_right(buf: &mut Buffer, right: u16, y: u16, parts: &[(&str, Style)]) -> u16 {
+fn spans_right(buf: &mut Buffer, right: u16, y: u16, parts: &[(impl AsRef<str>, Style)]) -> u16 {
     let w = spans_width(parts);
     spans(buf, right.saturating_sub(w), y, w, parts);
     right.saturating_sub(w)
@@ -189,23 +189,23 @@ fn search(buf: &mut Buffer, state: &State, screen: &Screen) -> Option<Position> 
     } else {
         rule(buf, SEARCH, SEARCH + 1);
     }
-    let (x, room) = (CONTENT, screen.right - CONTENT);
     let text = &state.query.text;
+    let hint = if focused { "type a name, then press enter" } else { "press / to search" };
+    let left = width(if text.is_empty() { hint } else { text }) as u16;
+    // The status keeps its place and a long query is cut instead, so failed sources stay in view.
+    let room = screen.right - CONTENT;
+    let [long, short] = [false, true].map(|short| search_status(state, short));
+    let status = if left + 3 + spans_width(&long) <= room { long } else { short };
+    let used = spans_width(&status);
+    spans_right(buf, screen.right, SEARCH, &status);
+    let (x, room) = (CONTENT, if used == 0 { room } else { room.saturating_sub(used + 3) });
     if text.is_empty() {
-        let hint = if focused { "type a name, then press enter" } else { "press / to search" };
         put(buf, x, SEARCH, room, hint, fg(PENCIL));
-    }
-    let typed = (width(text) as u16).min(room);
-    for short in [false, true] {
-        let status = search_status(state, short);
-        let parts: Vec<(&str, Style)> = status.iter().map(|(t, s)| (t.as_str(), *s)).collect();
-        if typed + 3 + spans_width(&parts) <= room {
-            spans_right(buf, screen.right, SEARCH, &parts);
-            break;
-        }
-    }
-    if text.is_empty() {
         return focused.then_some(Position::new(x, SEARCH));
+    }
+    if !focused {
+        put(buf, x, SEARCH, room, text, fg(INK));
+        return None;
     }
     let before: String = text.chars().take(state.query.caret).collect();
     let skip = (width(&before) as u16).saturating_sub(room.saturating_sub(1));
@@ -220,7 +220,7 @@ fn search(buf: &mut Buffer, state: &State, screen: &Screen) -> Option<Position> 
             .collect()
     };
     put(buf, x, SEARCH, room, &shown, fg(INK));
-    focused.then(|| Position::new(x + width(&before) as u16 - skip, SEARCH))
+    Some(Position::new(x + width(&before) as u16 - skip, SEARCH))
 }
 
 fn reason(outcome: &SourceOutcome) -> String {

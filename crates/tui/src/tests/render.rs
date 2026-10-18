@@ -94,6 +94,23 @@ fn help_screens() {
 }
 
 #[test]
+fn a_long_query_is_cut_so_failed_sources_stay_in_view() {
+    let mut state = with_downloads((80, 24));
+    press(&mut state, "/night of the living dead 1968 1080p bluray x264");
+    state.update(key(KeyCode::Enter));
+    state.update(Msg::SearchDone { search: 1, result: Ok(result(night()[2..3].to_vec(), final_sources())) });
+    let buf = render(&state);
+    assert_eq!(line(&buf, 2), "     search │ night of the living dead 1968 1080p bluray…   1 found · 2 failed");
+    let (x, y) = find(&buf, "2 failed");
+    assert_eq!(buf[(x, y)].fg, theme::ERROR);
+    press(&mut state, "/");
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    let caret = view::render(&mut buf, &state, ColorMode::TrueColor);
+    assert_eq!(line(&buf, 2), "     search ●  of the living dead 1968 1080p bluray x264    1 found · 2 failed");
+    assert_eq!(caret, Some(ratatui::layout::Position::new(56, 2)));
+}
+
+#[test]
 fn a_toast_never_pushes_out_the_first_hint() {
     let started = "Started Night of the Living Dead (1968) [DVD]";
     let mut state = searched((100, 30));
