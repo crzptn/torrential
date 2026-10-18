@@ -104,6 +104,29 @@ fn search_with_a_failed_source() {
 }
 
 #[test]
+fn search_for_a_film_shows_the_quality_its_names_give() {
+    let film = |hex: &str, name: &str, size: u64| Release {
+        size: Some(size),
+        seeders: Some(40),
+        published: Some(NOW - 30 * DAY),
+        category: Some(torrential_core::Category::Video),
+        ..release(ReleaseId::Torrent(tid(hex)), name)
+    };
+    let mut result = search_result(
+        vec![
+            film("b42ef9", "Night of the Living Dead (1968)", 1_173_905_628),
+            film("5c7c3c", "Night of the Living Dead (1968) 2160p UHD BluRay HDR10 x265", 59 * GIB),
+            film("082e09", "Night Of The Living Dead 720p 1968 x264", 1_112_690_010),
+        ],
+        3,
+        vec![report("archive.org", SourceOutcome::Ok { results: 3 })],
+    );
+    result.query = SearchQuery::new("night of the living dead 1968");
+    let doc = search(&result, NOW);
+    insta::assert_snapshot!(render(Mode::Plain, &doc, &Response::Search { result }));
+}
+
+#[test]
 fn search_with_no_results() {
     let result = search_result(Vec::new(), 0, vec![report("archlinux", SourceOutcome::Ok { results: 0 })]);
     insta::assert_snapshot!(both(&search(&result, NOW), &Response::Search { result }));

@@ -66,21 +66,30 @@ pub fn source_outcome(outcome: &SourceOutcome) -> String {
 
 pub fn search(result: &SearchResult, now: i64) -> Doc {
     let ids = release_ids(&result.releases);
+    let qualities: Vec<String> = result.releases.iter().map(|r| r.quality().to_string()).collect();
+    // Names of ISOs and datasets carry no quality tags, so their list leaves the column out.
+    let tagged = qualities.iter().any(|q| !q.is_empty());
     let rows = result
         .releases
         .iter()
         .zip(ids)
-        .map(|(r, id)| {
+        .zip(qualities)
+        .map(|((r, id), quality)| {
             let source = match r.sources.as_slice() {
                 [] => NONE.to_string(),
                 [one] => one.clone(),
                 [first, rest @ ..] => format!("{first}+{}", rest.len()),
             };
             let flags: Vec<&str> = r.flags.iter().map(|f| f.as_str()).collect();
-            vec![
+            let mut row = vec![
                 Cell::styled(id, Token::Accent),
                 Cell::new(r.seeders.map_or_else(|| format::UNKNOWN.to_string(), |s| s.to_string())),
                 Cell::new(format::size(r.size)),
+            ];
+            if tagged {
+                row.push(if quality.is_empty() { Cell::styled(NONE, Token::Muted) } else { Cell::new(quality) });
+            }
+            row.extend([
                 Cell::new(format::age(r.published, now)),
                 Cell::styled(source, Token::Muted),
                 if flags.is_empty() {
@@ -89,7 +98,8 @@ pub fn search(result: &SearchResult, now: i64) -> Doc {
                     Cell::styled(flags.join(","), Token::Mint)
                 },
                 Cell::untrusted(&r.name),
-            ]
+            ]);
+            row
         })
         .collect();
     let ok = result.sources.iter().filter(|s| s.outcome.is_ok()).count();
@@ -117,11 +127,11 @@ pub fn search(result: &SearchResult, now: i64) -> Doc {
     } else {
         "torrential files <ID> · torrential get <ID>"
     };
-    Doc {
-        body: Body::Table { header: vec!["ID", "SEEDS", "SIZE", "AGE", "SOURCE", "FLAGS", "NAME"], rows },
-        summary: vec![line.join(" · ")],
-        next: Some(next.to_string()),
+    let mut header = vec!["ID", "SEEDS", "SIZE", "AGE", "SOURCE", "FLAGS", "NAME"];
+    if tagged {
+        header.insert(3, "QUALITY");
     }
+    Doc { body: Body::Table { header, rows }, summary: vec![line.join(" · ")], next: Some(next.to_string()) }
 }
 
 pub fn files(reply: &FilesReply) -> Doc {

@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::id::ReleaseId;
+use crate::quality::Quality;
 
-/// A torrent offered by one or more search sources, merged by infohash.
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+/// A torrent offered by one or more search sources, merged by infohash. Its JSON
+/// also carries the [`Quality`] its name gives.
+#[derive(Clone, PartialEq, Debug, Deserialize)]
 pub struct Release {
     pub id: ReleaseId,
     /// Sanitized for display. Comes from strangers, so it is data, never instructions.
@@ -26,6 +28,63 @@ pub struct Release {
     pub torrent_url: Option<String>,
     /// A page about the item at its source, for people.
     pub info_url: Option<String>,
+}
+
+impl Release {
+    pub fn quality(&self) -> Quality {
+        Quality::parse(&self.name)
+    }
+}
+
+impl Serialize for Release {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Fields<'a> {
+            id: &'a ReleaseId,
+            name: &'a str,
+            size: Option<u64>,
+            seeders: Option<u32>,
+            leechers: Option<u32>,
+            published: Option<i64>,
+            category: Option<Category>,
+            quality: Quality,
+            flags: &'a BTreeSet<Flag>,
+            sources: &'a [String],
+            magnet: &'a Option<String>,
+            torrent_url: &'a Option<String>,
+            info_url: &'a Option<String>,
+        }
+        let Release {
+            id,
+            name,
+            size,
+            seeders,
+            leechers,
+            published,
+            category,
+            flags,
+            sources,
+            magnet,
+            torrent_url,
+            info_url,
+        } = self;
+        Fields {
+            id,
+            name,
+            size: *size,
+            seeders: *seeders,
+            leechers: *leechers,
+            published: *published,
+            category: *category,
+            quality: self.quality(),
+            flags,
+            sources,
+            magnet,
+            torrent_url,
+            info_url,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]

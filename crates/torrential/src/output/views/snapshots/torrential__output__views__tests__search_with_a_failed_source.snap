@@ -36,6 +36,11 @@ next: torrential files <ID> · torrential get <ID>
         "leechers": null,
         "published": 1790845923,
         "category": null,
+        "quality": {
+          "resolution": null,
+          "codec": null,
+          "hdr": false
+        },
         "flags": [
           "official"
         ],
@@ -55,6 +60,11 @@ next: torrential files <ID> · torrential get <ID>
         "leechers": null,
         "published": 1788253923,
         "category": null,
+        "quality": {
+          "resolution": null,
+          "codec": null,
+          "hdr": false
+        },
         "flags": [],
         "sources": [
           "knaben"
@@ -71,6 +81,11 @@ next: torrential files <ID> · torrential get <ID>
         "leechers": null,
         "published": null,
         "category": null,
+        "quality": {
+          "resolution": null,
+          "codec": null,
+          "hdr": false
+        },
         "flags": [],
         "sources": [
           "jackett"
@@ -87,6 +102,11 @@ next: torrential files <ID> · torrential get <ID>
         "leechers": null,
         "published": 1697706723,
         "category": null,
+        "quality": {
+          "resolution": null,
+          "codec": null,
+          "hdr": false
+        },
         "flags": [],
         "sources": [
           "knaben"
