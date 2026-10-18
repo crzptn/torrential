@@ -184,6 +184,29 @@ pub fn check_links(links: &[PathBuf], dir: &Path, retry: Option<&str>) -> Result
         .with_hint(hint))
 }
 
+/// `paths` under `destination` are files of the download `owner`, called `name`. `retry` as in
+/// [`check_links`].
+pub fn claimed(destination: &Path, owner: TorrentId, name: &str, paths: &[PathBuf], retry: Option<&str>) -> Error {
+    let n = paths.len();
+    let (are, files) = if n == 1 { ("is", "a file") } else { ("are", "files") };
+    let other = &owner.to_hex()[..6];
+    let hint = match retry {
+        None => format!("choose another folder with --dir, or remove {other} with torrential rm {other}"),
+        Some(retry) => format!("remove {other} with torrential rm {other}, then run {retry}"),
+    };
+    Error::new(
+        ErrorCode::PathConflict,
+        format!(
+            "{} under {} {are} already {files} of download {other} ({})",
+            crate::output::format::count(n, "file"),
+            destination.display(),
+            torrential_core::text::sanitize(name)
+        ),
+    )
+    .with_details(Details::Paths(paths.iter().map(|p| p.display().to_string()).collect()))
+    .with_hint(hint)
+}
+
 pub fn check_disk(space: Space, needed: u64, others_remaining: u64) -> Result<(), Error> {
     let keep = reserve(space.total);
     let required = needed + others_remaining + keep;

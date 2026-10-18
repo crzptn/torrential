@@ -16,6 +16,7 @@ use super::book::{self, Intent, JobEntry, JobRecord, Observed, Phase, Verify};
 use super::engine_port::{
     Activity, AddSource, AddTorrent, EngineCommand, EngineEvent, EngineHandle, Metainfo, ParseTorrent,
 };
+use super::files;
 use super::magnet::{self, Magnet};
 use super::resolve::{self, Found, Scope};
 use super::store::{Store, Tombstone};
@@ -409,10 +410,11 @@ impl Owner {
         let cap = Cap::new(max_size, setup_max_size);
         let plan =
             metainfo.as_deref().map(|m| admission::plan(m, &selection, &dir, None, self.disk.as_ref())).transpose()?;
-        if let Some(plan) = &plan {
+        if let (Some(plan), Some(metainfo)) = (&plan, metainfo.as_deref()) {
             admission::check_size(plan.selected_size, cap, None)?;
             if !dry_run {
                 admission::check_conflicts(plan)?;
+                self.check_claims(id, metainfo, &dir, &plan.wanted, None)?;
             }
             admission::check_disk(plan.space, plan.selected_size, self.others_remaining(&dir, id))?;
         }
@@ -509,6 +511,7 @@ impl Owner {
         admission::check_size(plan.selected_size, cap, None)?;
         if !dry_run {
             admission::check_conflicts(&plan)?;
+            self.check_claims(id, &metainfo, &job.record.dir, &plan.wanted, None)?;
         }
         let needed = plan.selected_size.saturating_sub(job.verified());
         admission::check_disk(plan.space, needed, self.others_remaining(&job.record.dir, id))?;
@@ -936,6 +939,7 @@ impl Owner {
         let admitted = admission::plan(&metainfo, &selection, &dir, None, self.disk.as_ref()).and_then(|plan| {
             admission::check_size(plan.selected_size, cap, Some(id))?;
             admission::check_conflicts(&plan)?;
+            self.check_claims(id, &metainfo, &dir, &plan.wanted, None)?;
             admission::check_disk(plan.space, plan.selected_size, self.others_remaining(&dir, id))?;
             Ok(plan)
         });
@@ -1263,7 +1267,35 @@ impl Owner {
         let job = &self.jobs[&id];
         let (Some(metainfo), Some(wanted)) = (job.metainfo.as_deref(), job.wanted()) else { return Ok(()) };
         let (dir, retry) = (&job.record.dir, format!("torrential {command} {}", &id.to_hex()[..6]));
-        admission::check_links(&admission::links(metainfo, dir, &wanted, self.disk.as_ref()), dir, Some(&retry))
+        admission::check_links(&admission::links(metainfo, dir, &wanted, self.disk.as_ref()), dir, Some(&retry))?;
+        self.check_claims(id, metainfo, dir, &wanted, Some(&retry))
+    }
+
+    /// A download claims its selected files from admission until it is removed, so no two
+    /// downloads write one file, even before either has created it. One stopped by an error gives
+    /// up its claim, and claims its files again when it starts.
+    fn check_claims(
+        &self,
+        id: TorrentId,
+        metainfo: &Metainfo,
+        dir: &Path,
+        wanted: &[bool],
+        retry: Option<&str>,
+    ) -> Result<(), Error> {
+        let paths: BTreeMap<String, PathBuf> =
+            files::targets(metainfo, dir, wanted).into_iter().map(|p| (claim_key(&p), p)).collect();
+        for job in self.jobs.values().filter(|j| j.id() != id && !matches!(j.record.intent, Intent::Failed { .. })) {
+            let (Some(theirs), Some(their_wanted)) = (job.metainfo.as_deref(), job.wanted()) else { continue };
+            let taken: Vec<PathBuf> = files::targets(theirs, &job.record.dir, &their_wanted)
+                .iter()
+                .filter_map(|p| paths.get(&claim_key(p)).cloned())
+                .collect();
+            if !taken.is_empty() {
+                let destination = dir.join(&metainfo.name);
+                return Err(admission::claimed(&destination, job.id(), &theirs.name, &taken, retry));
+            }
+        }
+        Ok(())
     }
 
     fn tick(&mut self) {
@@ -1364,6 +1396,11 @@ impl Owner {
         }
         self.stopped = true;
     }
+}
+
+/// macOS and Windows filesystems ignore case, so `Pack/a.bin` and `pack/a.bin` are one file.
+fn claim_key(path: &Path) -> String {
+    path.to_string_lossy().to_lowercase()
 }
 
 fn no_download(reference: &str) -> Error {

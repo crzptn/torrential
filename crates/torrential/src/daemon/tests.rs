@@ -369,6 +369,43 @@ async fn a_symbolic_link_stops_a_download_when_its_file_list_arrives_or_before_i
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_download_cannot_take_files_another_download_claims_whatever_their_case() {
+    let h = Harness::new();
+    h.swarm.set_rate(100 * GIB);
+    let first = torrent(50, "pack", &[("same.bin", GIB)]);
+    h.swarm.withhold(first.info_hash.id(), 2);
+    h.get(h.torrent_file(&first), &[]).await.unwrap();
+    h.until("the first stopped", |jobs| jobs[0].status.name() == "error").await;
+    let second = torrent(51, "Pack", &[("same.bin", GIB)]);
+    assert_eq!(h.get(h.torrent_file(&second), &[]).await.unwrap().outcome, GetOutcome::Started);
+    let third = torrent(52, "PACK", &[("same.bin", GIB)]);
+    let err = h.get(h.torrent_file(&third), &[]).await.unwrap_err();
+    let downloads = h.downloads().display().to_string();
+    assert_eq!(
+        (err.code, err.message, err.hint.as_deref()),
+        (
+            ErrorCode::PathConflict,
+            format!("1 file under {downloads}/PACK is already a file of download 333333 (Pack)"),
+            Some("choose another folder with --dir, or remove 333333 with torrential rm 333333")
+        )
+    );
+
+    h.swarm.withhold(first.info_hash.id(), 0);
+    h.changes(Request::Resume { refs: vec![prefix(&first)], all: false }).await.unwrap();
+    let stopped_again =
+        |jobs: &[Job]| matches!(&jobs[0].status, JobStatus::Error { error } if error.code == ErrorCode::PathConflict);
+    let jobs = h.until("the first stopped again", stopped_again).await;
+    let JobStatus::Error { error } = &jobs[0].status else { unreachable!() };
+    assert_eq!(
+        (error.message.as_str(), error.hint.as_deref()),
+        (
+            format!("1 file under {downloads}/pack is already a file of download 333333 (Pack)").as_str(),
+            Some("remove 333333 with torrential rm 333333, then run torrential resume 323232")
+        )
+    );
+}
+
 fn request(h: &Harness, target: Target) -> GetRequest {
     GetRequest {
         target,
@@ -382,7 +419,7 @@ fn request(h: &Harness, target: Target) -> GetRequest {
 
 /// Starts a 3 GiB download from a magnet under a 2 GiB cap from setup, which stops once the file list arrives.
 async fn over_its_setup_cap(h: &Harness, n: u8) -> FakeTorrentFile {
-    let film = torrent(n, "film", &[("film.mkv", 2 * GIB), ("extras.mkv", GIB)]);
+    let film = torrent(n, &format!("film{n}"), &[("film.mkv", 2 * GIB), ("extras.mkv", GIB)]);
     h.swarm.publish(film.clone());
     h.get_with(GetRequest { setup_max_size: Some(2 * GIB), ..request(h, magnet(&film)) }).await.unwrap();
     let id = film.info_hash.id();

@@ -24,7 +24,8 @@ const RECONNECT: &str = "4m";
 
 struct Home {
     dir: tempfile::TempDir,
-    seeder: SocketAddr,
+    /// The seeders' addresses, comma-separated.
+    peers: String,
     /// `None` keeps the engine's own interval, which no test outlasts.
     save_resume_every: Option<&'static str>,
     /// `None` keeps the engine's own limit, which no test outlasts.
@@ -39,7 +40,12 @@ struct Run {
 
 impl Home {
     fn new(seeder: &Seeder) -> Self {
-        Self { dir: tempfile::tempdir().unwrap(), seeder: seeder.addr, save_resume_every: None, stall_after: None }
+        Self::seeded_by(&[seeder])
+    }
+
+    fn seeded_by(seeders: &[&Seeder]) -> Self {
+        let peers = seeders.iter().map(|s| s.addr.to_string()).collect::<Vec<_>>().join(",");
+        Self { dir: tempfile::tempdir().unwrap(), peers, save_resume_every: None, stall_after: None }
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -52,7 +58,7 @@ impl Home {
             .env("TORRENTIAL_HOME", self.dir.path().join("th"))
             .env("TORRENTIAL_TEST_IDLE_TIMEOUT", "60s")
             .env("TORRENTIAL_TEST_NETWORK", "loopback")
-            .env("TORRENTIAL_TEST_PEERS", self.seeder.to_string())
+            .env("TORRENTIAL_TEST_PEERS", &self.peers)
             .env("TORRENTIAL_TEST_DISK", "roomy")
             .timeout(Duration::from_secs(300));
         if let Some(every) = self.save_resume_every {
@@ -658,4 +664,48 @@ fn a_symbolic_link_inside_the_download_folder_is_refused_and_nothing_lands_where
     );
     assert_eq!(error["hint"], "remove the link, or choose another folder with --dir");
     assert_eq!(home.ok(&["status"])["jobs"], Value::Array(Vec::new()));
+}
+
+#[test]
+fn a_download_to_files_a_queued_download_will_write_is_refused() {
+    let first = Fixture::new("pack", &[("same.bin", 300_000)], 17);
+    let second = Fixture::new("pack", &[("same.bin", 300_000)], 18);
+    let (a, b) = (Seeder::start(&first, None), Seeder::start(&second, None));
+    let home = Home::seeded_by(&[&a, &b]);
+    let blockers: Vec<String> = (1..=3u8).map(|n| hex(&[n; 20])).collect();
+    for hash in &blockers {
+        assert_eq!(home.get(&format!("magnet:?xt=urn:btih:{hash}"), &[])["reply"]["outcome"], "started");
+    }
+    assert_eq!(home.get(&first.torrent_file(), &[])["reply"]["outcome"], "queued");
+    let dir = home.downloads().display().to_string();
+    let refused = home.run(&["get", &second.torrent_file(), "--dir", &dir, "--json"]);
+    for hash in &blockers {
+        home.ok(&["rm", &hash[..6]]);
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let jobs = loop {
+        let jobs = home.ok(&["status"])["jobs"].as_array().unwrap().clone();
+        if jobs.iter().all(|j| state(j) == "done") || Instant::now() > deadline {
+            break jobs;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let finished: Vec<(&str, &str)> = jobs.iter().map(|j| (j["id"].as_str().unwrap(), state(j))).collect();
+    assert_eq!(
+        (refused.code, finished, first.intact(&home, "same.bin")),
+        (4, vec![(first.id().as_str(), "done")], true),
+        "{}{}",
+        refused.stdout,
+        refused.stderr
+    );
+    let error = &serde_json::from_str::<Value>(&refused.stdout).unwrap()["error"];
+    assert_eq!(error["code"], "path_conflict");
+    assert_eq!(
+        error["message"],
+        format!("1 file under {dir}/pack is already a file of download {} (pack)", first.short())
+    );
+    assert_eq!(
+        error["hint"],
+        format!("choose another folder with --dir, or remove {0} with torrential rm {0}", first.short())
+    );
 }
