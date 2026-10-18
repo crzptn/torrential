@@ -165,10 +165,10 @@ lt::address parse_address(rust::Str address) {
   return a;
 }
 
-// Choking with zero unchoke slots still leaves three ways to serve payload:
-// one optimistic unchoke (libtorrent grants max(1, slots / 5)), the
-// allowed-fast set a choked peer may request, and peers in the local peer
-// class, which skip the choker. Refusing every request covers all of them.
+// Zero unchoke slots alone still serves payload two ways: peers in the local
+// peer class skip the choker, and a choked peer may request the allowed-fast
+// pieces. make_params and every_peer_global close both. Refusing every
+// request keeps upload at zero through any path those settings miss.
 struct RefuseRequests final : lt::peer_plugin {
   explicit RefuseRequests(lt::peer_connection_handle pc) : pc_(std::move(pc)) {}
   bool on_request(lt::peer_request const&) override {
