@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use torrential_engine::{
-    AddTorrent, Alert, FileIndex, FilePriority, FileSelection, Magnet, TorrentFormat, TorrentSource,
+    AddTorrent, Alert, FileIndex, FilePriority, FileSelection, Magnet, SelectedPieces,
+    TorrentFormat, TorrentSource,
 };
 
 use crate::support::{Fixture, Node, expected_hashes, loopback, magnet, sha256_file};
@@ -29,6 +30,13 @@ fn metadata_only_downloads_nothing_until_a_file_is_selected() {
     let status = leecher.status(id);
     assert_eq!(status.downloaded_payload, 0);
     assert_eq!(status.progress.selected_bytes(), 0);
+    assert_eq!(
+        leecher.session.selected_pieces(id).unwrap(),
+        SelectedPieces {
+            selected: 0,
+            verified: 0
+        }
+    );
     assert_eq!(leecher.session.files(id).unwrap(), torrent.files());
 
     leecher
@@ -46,6 +54,14 @@ fn metadata_only_downloads_nothing_until_a_file_is_selected() {
     let progress = leecher.status(id).progress;
     assert_eq!(progress.selected_bytes(), 50_000);
     assert_eq!(progress.verified_selected_bytes(), 50_000);
+    assert_eq!(
+        leecher.session.selected_pieces(id).unwrap(),
+        SelectedPieces {
+            selected: 4,
+            verified: 4
+        },
+        "c.bin spans pieces 4 to 7, and piece 4 also holds the end of b.bin"
+    );
     assert_eq!(
         progress.file(FileIndex::new(0)).unwrap().priority,
         FilePriority::Skip

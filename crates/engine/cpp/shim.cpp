@@ -376,12 +376,20 @@ void Session::connect_peer(rust::Slice<const std::uint8_t> id, rust::Str address
 }
 
 rust::Vec<std::uint8_t> Session::metainfo(rust::Slice<const std::uint8_t> id) const {
+  return torrent_file(id, true);
+}
+
+rust::Vec<std::uint8_t> Session::info_dictionary(rust::Slice<const std::uint8_t> id) const {
+  return torrent_file(id, false);
+}
+
+rust::Vec<std::uint8_t> Session::torrent_file(rust::Slice<const std::uint8_t> id, bool piece_layers) const {
   lt::torrent_handle const h = find_with_metadata(id);
   auto const ti = h.torrent_file();
   lt::entry torrent;
   auto const info = ti->info_section();
   torrent["info"].preformatted().assign(info.begin(), info.end());
-  if (ti->v2()) {
+  if (piece_layers && ti->v2()) {
     lt::file_storage const& fs = ti->layout();
     auto const layers = h.piece_layers();
     auto& dict = torrent["piece layers"].dict();
@@ -438,6 +446,20 @@ StatusRecord Session::status(rust::Slice<const std::uint8_t> id) const {
                                            static_cast<std::uint8_t>(prio),
                                            static_cast<std::uint64_t>(verified.at(i))});
     }
+  }
+  return r;
+}
+
+PieceCounts Session::selected_pieces(rust::Slice<const std::uint8_t> id) const {
+  lt::torrent_handle const h = find_with_metadata(id);
+  lt::torrent_status const st = h.status(lt::torrent_handle::query_pieces);
+  std::vector<lt::download_priority_t> const priorities = h.get_piece_priorities();
+  PieceCounts r{};
+  for (lt::piece_index_t const p : st.pieces.range()) {
+    auto const i = static_cast<std::size_t>(static_cast<int>(p));
+    if (i < priorities.size() && priorities[i] == lt::dont_download) continue;
+    ++r.selected;
+    if (st.pieces.get_bit(p)) ++r.verified;
   }
   return r;
 }

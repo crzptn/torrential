@@ -315,6 +315,14 @@ impl Progress {
     }
 }
 
+/// The pieces that hold bytes of a file not set to `FilePriority::Skip`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectedPieces {
+    pub selected: u32,
+    /// Those that passed their hash check.
+    pub verified: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileProgress {
     pub index: FileIndex,

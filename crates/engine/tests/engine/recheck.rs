@@ -2,7 +2,9 @@ use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 
 use tempfile::TempDir;
-use torrential_engine::{AddTorrent, Alert, ErrorKind, FileIndex, TorrentFormat, TorrentSource};
+use torrential_engine::{
+    AddTorrent, Alert, ErrorKind, FileIndex, SelectedPieces, TorrentFormat, TorrentSource,
+};
 
 use crate::support::{Fixture, Node, PIECE, loopback, sha256_file, snapshot, total_size};
 
@@ -50,6 +52,13 @@ fn recheck_reports_a_damaged_piece_and_downloading_repairs_it() {
     );
     assert_eq!(progress.file(FileIndex::new(1)).unwrap().verified, 30_000);
     assert_eq!(progress.verified_selected_bytes(), total - u64::from(PIECE));
+    assert_eq!(
+        leecher.session.selected_pieces(id).unwrap(),
+        SelectedPieces {
+            selected: 5,
+            verified: 4
+        }
+    );
 
     let mut repair = Node::new(loopback());
     repair.seed(&torrent, fixture.save_path());

@@ -7,7 +7,7 @@ use crate::config::{Config, Dht, DhtState};
 use crate::error::{EngineError, ErrorKind};
 use crate::identity::TorrentId;
 use crate::torrent::{
-    AddTorrent, Added, FileEntry, FileIndex, FilePriority, Metainfo, TorrentStatus,
+    AddTorrent, Added, FileEntry, FileIndex, FilePriority, Metainfo, SelectedPieces, TorrentStatus,
 };
 
 /// One libtorrent session, which serves every torrent.
@@ -133,6 +133,18 @@ impl Session {
         Metainfo::from_bytes(bytes)
     }
 
+    /// The info dictionary alone, as a `.torrent` file. Unlike `metainfo` it
+    /// is ready as soon as metadata arrives: libtorrent asks peers for v2
+    /// piece layers only while it downloads pieces, and it accepts a v2 or
+    /// hybrid `.torrent` without them.
+    pub fn info_dictionary(&self, id: TorrentId) -> Result<Metainfo, EngineError> {
+        let bytes = self
+            .native
+            .info_dictionary(id.as_bytes())
+            .map_err(|e| with_id(e, id))?;
+        Metainfo::from_bytes(bytes)
+    }
+
     /// Needs metadata.
     pub fn files(&self, id: TorrentId) -> Result<Vec<FileEntry>, EngineError> {
         let records = self
@@ -148,6 +160,19 @@ impl Session {
             .status(id.as_bytes())
             .map_err(|e| with_id(e, id))?;
         bridge::status(record)
+    }
+
+    /// Needs metadata. Unlike `status`, this counts whole pieces, so a damaged
+    /// piece that spans two files counts once.
+    pub fn selected_pieces(&self, id: TorrentId) -> Result<SelectedPieces, EngineError> {
+        let counts = self
+            .native
+            .selected_pieces(id.as_bytes())
+            .map_err(|e| with_id(e, id))?;
+        Ok(SelectedPieces {
+            selected: counts.selected,
+            verified: counts.verified,
+        })
     }
 
     /// Asks for session counters. `Alert::SessionStats` delivers them.

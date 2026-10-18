@@ -40,6 +40,7 @@ struct FileRecord;
 struct StatusRecord;
 struct AlertRecord;
 struct PriorityRecord;
+struct PieceCounts;
 
 class Session {
  public:
@@ -55,8 +56,10 @@ class Session {
   void remove(rust::Slice<const std::uint8_t> id);
   void connect_peer(rust::Slice<const std::uint8_t> id, rust::Str address, std::uint16_t port);
   rust::Vec<std::uint8_t> metainfo(rust::Slice<const std::uint8_t> id) const;
+  rust::Vec<std::uint8_t> info_dictionary(rust::Slice<const std::uint8_t> id) const;
   rust::Vec<FileRecord> files(rust::Slice<const std::uint8_t> id) const;
   StatusRecord status(rust::Slice<const std::uint8_t> id) const;
+  PieceCounts selected_pieces(rust::Slice<const std::uint8_t> id) const;
   void post_session_stats();
   rust::Vec<std::uint8_t> save_state() const;
   std::uint16_t listen_port() const;
@@ -65,6 +68,7 @@ class Session {
  private:
   lt::torrent_handle find(rust::Slice<const std::uint8_t> id) const;
   lt::torrent_handle find_with_metadata(rust::Slice<const std::uint8_t> id) const;
+  rust::Vec<std::uint8_t> torrent_file(rust::Slice<const std::uint8_t> id, bool piece_layers) const;
 
   struct StatsIndex {
     int sent_payload_bytes;

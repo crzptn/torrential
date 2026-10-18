@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 use torrential_engine::{
-    AddTorrent, Alert, FileEntry, FileIndex, Magnet, TorrentFormat, TorrentSource,
+    AddTorrent, Alert, ErrorKind, FileEntry, FileIndex, FileSelection, Magnet, TorrentFormat,
+    TorrentSource,
 };
 
 use crate::support::{
@@ -68,4 +69,36 @@ fn hybrid_torrent_downloads_and_reports_both_hashes() {
             String::from_utf8_lossy(key)
         );
     }
+}
+
+#[test]
+fn a_hybrid_magnet_has_an_info_dictionary_before_its_piece_layers() {
+    let fixture = Fixture::new("layers", &[("a.bin", 40_000), ("b.bin", 30_000)], 19);
+    let torrent = fixture.torrent(TorrentFormat::Hybrid);
+    let hashes = expected_hashes(torrent.as_bytes());
+    let mut seeder = Node::new(loopback());
+    seeder.seed(&torrent, fixture.save_path());
+
+    let mut leecher = Node::new(loopback());
+    let download = TempDir::new().unwrap();
+    let magnet = Magnet::parse(&magnet(Some(hashes.0), Some(hashes.1))).unwrap();
+    let mut add = AddTorrent::new(TorrentSource::Magnet(magnet), download.path());
+    add.files = FileSelection::metadata_only();
+    add.peers = vec![seeder.addr()];
+    let id = leecher.add(add);
+    leecher.wait_for("metadata", |a| matches!(a, Alert::MetadataReceived { .. }));
+
+    assert_eq!(
+        leecher.session.metainfo(id).unwrap_err().kind(),
+        ErrorKind::NoMetadata,
+        "nothing was downloaded, so no piece layer was asked for"
+    );
+    let info = leecher.session.info_dictionary(id).unwrap();
+    assert_eq!(info.info_hash(), torrent.info_hash());
+    assert_eq!(info.files(), torrent.files());
+    assert_eq!(
+        bencode::dict_value(info.as_bytes(), b"info"),
+        bencode::dict_value(torrent.as_bytes(), b"info")
+    );
+    assert_eq!(bencode::dict_value(info.as_bytes(), b"piece layers"), None);
 }
