@@ -679,6 +679,34 @@ async fn a_result_with_only_a_torrent_url_is_fetched_once_found() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_full_id_of_a_search_result_fetches_its_torrent_as_a_prefix_does() {
+    let bunny = torrent(40, "BigBuckBunny_124", &[("BigBuckBunny_124.mp4", GIB), ("BigBuckBunny_124.ogv", GIB)]);
+    let id = bunny.info_hash.id().to_hex();
+    let url = "https://archive.org/download/BigBuckBunny_124/BigBuckBunny_124_archive.torrent";
+    let row = torrential_core::Release {
+        id: torrential_core::ReleaseId::Torrent(bunny.info_hash.id()),
+        name: "Big Buck Bunny".into(),
+        magnet: Some(format!("magnet:?xt=urn:btih:{id}&dn=Big%20Buck%20Bunny")),
+        torrent_url: Some(url.into()),
+        ..fake_catalog().remove(0)
+    };
+    let h = Harness::with_catalog(vec![row]);
+    h.search.serve_torrent(url, bunny.bytes());
+    let Response::Search { result } =
+        h.ask(Request::Search { query: torrential_core::SearchQuery::new("bunny"), stream: false }).await
+    else {
+        panic!("expected results")
+    };
+    assert_eq!(result.releases[0].id.to_ref(), id);
+    let full = Target::parse(&id, std::path::Path::new("/")).unwrap();
+    let reply = h.get(full, &["*.mp4"]).await.unwrap();
+    assert_eq!(
+        (reply.outcome, reply.job.name.as_deref(), reply.plan.map(|p| p.selected_size)),
+        (GetOutcome::Started, Some("BigBuckBunny_124"), Some(GIB))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_slow_search_does_not_delay_a_pause() {
     let h = Harness::new();
     let iso = torrent(26, "arch.iso", &[("arch.iso", GIB)]);

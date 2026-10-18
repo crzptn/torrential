@@ -222,7 +222,8 @@ impl FromStr for HexPrefix {
 pub enum Target {
     /// A prefix of a torrent ID or locator ID, resolved against downloads and recent results.
     Prefix(String),
-    /// A full infohash with no other source: peers come from the DHT.
+    /// A full infohash. A recent search result with this ID lends its links; otherwise peers
+    /// come from the DHT.
     InfoHash(InfoHash),
     Magnet(String),
     /// An `http` or `https` URL that serves a `.torrent` file.

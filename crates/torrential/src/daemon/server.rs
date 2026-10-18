@@ -10,7 +10,9 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use torrential_core::protocol::{Event, FilesReply, GetRequest, Request, Response, WIRE_VERSION};
 use torrential_core::text::sanitize;
-use torrential_core::{Error, ErrorCode, Release, ReleaseId, SearchQuery, SearchResult, Target, TorrentFile};
+use torrential_core::{
+    Error, ErrorCode, HexPrefix, Release, ReleaseId, SearchQuery, SearchResult, Target, TorrentFile,
+};
 
 use super::engine_port::{EngineHandle, Metainfo, ParseTorrent};
 use super::files;
@@ -165,17 +167,33 @@ async fn resolve(ctx: &Ctx, target: Target, command: &'static str) -> Result<Sou
         Target::Prefix(prefix) => {
             let prefix = prefix.parse()?;
             let results = ctx.search.find(&prefix);
-            match ctx.owner.ask(|reply| Command::Resolve { prefix, results, command, reply }).await? {
-                Resolved::Job(id) => Ok(Source::Download(id)),
-                Resolved::Release { release, cached } => release_source(ctx, *release, cached).await,
+            resolve_prefix(ctx, prefix, results, command).await
+        }
+        // A search result's links can find a torrent that its bare hash would wait for on the DHT.
+        Target::InfoHash(hash) => {
+            let prefix = hash.id().to_hex().parse()?;
+            match ctx.search.find(&prefix) {
+                results if results.is_empty() => Ok(Source::Magnet(magnet::from_hash(hash))),
+                results => resolve_prefix(ctx, prefix, results, command).await,
             }
         }
-        Target::InfoHash(hash) => Ok(Source::Magnet(magnet::from_hash(hash))),
         Target::Magnet(uri) => Ok(Source::Magnet(magnet::parse(&uri)?)),
         Target::TorrentUrl(url) => Ok(Source::Torrent { metainfo: fetch(ctx, url).await?, origin: Origin::Url }),
         Target::TorrentFile(path) => {
             Ok(Source::Torrent { metainfo: read_torrent(ctx, &path).await?, origin: Origin::File })
         }
+    }
+}
+
+async fn resolve_prefix(
+    ctx: &Ctx,
+    prefix: HexPrefix,
+    results: Vec<Release>,
+    command: &'static str,
+) -> Result<Source, Error> {
+    match ctx.owner.ask(|reply| Command::Resolve { prefix, results, command, reply }).await? {
+        Resolved::Job(id) => Ok(Source::Download(id)),
+        Resolved::Release { release, cached } => release_source(ctx, *release, cached).await,
     }
 }
 
