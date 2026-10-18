@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/tests/render.rs
+expression: shot(&scenario(size))
+---
+"  torrential       ↓ 10.0 MiB/s · 1 active · 412.3 GiB free · ● engine ready    "
+"  ┃ night of the living dead                                                    "
+"    4 of 6 sources ok · apibay: http 503 · nyaa: timeout                1.5s    "
+"                                                                                "
+"    downloads · 5                                                            ▐  "
+"    6f2c81  wikipedia-en-2026-09-text    ██▎         22%    10.0 MiB/s   30m ▐  "
+"    a90d44╭──────────────────────────────────────────────────────────╮ error ▐  "
+"    1 paus│  Commands                                           esc  │       ▐  "
+"          │                                                          │       ▐  "
+"    result│   Search commands                                        │ match ▐  "
+"  ┃ 4c1e9a│                                                          │.3 GiB ▐  "
+"  ┃       │  Suggested                                               │ seeds ▐  "
+"          │  Choose files                                     enter  │       ▐  "
+"    b7f20d│  Download                                             D  │.4 GiB ▐  "
+"          │  Sort by seeds                                        s  │ seeds ▐  "
+"    e3a915│  Search                                               /  │.8 GiB ▐  "
+"          │  Go to downloads                                      d  │ seeds ▐  "
+"    09cd47│  Go to results                                        r  │.3 GiB ▐  "
+"          │  Show help                                            ?  │ seeds    "
+"    f61b2e│  Turn animations off                                     │.4 GiB    "
+"          │  Quit · downloads keep running                        q  │ seeds    "
+"    7a0c3f│                                                          │.0 MiB    "
+"    result╰──────────────────────────────────────────────────────────╯          "
+"    ↑↓ move   enter files   D download   s sort   / search   ? help             "

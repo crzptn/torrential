@@ -1,0 +1,21 @@
+//! The torrential terminal UI: one list holding downloads and search results, one cursor, and
+//! details that open in place under the selected row.
+//!
+//! The app is [`State`](state::State), messages, and one update function that returns effects;
+//! the view draws from state alone. [`run`] drives it against a [`Backend`].
+
+mod backend;
+mod format;
+mod layout;
+mod runtime;
+mod state;
+mod theme;
+mod tree;
+mod update;
+mod view;
+
+#[cfg(test)]
+mod tests;
+
+pub use backend::Backend;
+pub use runtime::run;
