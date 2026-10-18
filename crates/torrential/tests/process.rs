@@ -423,3 +423,30 @@ fn setup_shows_the_flags_saves_answers_and_records_a_skip() {
         skipped.stdout
     );
 }
+
+/// A one-file torrent in the JSON form the fake engine reads.
+fn fake_torrent(name: &str, size: u64) -> Vec<u8> {
+    let torrent = serde_json::json!({"info_hash": {"v1": "7".repeat(40)}, "name": name, "files": [[name, size]]});
+    serde_json::to_vec(&torrent).unwrap()
+}
+
+#[test]
+fn get_takes_its_size_cap_from_setup_unless_max_size_is_passed() {
+    let home = Home::with(&[("TORRENTIAL_TEST_ENGINE", "fake")]);
+    let file = home.dir.path().join("night.torrent");
+    std::fs::write(&file, fake_torrent("night-of-the-living-dead-2160p.mkv", 3 << 30)).unwrap();
+    let file = file.display().to_string();
+    assert_eq!(home.run(&["setup", "--max-size", "2GB"]).code, 0);
+
+    let capped = home.run(&["get", &file, "--dir", &home.downloads()]);
+    let allowed = home.run(&["get", &file, "--dir", &home.downloads(), "--max-size", "3GiB"]);
+
+    assert_eq!(capped.code, 7, "{}{}", capped.stdout, capped.stderr);
+    assert_eq!(
+        capped.stderr,
+        "error[too_large]: the selection is 3.0 GiB, over the 2 GB cap from torrential setup\n\
+         hint: add --max-size 3GiB to allow it, or pick fewer files with --files\n"
+    );
+    assert_eq!(allowed.code, 0, "{}", allowed.stderr);
+    assert!(allowed.stdout.starts_with("started "), "{}", allowed.stdout);
+}

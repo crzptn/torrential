@@ -9,7 +9,7 @@ use torrential_core::protocol::{Change, Event, FilesReply, GetReply, GetRequest,
 use torrential_core::{Error, ErrorCode, SearchQuery, SearchResult, Target};
 
 use super::connect::{self, Conn, DEFAULT_REPLY_WITHIN};
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::daemon::admission::{Disk, RealDisk};
 use crate::daemon::server::METADATA_WAIT;
 use crate::env::Env;
@@ -60,6 +60,7 @@ impl torrential_tui::Backend for EngineBackend {
         query: SearchQuery,
         partial: &mut dyn FnMut(SearchResult, Vec<String>),
     ) -> Result<SearchResult, Error> {
+        let query = SearchQuery { preferences: config::preferences(&self.paths)?, ..query };
         let within = Duration::from_millis(query.timeout_ms.into()) + Duration::from_secs(10);
         let mut conn = self.conn()?;
         conn.send(&Request::Search { query, stream: true })?;
@@ -91,7 +92,7 @@ impl torrential_tui::Backend for EngineBackend {
             target: Target::Prefix(reference.to_string()),
             dir: None,
             files: files.unwrap_or_default().iter().map(|path| globset::escape(path)).collect(),
-            max_size: None,
+            max_size: config::preferences(&self.paths)?.and_then(|p| p.max_size),
             dry_run: false,
         });
         match self.conn()?.call(&request)? {

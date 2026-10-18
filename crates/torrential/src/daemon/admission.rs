@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use torrential_core::error::Details;
 use torrential_core::protocol::DownloadPlan;
-use torrential_core::units::format_size;
+use torrential_core::units::{format_limit, format_size};
 use torrential_core::{Error, ErrorCode, Selection};
 
 use super::engine_port::Metainfo;
@@ -83,7 +83,7 @@ pub fn check_size(plan: &Plan, max_size: u64) -> Result<(), Error> {
     }
     Err(Error::new(
         ErrorCode::TooLarge,
-        format!("the selection is {}, over the {} cap", format_size(plan.selected_size), format_size(max_size)),
+        format!("the selection is {}, over the {} cap", format_size(plan.selected_size), format_limit(max_size)),
     )
     .with_hint(format!(
         "add --max-size {}GiB to allow it, or pick fewer files with --files",
@@ -254,7 +254,7 @@ mod tests {
         let plan = plan_for(60 * GIB, &disk);
         let err = check_size(&plan, DEFAULT_MAX_SIZE).unwrap_err();
         assert_eq!(err.code, ErrorCode::TooLarge);
-        assert_eq!(err.message, "the selection is 61.0 GiB, over the 50.0 GiB cap");
+        assert_eq!(err.message, "the selection is 61.0 GiB, over the 50 GiB cap");
         assert_eq!(err.hint.as_deref(), Some("add --max-size 61GiB to allow it, or pick fewer files with --files"));
         assert_eq!(check_size(&plan, 61 * GIB), Ok(()));
     }

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use torrential_core::protocol::{GetRequest, Request, Response};
-use torrential_core::{Error, ErrorCode, SearchQuery, Target};
+use torrential_core::{Error, ErrorCode, Preferences, SearchQuery, Target};
 
 use crate::cli::{Command, DaemonCommand, GetArgs, SearchArgs, Until};
 use crate::daemon::server::METADATA_WAIT;
@@ -58,7 +58,10 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
     let paths = || Paths::from_process(env);
     let engine = || connect::ensure(&paths()?, env);
     match command {
-        Command::Search(args) => search(engine()?, args, mode),
+        Command::Search(args) => {
+            let preferences = crate::config::preferences(&paths()?)?;
+            search(engine()?, args, preferences, mode)
+        }
         Command::Files(args) => {
             let target = Target::parse(&args.reference, &cwd)?;
             let request = Request::Files { target, timeout_ms: METADATA_WAIT.as_millis() as u32 };
@@ -142,7 +145,7 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
     }
 }
 
-fn search(mut conn: Conn, args: SearchArgs, mode: Mode) -> Result<u8, Error> {
+fn search(mut conn: Conn, args: SearchArgs, preferences: Option<Preferences>, mode: Mode) -> Result<u8, Error> {
     let query = SearchQuery {
         text: args.words.join(" "),
         sources: args.source,
@@ -154,7 +157,7 @@ fn search(mut conn: Conn, args: SearchArgs, mode: Mode) -> Result<u8, Error> {
         timeout_ms: args.timeout.as_millis().min(u128::from(u32::MAX)) as u32,
         adult: args.adult,
         fresh: args.fresh,
-        preferences: None,
+        preferences,
     };
     let within = args.timeout + Duration::from_secs(10);
     match answer(conn.call_within(&Request::Search { query, stream: false }, within)?)? {
@@ -173,12 +176,17 @@ fn get(mut conn: Conn, args: GetArgs, mode: Mode, cwd: &Path, env: &Env) -> Resu
     }
     let dir = args.dir.map(|d| absolute(&d, cwd, env));
     let dry_run = args.dry_run;
-    let request =
-        Request::Get(GetRequest { target, dir: dir.clone(), files: args.files, max_size: args.max_size, dry_run });
+    let setup_cap = crate::config::preferences(&Paths::from_process(env)?)?.and_then(|p| p.max_size);
+    let max_size = args.max_size.or(setup_cap);
+    let request = Request::Get(GetRequest { target, dir: dir.clone(), files: args.files, max_size, dry_run });
     let within = if dry_run { METADATA_WAIT + Duration::from_secs(15) } else { connect::DEFAULT_REPLY_WITHIN };
-    let reply = match answer(conn.call_within(&request, within)?)? {
-        Response::Get { reply } => reply,
-        other => return Err(connect::unexpected(&other)),
+    let reply = match answer(conn.call_within(&request, within)?) {
+        Ok(Response::Get { reply }) => reply,
+        Ok(other) => return Err(connect::unexpected(&other)),
+        Err(error) if error.code == ErrorCode::TooLarge && args.max_size.is_none() && setup_cap.is_some() => {
+            return Err(Error { message: format!("{} from torrential setup", error.message), ..error });
+        }
+        Err(error) => return Err(error),
     };
     let exit = emit(mode, &views::get(&reply, dir.as_deref()), &Response::Get { reply: reply.clone() });
     let attachable = mode == Mode::Human && !dry_run && !reply.job.status.is_stopped();
@@ -429,7 +437,12 @@ fn doctor(env: &Env, mode: Mode, network: bool) -> u8 {
         }
         Err(error) => checks.push(check("skill", CheckStatus::Fail, error.message)),
     }
+    let preferences = match &settings {
+        Ok(settings) => views::preferences_check(settings.preferences.as_ref()),
+        Err(_) => check("preferences", CheckStatus::Skipped, "the config has an error".into()),
+    };
     checks.extend(probe::checks(&paths, settings, network));
+    checks.push(preferences);
     emit(mode, &views::doctor(&checks, fix), &Typed { kind: "doctor", body: Checks { checks: &checks } })
 }
 

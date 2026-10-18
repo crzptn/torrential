@@ -166,7 +166,7 @@ pub struct GetArgs {
     /// The folder the download goes into
     #[arg(long, value_name = "DIR")]
     pub dir: Option<PathBuf>,
-    /// The largest download allowed, for example 120GiB. Without it the cap is 50 GiB
+    /// The largest download allowed, for example 120GiB. Without it the cap is the max size from torrential setup, or 50 GiB
     #[arg(long, value_name = "SIZE", value_parser = parse_size)]
     pub max_size: Option<u64>,
     /// Print the selected size, destination, free space, and conflicts without downloading

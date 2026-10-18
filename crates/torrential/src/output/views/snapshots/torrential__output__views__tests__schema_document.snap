@@ -141,7 +141,7 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
         },
         {
           "name": "--max-size",
-          "help": "The largest download allowed, for example 120GiB. Without it the cap is 50 GiB",
+          "help": "The largest download allowed, for example 120GiB. Without it the cap is the max size from torrential setup, or 50 GiB",
           "takes_value": true,
           "repeatable": false,
           "value_name": "SIZE"

@@ -127,6 +127,31 @@ fn search_for_a_film_shows_the_quality_its_names_give() {
 }
 
 #[test]
+fn a_film_search_says_whether_the_setup_answers_ranked_it() {
+    use torrential_core::{Category, Playback, Preferences, Screen};
+    let film = Release {
+        category: Some(Category::Video),
+        ..release(ReleaseId::Torrent(tid("082e09")), "Night Of The Living Dead 720p 1968")
+    };
+    let iso = release(ReleaseId::Torrent(ARCH.parse().unwrap()), "archlinux-2026.10.01-x86_64.iso");
+    let tv =
+        Preferences { screen: Some(Screen::Tv4k), max_size: Some(8_000_000_000), playback: Some(Playback::HevcHdr) };
+    let summary = |releases: Vec<Release>, category: Option<Category>, preferences: Option<Preferences>| {
+        let mut result = search_result(releases, 1, vec![report("archive.org", SourceOutcome::Ok { results: 1 })]);
+        result.query.category = category;
+        result.query.preferences = preferences;
+        search(&result, NOW).summary[1..].to_vec()
+    };
+
+    assert_eq!(summary(vec![film.clone()], None, None), ["preferences: not set · torrential setup"]);
+    assert_eq!(summary(Vec::new(), Some(Category::Video), None), ["preferences: not set · torrential setup"]);
+    assert_eq!(summary(vec![film.clone()], None, Some(tv)), ["ranked for a 4K TV, up to 8 GB, plays HEVC and HDR"]);
+    assert_eq!(summary(vec![film], None, Some(Preferences::default())), Vec::<String>::new());
+    assert_eq!(summary(vec![iso.clone()], None, None), Vec::<String>::new());
+    assert_eq!(summary(vec![iso], None, Some(tv)), Vec::<String>::new());
+}
+
+#[test]
 fn search_with_no_results() {
     let result = search_result(Vec::new(), 0, vec![report("archlinux", SourceOutcome::Ok { results: 0 })]);
     insta::assert_snapshot!(both(&search(&result, NOW), &Response::Search { result }));

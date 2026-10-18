@@ -6,7 +6,7 @@ use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
 use torrential_core::units::{format_limit, format_size, size_text};
 use torrential_core::{
-    Job, JobStatus, Preferences, Release, ReleaseId, SearchResult, Selection, SourceOutcome, TorrentId,
+    Category, Job, JobStatus, Preferences, Release, ReleaseId, SearchResult, Selection, SourceOutcome, TorrentId,
 };
 
 use super::format::{self, NONE};
@@ -133,7 +133,33 @@ pub fn search(result: &SearchResult, now: i64) -> Doc {
     if tagged {
         header.insert(3, "QUALITY");
     }
-    Doc { body: Body::Table { header, rows }, summary: vec![line.join(" · ")], next: Some(next.to_string()) }
+    let mut summary = vec![line.join(" · ")];
+    if is_video(result) {
+        match result.query.preferences {
+            None => summary.push("preferences: not set · torrential setup".to_string()),
+            Some(p) if !p.is_empty() => summary.push(format!("ranked for {}", p.describe())),
+            Some(_) => {}
+        }
+    }
+    Doc { body: Body::Table { header, rows }, summary, next: Some(next.to_string()) }
+}
+
+/// A search for films or shows: `--category video`, or most results are video by their
+/// category or a resolution tag.
+fn is_video(result: &SearchResult) -> bool {
+    let video = |r: &&Release| r.category == Some(Category::Video) || r.quality().resolution.is_some();
+    result.query.category == Some(Category::Video)
+        || result.releases.iter().filter(video).count() * 2 > result.releases.len()
+}
+
+/// The doctor's preferences row.
+pub fn preferences_check(preferences: Option<&Preferences>) -> Check {
+    let detail = match preferences {
+        None => "not set; torrential setup asks three questions".to_string(),
+        Some(p) if p.is_empty() => "skipped".to_string(),
+        Some(p) => p.describe(),
+    };
+    Check { check: "preferences".into(), status: CheckStatus::Ok, detail }
 }
 
 pub fn files(reply: &FilesReply) -> Doc {

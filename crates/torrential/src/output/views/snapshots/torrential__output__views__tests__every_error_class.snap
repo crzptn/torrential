@@ -312,7 +312,7 @@ hint: free some space, or choose another disk with --dir
   "next": null
 }
 === too_large, exit 7
-error[too_large]: the selection is 70.0 GiB, over the 50.0 GiB cap
+error[too_large]: the selection is 70.0 GiB, over the 50 GiB cap
 hint: add --max-size 70GiB to allow it, or pick fewer files with --files
 --- json
 {
@@ -320,7 +320,7 @@ hint: add --max-size 70GiB to allow it, or pick fewer files with --files
   "type": "error",
   "error": {
     "code": "too_large",
-    "message": "the selection is 70.0 GiB, over the 50.0 GiB cap",
+    "message": "the selection is 70.0 GiB, over the 50 GiB cap",
     "hint": "add --max-size 70GiB to allow it, or pick fewer files with --files"
   },
   "next": null

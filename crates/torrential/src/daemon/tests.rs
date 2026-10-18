@@ -268,7 +268,7 @@ async fn disk_size_and_existing_files_refuse_a_download() {
     let err = h.get(h.torrent_file(&big), &[]).await.unwrap_err();
     assert_eq!(
         (err.code, err.message.as_str()),
-        (ErrorCode::TooLarge, "the selection is 60.0 GiB, over the 50.0 GiB cap")
+        (ErrorCode::TooLarge, "the selection is 60.0 GiB, over the 50 GiB cap")
     );
     let raised = GetRequest { max_size: Some(60 * GIB), ..request(&h, h.torrent_file(&big)) };
     h.disk.set_free(69 * GIB);
