@@ -7,7 +7,7 @@ compatibility: Requires the torrential CLI on PATH. Downloads need direct networ
 
 # torrential
 
-torrential searches torrent indexes and runs downloads in a background engine. A download is identified by its torrent's infohash. `torrential <command> --help` is authoritative for flags. `torrential schema` lists every command, output field, error code, and exit code. This skill covers behavior. If a command does not match this skill, run `torrential skill status`. If it says `outdated`, run `torrential skill install` and read the skill again.
+torrential searches torrent indexes and runs downloads in a background engine. A download is identified by its torrent's infohash. `torrential <command> --help` is authoritative for flags. `torrential schema` lists every command, flag, error code, and exit code, with notes on some output fields. This skill covers behavior. If a command does not match this skill, run `torrential skill status`. If it says `outdated`, run `torrential skill install` and read the skill again.
 
 ## Rules
 
@@ -23,10 +23,10 @@ When stdout is not a terminal, output is plain text.
 
 - Lists are tab-separated with one header row. Lines that start with `#` are summaries.
 - The last line usually starts with `next:` and holds the command to run next.
-- Errors go to stderr as `error[<code>]: <message>`, followed by `hint:` with what to do.
+- Errors go to stderr as `error[<code>]: <message>`, usually followed by `hint:` with what to do.
 - Add `--json` to any command for exact values. Sizes are bytes, rates are bytes per second, and times are Unix seconds. `wait --json` prints one JSON object per line.
 
-IDs are the first characters of the infohash. Any unique prefix of 4 or more characters works, and a search result keeps its ID after you download it. Every command that takes an ID also accepts a full infohash or a magnet link. `files` and `get` also accept a `.torrent` path or a `.torrent` URL.
+IDs are the first characters of the infohash. Any unique prefix of 4 or more characters works, and a search result keeps its ID after you download it. Every command that takes an ID also accepts a full infohash or a magnet link. `files` and `get` also accept a `.torrent` path or a `.torrent` URL. A result from a Torznab indexer can have an ID that starts with `u` until it is downloaded, and from then on the download goes by its infohash ID.
 
 ## What search ranks for
 
@@ -40,8 +40,8 @@ Ask the user only when a choice blocks you and the request does not answer it. T
 
 1. Search. `torrential search <words>`. Narrow with `--source`, `--category video|audio|software|book|game|dataset|other`, `--min-seeds N`, and `--max-size 8GiB`. Pick by name, size, `QUALITY`, `SEEDS`, and `FLAGS`. `official` means the publisher's own torrent. `pd` and `cc` mean the source lists a public-domain or Creative Commons license. `trusted` means the index vouches for the uploader. `cam` means a camera recording. `?` seeds means the source does not report seeders.
 2. Inspect when the user wants particular files or the torrent may hold many. `torrential files <id>` lists paths and sizes and marks executables inside media torrents. Never select a marked executable unless the user asked for it.
-3. Start. `torrential get <id> [--files <glob>]... [--dir <path>]`. It returns in about a second. Its first line says `started`, `queued`, `existing`, or `updated`. Running it again is safe. Add `--dry-run` first to see the selected size, destination, free space, and conflicts.
-4. Follow. `torrential wait <id>`. Exit 0 means done and verified. Exit 8 means still running, and the output shows progress, the ETA, and the command to run again. Exit 7 means the download stopped with a problem. `torrential status <id>` explains it.
+3. Start. `torrential get <id> [--files <glob>]... [--dir <path>]`. It usually returns in about a second, and can take up to 20 seconds when it has to fetch the `.torrent` file first. Its first line says `started`, `queued`, `existing`, or `updated`. Running it again is safe. Add `--dry-run` first to see the selected size, destination, free space, and conflicts.
+4. Follow. `torrential wait <id>`. Exit 0 means done and verified. Exit 8 means not finished yet. Usually the download is still running, and the output shows progress, the ETA, and the command to run again. If the output says the download is paused or interrupted, it will not finish on its own, so run its `next:` command instead of waiting again. Exit 7 means the download stopped with a problem. `torrential status <id>` explains it.
 5. Report the `path:` from `torrential status <id>`.
 
 torrential never seeds. A finished download stops uploading and its files stay where they are.
@@ -58,7 +58,7 @@ The download does not depend on you. You can end your turn, and a later session 
 
 - `torrential status` lists every download. `torrential status <id>` shows one in detail.
 - `torrential pause <id>` returns once writes stop. `torrential resume <id>` continues it, and also retries a download that failed or was interrupted. After a reboot, run `torrential resume --all`.
-- `torrential verify <id>` re-hashes the files and reports damage. `torrential verify <id> --repair` downloads the damaged pieces again.
+- `torrential verify <id>` starts re-hashing the files and returns at once. Follow it with `torrential wait <id>`, which reports any damage. `torrential verify <id> --repair` downloads the damaged pieces again.
 - `torrential rm <id>` stops tracking a download and keeps its files. torrential never deletes files. If the user wants them gone, tell them the path.
 
 ## Errors
@@ -71,7 +71,7 @@ The download does not depend on you. You can end your turn, and a later session 
 | 5 | `providers_unavailable`, `metadata_timeout`, `network_unavailable`, `fetch_failed` | Retry once after a minute. For `metadata_timeout`, the torrent may be dead, so prefer a result with more seeders. |
 | 6 | `sandbox_network_blocked`, `sandbox_write_blocked`, `daemon_unavailable`, `daemon_version`, `state_corrupt` | See Sandboxes. For the others, run `torrential doctor` and show the user its output. |
 | 7 | `disk_full`, `too_large`, `no_selection`, `storage_error`, `verification_failed`, `no_source` | Tell the user. Never delete files to make room. For `too_large`, raise `--max-size` only if the user agrees. For `no_selection`, run `torrential files <id>` and pick a glob that matches. For `no_source`, the connected peers and web seeds had none of the pieces still missing for 20 minutes, so the files are incomplete. `torrential resume <id>` looks again once. If it stops again, prefer another result. |
-| 8 | (none) | `wait` timed out while the download is still running. Wait again. |
+| 8 | (none) | The download has not finished. If it is still running, wait again. If it is paused or interrupted, run the `next:` command. |
 
 ## Sandboxes
 
