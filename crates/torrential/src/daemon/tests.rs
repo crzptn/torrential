@@ -19,6 +19,7 @@ const ROOMY: Space = Space { device: 1, total: 1000 * GIB, free: 500 * GIB };
 /// A 1 GiB fake torrent's piece size.
 const GIB_PIECE: u64 = GIB / 1024;
 const STALL: Duration = Duration::from_secs(1);
+const WRITES_STOP_WITHIN: Duration = Duration::from_secs(1);
 
 struct Harness {
     dir: tempfile::TempDir,
@@ -37,6 +38,7 @@ fn config(dir: &std::path::Path) -> OwnerConfig {
         resume_on_start: false,
         save_resume_every: Duration::from_millis(100),
         stall_after: STALL,
+        writes_stop_within: WRITES_STOP_WITHIN,
     }
 }
 
@@ -1097,6 +1099,54 @@ async fn watching_every_download_includes_ones_started_later() {
     .await
     .expect("an event for the later download");
     assert_eq!(seen.as_deref(), Some("later.iso"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_pause_returns_once_writes_stop_or_fails_when_they_do_not() {
+    let gate = Gate::default();
+    let engine_gate = gate.clone();
+    let h = Harness::with_engine(|_| Box::new(Gated { port: Fake::new(Swarm::new(0)), gate: engine_gate }), parse_fake);
+    let iso = torrent(60, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    h.until("downloading", |jobs| jobs[0].status.name() == "downloading").await;
+    let pause = || {
+        let ctx = h.running.ctx.clone();
+        let refs = vec![prefix(&iso)];
+        tokio::spawn(async move { server::handle(&ctx, Request::Pause { refs }).await })
+    };
+    gate.close();
+    let first = pause();
+    gate.until_held(1).await;
+    let second = pause();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!((first.is_finished(), second.is_finished()), (false, false), "writes have not stopped");
+    gate.open();
+    let result = |response| match response {
+        Response::Changed { changes } => changes[0].result.clone(),
+        other => panic!("unexpected {other:?}"),
+    };
+    assert_eq!(
+        (result(first.await.unwrap()), result(second.await.unwrap())),
+        ("paused".to_string(), "already_paused".to_string())
+    );
+
+    h.changes(Request::Resume { refs: vec![prefix(&iso)], all: false }).await.unwrap();
+    h.until("downloading again", |jobs| jobs[0].status.name() == "downloading").await;
+    gate.close();
+    let started = Instant::now();
+    let err = h.changes(Request::Pause { refs: vec![prefix(&iso)] }).await.unwrap_err();
+    assert!(started.elapsed() >= WRITES_STOP_WITHIN, "waited {:?}", started.elapsed());
+    assert_eq!(
+        (err.code, err.message.as_str(), err.hint.as_deref()),
+        (
+            ErrorCode::JobConflict,
+            "writes to 3c3c3c did not stop within 1s",
+            Some("run torrential pause 3c3c3c again; it returns once writes stop")
+        )
+    );
+    gate.open();
+    let again = h.changes(Request::Pause { refs: vec![prefix(&iso)] }).await.unwrap();
+    assert_eq!(again, [("3c3c3c".to_string(), "already_paused".to_string())]);
 }
 
 /// A libtorrent session on 127.0.0.1 that seeds a two-file torrent, one 16 KiB piece per file.

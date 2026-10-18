@@ -42,6 +42,7 @@ const SAVE_RESUME_EVERY: Duration = Duration::from_secs(5 * 60);
 /// Longer than libtorrent's 15-minute DHT announce, so a new source gets a round of discovery.
 const STALL_AFTER: Duration = Duration::from_secs(20 * 60);
 pub const MAX_ACTIVE: usize = 3;
+const WRITES_STOP_WITHIN: Duration = Duration::from_secs(10);
 
 /// The pieces the engine process is built from, so tests can swap in fakes.
 pub struct Ports {
@@ -213,6 +214,7 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         resume_on_start: service || seed,
         save_resume_every,
         stall_after,
+        writes_stop_within: WRITES_STOP_WITHIN,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

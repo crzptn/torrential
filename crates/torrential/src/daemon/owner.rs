@@ -35,10 +35,9 @@ pub struct OwnerConfig {
     /// How long a download's connected peers and web seeds may lack every piece it still needs
     /// before it stops with `no_source`.
     pub stall_after: Duration,
+    /// How long pause and shutdown wait for the engine to confirm that writes stopped.
+    pub writes_stop_within: Duration,
 }
-
-/// How long pause and shutdown wait for the engine to confirm that writes stopped.
-const WRITES_STOP_WITHIN: Duration = Duration::from_secs(10);
 
 pub type Reply<T> = oneshot::Sender<Result<T, Error>>;
 
@@ -651,14 +650,10 @@ impl Owner {
                     let job = self.jobs.get_mut(&id).expect("resolved above");
                     job.record.intent = Intent::Paused;
                     match job.observed {
-                        Observed::InEngine(Phase::Paused) => {}
-                        Observed::InEngine(Phase::Pausing) => {
-                            waiting.insert(id);
-                        }
+                        Observed::InEngine(Phase::Paused | Phase::Pausing) => {}
                         Observed::InEngine(_) => {
                             job.observed = Observed::InEngine(Phase::Pausing);
                             self.engine.send(EngineCommand::Pause(id));
-                            waiting.insert(id);
                         }
                         Observed::Absent | Observed::Parked => job.observed = Observed::Absent,
                     }
@@ -666,13 +661,18 @@ impl Owner {
                     "paused"
                 }
             };
+            // Whichever pause or stop began it, this one also returns only once writes stop.
+            if self.jobs[&id].observed == Observed::InEngine(Phase::Pausing) {
+                waiting.insert(id);
+            }
             changes.push(self.change(id, result));
         }
         self.schedule();
         if waiting.is_empty() {
             let _ = reply.send(Ok(changes));
         } else {
-            self.pauses.push(PendingPause { waiting, changes, deadline: Instant::now() + WRITES_STOP_WITHIN, reply });
+            let deadline = Instant::now() + self.config.writes_stop_within;
+            self.pauses.push(PendingPause { waiting, changes, deadline, reply });
         }
     }
 
@@ -1080,8 +1080,17 @@ impl Owner {
             std::mem::take(&mut self.pauses).into_iter().partition(|p| p.waiting.is_empty() || p.deadline <= now);
         self.pauses = rest;
         for pause in done {
-            let _ = pause.reply.send(Ok(pause.changes));
+            let reply =
+                if pause.waiting.is_empty() { Ok(pause.changes) } else { Err(self.still_writing(&pause.waiting)) };
+            let _ = pause.reply.send(reply);
         }
+    }
+
+    fn still_writing(&self, ids: &BTreeSet<TorrentId>) -> Error {
+        let shorts: Vec<String> = ids.iter().map(|id| id.to_hex()[..6].to_string()).collect();
+        let within = crate::output::format::elapsed(self.config.writes_stop_within);
+        Error::new(ErrorCode::JobConflict, format!("writes to {} did not stop within {within}", shorts.join(", ")))
+            .with_hint(format!("run torrential pause {} again; it returns once writes stop", shorts.join(" ")))
     }
 
     fn resume_data(
@@ -1384,7 +1393,7 @@ impl Owner {
         }
         self.stopping = Some(Stopping {
             waiting,
-            deadline: Instant::now() + WRITES_STOP_WITHIN,
+            deadline: Instant::now() + self.config.writes_stop_within,
             replies: reply.into_iter().collect(),
         });
         self.finish_stop_if_done();
