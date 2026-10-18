@@ -71,7 +71,7 @@ fn observation(row: Row, trackers: &[String]) -> Option<Observation> {
     let hash = infohash(&row.info_hash)?;
     let code: u32 = row.category.trim().parse().unwrap_or(0);
     let trusted = matches!(row.status.as_str(), "vip" | "trusted");
-    let mut obs = Observation::new(Identity::Hash { hash, torrent_url: None }, &row.name)?
+    let mut obs = Observation::new(Identity::Hash { hash, torrent_url: None }, &unescape(&row.name))?
         .flag(Flag::Trusted, trusted)
         .flag(Flag::Adult, (500..600).contains(&code));
     obs.peers = Peers::new(count(&row.seeders), count(&row.leechers));
@@ -91,6 +91,16 @@ fn observation(row: Row, trackers: &[String]) -> Option<Observation> {
         obs.info_url = Some(format!("https://thepiratebay.org/description.php?id={}", row.id));
     }
     Some(obs)
+}
+
+/// apibay returns names HTML-escaped, as its site prints them.
+fn unescape(name: &str) -> String {
+    name.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#039;", "'")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
 }
 
 #[cfg(test)]
@@ -113,6 +123,9 @@ mod tests {
         assert_eq!(lts.flags.iter().collect::<Vec<_>>(), [&Flag::Trusted]);
         assert_eq!(lts.info_url.as_deref(), Some("https://thepiratebay.org/description.php?id=59191690"));
         assert_eq!(lts.trackers.len(), 13);
+
+        let escaped = all.iter().find(|o| o.name().starts_with("Linux Command Line (Hands-On)")).unwrap();
+        assert_eq!(escaped.name(), "Linux Command Line (Hands-On) Ubuntu Linux & Linux Scripting");
     }
 
     #[test]
