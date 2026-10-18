@@ -2,6 +2,7 @@ pub mod admission;
 pub mod book;
 pub mod engine_port;
 pub mod files;
+mod fixture;
 pub mod libtorrent;
 pub mod magnet;
 pub mod owner;
@@ -46,19 +47,19 @@ pub struct Ports {
 }
 
 impl Ports {
-    /// `TORRENTIAL_TEST_ENGINE=fake` swaps in the simulated engine and search, for tests and for
-    /// trying the CLI without a network. `TORRENTIAL_TEST_NETWORK=loopback` keeps libtorrent on
-    /// 127.0.0.1 with discovery off, for tests that run their own peers and list them in
-    /// `TORRENTIAL_TEST_PEERS`, and `TORRENTIAL_TEST_DISK=roomy` lets them download on a disk
-    /// below the free-space reserve.
+    /// `TORRENTIAL_TEST_ENGINE=fake` swaps in the simulated engine and search (see [`fixture`]), for
+    /// tests and for trying the CLI and TUI without a network. `TORRENTIAL_TEST_NETWORK=loopback`
+    /// keeps libtorrent on 127.0.0.1 with discovery off, for tests that run their own peers and list
+    /// them in `TORRENTIAL_TEST_PEERS`, and `TORRENTIAL_TEST_DISK=roomy` lets them download on a
+    /// disk below the free-space reserve.
     fn from_env(env: &Env, paths: &Paths) -> Result<Self, Error> {
-        if env.var("TORRENTIAL_TEST_ENGINE") == Some("fake") {
+        if fake(env) {
             let rate =
                 env.var("TORRENTIAL_TEST_FAKE_RATE").and_then(torrential_core::units::parse_size).unwrap_or(10 << 20);
             return Ok(Self {
-                engine: Box::new(engine_port::Fake::new(engine_port::Swarm::inventive(rate))),
+                engine: Box::new(engine_port::Fake::new(fixture::swarm(rate))),
                 parse: engine_port::parse_fake,
-                search: Arc::new(search_port::Fake::new(search_port::fake_catalog())),
+                search: Arc::new(fixture::search(owner::now())),
                 disk: Box::new(admission::RoomyDisk),
             });
         }
@@ -88,6 +89,10 @@ fn test_peers(env: &Env) -> Result<Vec<std::net::SocketAddr>, Error> {
             })
         })
         .collect()
+}
+
+fn fake(env: &Env) -> bool {
+    env.var("TORRENTIAL_TEST_ENGINE") == Some("fake")
 }
 
 pub struct Running {
@@ -164,7 +169,11 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
     };
     let _ = std::fs::remove_file(paths.startup_error());
     prepare_runtime_dir(&paths.runtime)?;
-    let store = Store::open(&paths.database())?;
+    let seed = fake(env) && !paths.database().exists();
+    let mut store = Store::open(&paths.database())?;
+    if seed {
+        fixture::seed(&mut store, &paths.downloads, owner::now())?;
+    }
     let idle_timeout = env
         .var("TORRENTIAL_TEST_IDLE_TIMEOUT")
         .and_then(torrential_core::units::parse_duration)
@@ -174,7 +183,8 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         probe_dir: paths.cache.join("probes"),
         max_active: MAX_ACTIVE,
         idle_timeout: (!service).then_some(idle_timeout),
-        resume_on_start: service,
+        // Seeded downloads start as if a service had restarted, not as interrupted ones.
+        resume_on_start: service || seed,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

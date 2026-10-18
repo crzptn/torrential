@@ -149,7 +149,7 @@ fn search(mut conn: Conn, args: SearchArgs, mode: Mode) -> Result<u8, Error> {
         fresh: args.fresh,
     };
     let within = args.timeout + Duration::from_secs(10);
-    match answer(conn.call_within(&Request::Search { query }, within)?)? {
+    match answer(conn.call_within(&Request::Search { query, stream: false }, within)?)? {
         Response::Search { result } => {
             let doc = views::search(&result, crate::daemon::owner::now());
             Ok(emit(mode, &doc, &Response::Search { result }))

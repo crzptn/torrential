@@ -240,6 +240,23 @@ fn a_killed_engine_comes_back_with_the_download_interrupted() {
 }
 
 #[test]
+fn a_new_fake_installation_starts_with_downloads_that_survive_a_restart() {
+    let home = Home::with(&[("TORRENTIAL_TEST_ENGINE", "fake")]);
+    let states = || {
+        let run = home.run(&["status", "--json"]);
+        let doc: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+        let jobs = doc["jobs"].as_array().unwrap();
+        jobs.iter().map(|j| format!("{} {}", &j["id"].as_str().unwrap()[..6], j["state"].as_str().unwrap())).collect()
+    };
+    let first: Vec<String> = states();
+    assert_eq!(first[..4], ["c7b9e3 done", "5e02c8 done", "91fd3b paused", "a90d44 error"]);
+    assert!(["6f2c81 checking", "6f2c81 downloading"].contains(&first[4].as_str()), "{first:?}");
+    assert_eq!(home.run(&["daemon", "stop"]).code, 0);
+    let again: Vec<String> = states();
+    assert_eq!(again, ["c7b9e3 done", "5e02c8 done", "91fd3b paused", "a90d44 error", "6f2c81 interrupted"]);
+}
+
+#[test]
 fn damaged_state_stops_the_engine_and_reaches_the_client_untouched() {
     let home = Home::new();
     std::fs::create_dir_all(home.state()).unwrap();

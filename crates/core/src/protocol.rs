@@ -22,7 +22,13 @@ pub const MAX_FRAME: usize = 32 * 1024 * 1024;
 #[serde(rename_all = "snake_case", tag = "op")]
 pub enum Request {
     Hello { client_version: String, wire: u32 },
-    Search { query: SearchQuery },
+    /// With `stream`, the engine sends an `Event::SearchUpdate` frame each time a source answers,
+    /// then the final `Response::Search`.
+    Search {
+        query: SearchQuery,
+        #[serde(default)]
+        stream: bool,
+    },
     /// Lists a torrent's files, fetching metadata if needed, within `timeout_ms`.
     Files { target: Target, timeout_ms: u32 },
     Get(GetRequest),
@@ -129,6 +135,12 @@ pub enum Event {
     Removed { id: String },
     /// Sent when nothing changed for a while, so watchers know the engine is alive.
     Heartbeat { at: i64 },
+    /// A streaming search's results so far. `pending` names the sources that have not answered.
+    SearchUpdate {
+        result: SearchResult,
+        #[serde(default)]
+        pending: Vec<String>,
+    },
 }
 
 /// Encodes one frame: a 4-byte big-endian length, then the JSON body.
@@ -148,6 +160,13 @@ mod tests {
     fn requests_are_tagged_by_op() {
         let json = serde_json::to_value(Request::Pause { refs: vec!["9b5212".into()] }).unwrap();
         assert_eq!(json, serde_json::json!({"op": "pause", "refs": ["9b5212"]}));
+    }
+
+    #[test]
+    fn a_search_without_stream_is_the_non_streaming_search() {
+        let json = r#"{"op":"search","query":{"text":"arch","limit":10,"timeout_ms":6000}}"#;
+        let Request::Search { query, stream } = serde_json::from_str(json).unwrap() else { panic!("not a search") };
+        assert_eq!((query.text.as_str(), stream), ("arch", false));
     }
 
     #[test]

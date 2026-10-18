@@ -8,13 +8,29 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::sync::mpsc;
 use torrential_core::{Error, ErrorCode, Release, SearchQuery, SearchResult, SourceOutcome, SourceReport};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// A streaming search's results so far, and the sources still to answer.
+pub struct Partial {
+    pub result: SearchResult,
+    pub pending: Vec<String>,
+}
+
 pub trait SearchPort: Send + Sync {
     /// Ranked results. Fails with `providers_unavailable` only when every source failed.
     fn search(&self, query: SearchQuery) -> BoxFuture<'_, Result<SearchResult, Error>>;
+    /// Like [`SearchPort::search`], and sends the results so far each time a source answers.
+    fn search_stream(
+        &self,
+        query: SearchQuery,
+        partials: mpsc::UnboundedSender<Partial>,
+    ) -> BoxFuture<'_, Result<SearchResult, Error>> {
+        drop(partials);
+        self.search(query)
+    }
     /// The bytes of a `.torrent` file a search result links to.
     fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>>;
 }
@@ -44,13 +60,38 @@ struct FakeState {
     catalog: Vec<Release>,
     torrents: BTreeMap<String, Vec<u8>>,
     delay: Duration,
+    script: Vec<FakeSource>,
+}
+
+/// One source of the fake search. It answers `after` a streaming search starts: with the
+/// catalog releases it lists first, or with `failure`.
+#[derive(Clone, Debug)]
+pub struct FakeSource {
+    pub name: String,
+    pub after: Duration,
+    pub failure: Option<SourceOutcome>,
+}
+
+impl FakeSource {
+    pub fn answers(name: &str, after_ms: u64) -> Self {
+        Self { name: name.into(), after: Duration::from_millis(after_ms), failure: None }
+    }
+
+    pub fn fails(name: &str, after_ms: u64, failure: SourceOutcome) -> Self {
+        Self { name: name.into(), after: Duration::from_millis(after_ms), failure: Some(failure) }
+    }
 }
 
 impl Fake {
+    /// A fake with one source, `fake`, that answers at once.
+    #[cfg(test)]
     pub fn new(catalog: Vec<Release>) -> Self {
-        let fake = Self::default();
-        fake.0.lock().unwrap().catalog = catalog;
-        fake
+        Self::scripted(catalog, vec![FakeSource::answers("fake", 0)], BTreeMap::new())
+    }
+
+    pub fn scripted(catalog: Vec<Release>, mut script: Vec<FakeSource>, torrents: BTreeMap<String, Vec<u8>>) -> Self {
+        script.sort_by_key(|s| s.after);
+        Self(Arc::new(Mutex::new(FakeState { catalog, torrents, delay: Duration::ZERO, script })))
     }
 
     #[cfg(test)]
@@ -61,6 +102,11 @@ impl Fake {
     #[cfg(test)]
     pub fn set_delay(&self, delay: Duration) {
         self.0.lock().unwrap().delay = delay;
+    }
+
+    fn parts(&self) -> (Vec<Release>, Vec<FakeSource>, Duration) {
+        let state = self.0.lock().unwrap();
+        (state.catalog.clone(), state.script.clone(), state.delay)
     }
 }
 
@@ -86,27 +132,57 @@ pub fn fake_catalog() -> Vec<Release> {
     ]
 }
 
+/// The result once the `answered` sources have answered. Catalog order is the ranking.
+fn compose(catalog: &[Release], answered: &[FakeSource], query: SearchQuery, elapsed: Duration) -> SearchResult {
+    let words: Vec<String> = query.text.split_whitespace().map(str::to_lowercase).collect();
+    let matches = |r: &Release| words.iter().all(|w| r.name.to_lowercase().contains(w.as_str()));
+    let listed_by = |r: &Release, source: &FakeSource| r.sources.first() == Some(&source.name);
+    let sources = answered
+        .iter()
+        .map(|source| {
+            let outcome = source.failure.clone().unwrap_or_else(|| SourceOutcome::Ok {
+                results: catalog.iter().filter(|r| listed_by(r, source) && matches(r)).count() as u32,
+            });
+            SourceReport { source: source.name.clone(), outcome, elapsed_ms: source.after.as_millis() as u32 }
+        })
+        .collect();
+    let matching: Vec<Release> = catalog
+        .iter()
+        .filter(|r| matches(r) && answered.iter().any(|s| s.failure.is_none() && listed_by(r, s)))
+        .cloned()
+        .collect();
+    let total = matching.len() as u32;
+    let releases = matching.into_iter().take(query.limit as usize).collect();
+    SearchResult { query, releases, total, hidden_adult: 0, sources, elapsed_ms: elapsed.as_millis() as u32 }
+}
+
 impl SearchPort for Fake {
     fn search(&self, query: SearchQuery) -> BoxFuture<'_, Result<SearchResult, Error>> {
         Box::pin(async move {
-            let (catalog, delay) = {
-                let state = self.0.lock().unwrap();
-                (state.catalog.clone(), state.delay)
-            };
+            let (catalog, script, delay) = self.parts();
             tokio::time::sleep(delay).await;
-            let words: Vec<String> = query.text.split_whitespace().map(str::to_lowercase).collect();
-            let matching: Vec<Release> = catalog
-                .into_iter()
-                .filter(|r| words.iter().all(|w| r.name.to_lowercase().contains(w.as_str())))
-                .collect();
-            let total = matching.len() as u32;
-            let releases = matching.into_iter().take(query.limit as usize).collect();
-            let sources = vec![SourceReport {
-                source: "fake".into(),
-                outcome: SourceOutcome::Ok { results: total },
-                elapsed_ms: 1,
-            }];
-            Ok(SearchResult { query, releases, total, hidden_adult: 0, sources, elapsed_ms: 1 })
+            Ok(compose(&catalog, &script, query, delay))
+        })
+    }
+
+    fn search_stream(
+        &self,
+        query: SearchQuery,
+        partials: mpsc::UnboundedSender<Partial>,
+    ) -> BoxFuture<'_, Result<SearchResult, Error>> {
+        Box::pin(async move {
+            let (catalog, script, _) = self.parts();
+            let started = tokio::time::Instant::now();
+            for answered in 1..script.len() {
+                tokio::time::sleep_until(started + script[answered - 1].after).await;
+                let result = compose(&catalog, &script[..answered], query.clone(), started.elapsed());
+                let pending = script[answered..].iter().map(|s| s.name.clone()).collect();
+                let _ = partials.send(Partial { result, pending });
+            }
+            if let Some(last) = script.last() {
+                tokio::time::sleep_until(started + last.after).await;
+            }
+            Ok(compose(&catalog, &script, query, started.elapsed()))
         })
     }
 

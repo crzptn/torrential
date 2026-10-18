@@ -38,8 +38,12 @@ impl Harness {
     }
 
     fn with_catalog(catalog: Vec<torrential_core::Release>) -> Self {
+        Self::with_search(search_port::Fake::new(catalog))
+    }
+
+    fn with_search(search: search_port::Fake) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let (swarm, disk, search) = (Swarm::new(0), FakeDisk::new(ROOMY), search_port::Fake::new(catalog));
+        let (swarm, disk) = (Swarm::new(0), FakeDisk::new(ROOMY));
         let running = Self::boot(&dir, &swarm, &disk, &search);
         Self { dir, running, swarm, disk, search }
     }
@@ -241,7 +245,7 @@ async fn an_ambiguous_prefix_lists_the_candidates() {
     catalog.push(twin);
     let h = Harness::with_catalog(catalog);
     let Response::Search { result } =
-        h.ask(Request::Search { query: torrential_core::SearchQuery::new("ubuntu") }).await
+        h.ask(Request::Search { query: torrential_core::SearchQuery::new("ubuntu"), stream: false }).await
     else {
         panic!("expected results")
     };
@@ -436,7 +440,7 @@ async fn a_result_with_only_a_torrent_url_is_fetched_once_found() {
     let h = Harness::with_catalog(vec![row]);
     h.search.serve_torrent(url, iso.bytes());
     let Response::Search { result } =
-        h.ask(Request::Search { query: torrential_core::SearchQuery::new("debian") }).await
+        h.ask(Request::Search { query: torrential_core::SearchQuery::new("debian"), stream: false }).await
     else {
         panic!("expected results")
     };
@@ -459,7 +463,7 @@ async fn a_slow_search_does_not_delay_a_pause() {
     h.search.set_delay(Duration::from_secs(3));
     let ctx = h.running.ctx.clone();
     let search = tokio::spawn(async move {
-        server::handle(&ctx, Request::Search { query: torrential_core::SearchQuery::new("arch") }).await
+        server::handle(&ctx, Request::Search { query: torrential_core::SearchQuery::new("arch"), stream: false }).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
     let started = Instant::now();
@@ -467,4 +471,57 @@ async fn a_slow_search_does_not_delay_a_pause() {
     assert!(started.elapsed() < Duration::from_secs(1), "pause took {:?}", started.elapsed());
     assert!(!search.is_finished());
     search.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_streaming_search_sends_results_as_sources_answer() {
+    use search_port::FakeSource;
+    let listed = |hex: &str, name: &str, source: &str| torrential_core::Release {
+        id: torrential_core::ReleaseId::Torrent(hex.repeat(20).parse().unwrap()),
+        name: name.into(),
+        sources: vec![source.into()],
+        ..fake_catalog().remove(0)
+    };
+    let catalog = vec![listed("aa", "dead \u{1b}[31mred", "slow"), listed("bb", "dead fast", "quick")];
+    let script = vec![
+        FakeSource::answers("quick", 0),
+        FakeSource::fails("broken", 20, torrential_core::SourceOutcome::Http { status: 503 }),
+        FakeSource::answers("slow", 60),
+    ];
+    let h = Harness::with_search(search_port::Fake::scripted(catalog, script, Default::default()));
+    let (client, served) = tokio::net::UnixStream::pair().unwrap();
+    tokio::spawn(server::connection(h.running.ctx.clone(), served));
+    let (mut rd, mut wr) = client.into_split();
+    let hello = Request::Hello { client_version: "0.1.0".into(), wire: torrential_core::protocol::WIRE_VERSION };
+    crate::wire::write_async(&mut wr, &hello).await.unwrap();
+    crate::wire::read_async::<Response>(&mut rd).await.unwrap();
+    let search = Request::Search { query: torrential_core::SearchQuery::new("dead"), stream: true };
+    crate::wire::write_async(&mut wr, &search).await.unwrap();
+    let mut frames = Vec::new();
+    loop {
+        let frame: serde_json::Value = crate::wire::read_async(&mut rd).await.unwrap().unwrap();
+        let names: Vec<&str> =
+            frame["result"]["releases"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+        let sources: Vec<String> = frame["result"]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| format!("{} {}", s["source"].as_str().unwrap(), s["outcome"].as_str().unwrap()))
+            .collect();
+        let kind = frame["event"].as_str().or(frame["type"].as_str()).unwrap().to_string();
+        frames.push(format!("{kind}: {names:?} {sources:?} pending {}", frame["pending"]));
+        if kind != "search_update" {
+            break;
+        }
+    }
+    assert_eq!(
+        frames,
+        [
+            r#"search_update: ["dead fast"] ["quick ok"] pending ["broken","slow"]"#,
+            r#"search_update: ["dead fast"] ["quick ok", "broken http"] pending ["slow"]"#,
+            r#"search: ["dead red", "dead fast"] ["quick ok", "broken http", "slow ok"] pending null"#,
+        ]
+    );
+    let reply = h.get(Target::Prefix("bbbbbb".into()), &[]).await.unwrap();
+    assert_eq!(reply.outcome, GetOutcome::Started);
 }

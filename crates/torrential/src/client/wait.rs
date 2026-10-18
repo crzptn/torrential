@@ -212,7 +212,7 @@ pub fn run(
                     return Ok(end.exit_code());
                 }
             }
-            Ok(Ok(Event::Heartbeat { .. })) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(Ok(Event::Heartbeat { .. } | Event::SearchUpdate { .. })) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Ok(Err(error)) => return Err(error),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(Error::new(ErrorCode::DaemonUnavailable, "the engine stopped while waiting"));
@@ -274,7 +274,7 @@ pub fn attach(conn: Conn, refs: Vec<String>, until: Until, timeout: Option<Durat
                     return Ok(WaitEnd::Stopped { id: short }.exit_code());
                 }
             }
-            Ok(Ok(Event::Heartbeat { .. })) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(Ok(Event::Heartbeat { .. } | Event::SearchUpdate { .. })) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Ok(Err(error)) => return Err(error),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(Error::new(ErrorCode::DaemonUnavailable, "the engine stopped while waiting"));

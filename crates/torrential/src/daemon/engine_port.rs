@@ -284,7 +284,6 @@ impl Swarm {
         swarm
     }
 
-    #[cfg(test)]
     pub fn publish(&self, torrent: FakeTorrentFile) {
         self.0.lock().unwrap().published.insert(torrent.info_hash.id(), torrent);
     }

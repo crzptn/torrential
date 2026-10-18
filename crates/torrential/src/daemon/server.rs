@@ -6,16 +6,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::net::UnixStream;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use torrential_core::protocol::{Event, FilesReply, GetRequest, Request, Response, WIRE_VERSION};
 use torrential_core::text::sanitize;
-use torrential_core::{Error, ErrorCode, Release, ReleaseId, SearchQuery, Target, TorrentFile};
+use torrential_core::{Error, ErrorCode, Release, ReleaseId, SearchQuery, SearchResult, Target, TorrentFile};
 
 use super::engine_port::{EngineHandle, Metainfo, ParseTorrent};
 use super::files;
 use super::magnet;
 use super::owner::{Command, FilesInfo, GetCommand, MetaTarget, Origin, Reply, Resolved, Source, Update};
-use super::search_port::SearchPort;
+use super::search_port::{Partial, SearchPort};
 use crate::wire;
 
 /// The largest `.torrent` file torrential reads.
@@ -52,14 +53,14 @@ pub struct Ctx {
     pub version: String,
 }
 
-/// `Hello` and `Watch` belong to [`connection`], which owns the stream.
+/// `Hello`, `Watch`, and a streaming `Search` belong to [`connection`], which owns the stream.
 pub async fn handle(ctx: &Ctx, request: Request) -> Response {
     let owner = &ctx.owner;
     let result = match request {
         Request::Hello { .. } | Request::Watch { .. } => {
             Err(Error::new(ErrorCode::Usage, "hello and watch are not single requests"))
         }
-        Request::Search { query } => search(ctx, query).await.map(|result| Response::Search { result }),
+        Request::Search { query, .. } => search(ctx, query).await.map(|result| Response::Search { result }),
         Request::Files { target, timeout_ms } => {
             files(ctx, target, Duration::from_millis(timeout_ms.into())).await.map(|files| Response::Files { files })
         }
@@ -90,13 +91,42 @@ pub async fn handle(ctx: &Ctx, request: Request) -> Response {
     result.unwrap_or_else(|error| Response::Error { error })
 }
 
-async fn search(ctx: &Ctx, query: SearchQuery) -> Result<torrential_core::SearchResult, Error> {
+async fn search(ctx: &Ctx, query: SearchQuery) -> Result<SearchResult, Error> {
     let mut result = ctx.search.search(query).await?;
+    record(ctx, &mut result);
+    Ok(result)
+}
+
+/// Sanitizes names, and remembers the releases so `get` and `files` can resolve their IDs.
+fn record(ctx: &Ctx, result: &mut SearchResult) {
     for release in &mut result.releases {
         release.name = sanitize(&release.name);
     }
     ctx.owner.tell(Command::RecordResults(result.releases.clone()));
-    Ok(result)
+}
+
+async fn stream_search(ctx: &Ctx, query: SearchQuery, wr: &mut OwnedWriteHalf) -> std::io::Result<()> {
+    let (partials_tx, mut partials) = mpsc::unbounded_channel();
+    let search = ctx.search.search_stream(query, partials_tx);
+    tokio::pin!(search);
+    let result = loop {
+        tokio::select! {
+            biased;
+            Some(Partial { mut result, pending }) = partials.recv() => {
+                record(ctx, &mut result);
+                wire::write_async(wr, &Event::SearchUpdate { result, pending }).await?;
+            }
+            result = &mut search => break result,
+        }
+    };
+    let response = match result {
+        Ok(mut result) => {
+            record(ctx, &mut result);
+            Response::Search { result }
+        }
+        Err(error) => Response::Error { error },
+    };
+    wire::write_async(wr, &response).await
 }
 
 fn parse(ctx: &Ctx, bytes: &[u8]) -> Result<Metainfo, Error> {
@@ -257,6 +287,7 @@ async fn serve(ctx: &Ctx, stream: UnixStream) -> std::io::Result<()> {
         }
         match request {
             Request::Watch { refs } => return watch(ctx, refs, rd, wr).await,
+            Request::Search { query, stream: true } => stream_search(ctx, query, &mut wr).await?,
             request => {
                 let response = handle(ctx, request).await;
                 wire::write_async(&mut wr, &response).await?;
@@ -266,12 +297,7 @@ async fn serve(ctx: &Ctx, stream: UnixStream) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn watch(
-    ctx: &Ctx,
-    refs: Vec<String>,
-    mut rd: tokio::net::unix::OwnedReadHalf,
-    mut wr: tokio::net::unix::OwnedWriteHalf,
-) -> std::io::Result<()> {
+async fn watch(ctx: &Ctx, refs: Vec<String>, mut rd: OwnedReadHalf, mut wr: OwnedWriteHalf) -> std::io::Result<()> {
     let (jobs, mut updates) = match ctx.owner.ask(|reply| Command::Watch { refs, reply }).await {
         Ok(watch) => watch,
         Err(error) => return wire::write_async(&mut wr, &Response::Error { error }).await,
