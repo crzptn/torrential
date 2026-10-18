@@ -127,6 +127,42 @@ fn a_download_says_stalled_only_after_a_quiet_spell() {
     assert_eq!(state.next_stall(), None);
 }
 
+/// Wikipedia as the engine sends it, at 100×30, and the row it lands on.
+fn wikipedia_with(status: JobStatus, map: Option<&str>) -> (State, Buffer, u16) {
+    let mut state = with_downloads((100, 30));
+    let mut job = jobs()[0].clone();
+    job.status = status;
+    job.progress.piece_map = map.map(|m| m.parse().unwrap());
+    state.update(Msg::Watch(Event::Job { job: Box::new(job) }));
+    let buf = render(&state);
+    let (_, y) = find(&buf, "wikipedia-en-2026-09-text");
+    (state, buf, y)
+}
+
+/// Sixteen runs of four slices, one per cell of a 16-cell gauge.
+const SCATTERED: &str = concat!(
+    "8888", "4444", "0000", "----", "88--", "0001", "8887", "1234", "8888", "8888", "----", "----", "2222", "6666",
+    "0000", "0000",
+);
+
+#[test]
+fn a_download_getting_bytes_shows_where_its_pieces_sit() {
+    let (state, buf, y) = wikipedia_with(JobStatus::Downloading, Some(SCATTERED));
+    assert!(line(&buf, y).contains(" █▄▁ █▁▇▃██  ▂▆▁▁ "), "{}", line(&buf, y));
+    let (x, _) = find(&buf, "█▄▁ █▁▇▃██");
+    let plain = render_in(&state, ColorMode::NoColor);
+    assert!(plain[(x + 2, y)].modifier.contains(Modifier::DIM), "nothing has arrived: a faint floor");
+    assert!(!plain[(x + 5, y)].modifier.contains(Modifier::DIM), "an eighth has arrived: a full-ink floor");
+}
+
+#[test]
+fn a_download_keeps_the_rule_until_it_has_a_map_and_while_it_is_not_getting_bytes() {
+    let (_, buf, y) = wikipedia_with(JobStatus::Downloading, None);
+    assert!(line(&buf, y).contains(" ━━━╸──────────── "), "no map yet: {}", line(&buf, y));
+    let (_, buf, y) = wikipedia_with(JobStatus::Paused, Some(SCATTERED));
+    assert!(line(&buf, y).contains(" ━━━╸──────────── "), "paused: {}", line(&buf, y));
+}
+
 #[test]
 fn a_long_query_is_cut_so_failed_sources_stay_in_view() {
     let mut state = with_downloads((80, 24));

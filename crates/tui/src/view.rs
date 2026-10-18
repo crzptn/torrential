@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use torrential_core::units::format_duration;
-use torrential_core::{Flag, Job, JobStatus, Release, ReleaseId, SourceOutcome, TorrentFile};
+use torrential_core::{Flag, Job, JobStatus, PieceMap, Release, ReleaseId, Slice, SourceOutcome, TorrentFile};
 
 use crate::format::{self, age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
 use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
@@ -94,48 +94,74 @@ fn rule(buf: &mut Buffer, top: u16, bottom: u16) {
     }
 }
 
-/// What a progress mark measures: the bytes verified out of a size, for a download or one of its
-/// files, and whether the download is getting bytes.
+/// What a progress mark shows.
 #[derive(Clone, Copy)]
-struct Meter {
-    verified: u64,
-    /// Unknown until a peer sends the file list.
-    size: Option<u64>,
-    downloading: bool,
+enum Meter {
+    /// Bytes verified out of a size, drawn as a rule. `size` is unknown until a peer sends the
+    /// file list. `getting` while the download gets bytes.
+    Share { verified: u64, size: Option<u64>, getting: bool },
+    /// Where a downloading torrent's pieces sit.
+    Pieces(PieceMap),
 }
 
 impl Meter {
     fn job(job: &Job) -> Self {
         let p = &job.progress;
-        Self { verified: p.verified, size: p.size, downloading: job.status == JobStatus::Downloading }
+        let getting = job.status == JobStatus::Downloading;
+        match p.piece_map {
+            Some(map) if getting => Self::Pieces(map),
+            _ => Self::Share { verified: p.verified, size: p.size, getting },
+        }
     }
 
     fn file(job: &Job, file: &TorrentFile) -> Self {
-        Self { verified: file.verified, size: Some(file.size), ..Self::job(job) }
-    }
-
-    fn fraction(self) -> f64 {
-        match self.size {
-            Some(0) => 1.0,
-            Some(size) => self.verified as f64 / size as f64,
-            None => 0.0,
-        }
+        Self::Share { verified: file.verified, size: Some(file.size), getting: job.status == JobStatus::Downloading }
     }
 }
 
-/// The one place progress is drawn: a rule `cells` wide that fills in half cells, sage while the
-/// download gets bytes and pencil otherwise. A rain gauge can replace the rule here for rows
-/// getting bytes once the engine reports which pieces have arrived.
+/// The one place progress is drawn, `cells` wide. A share is a rule that fills in half cells,
+/// sage while the download gets bytes and pencil otherwise. Pieces are a rain gauge: each cell
+/// pools a run of the map's slices into one, counting only the wanted ones, and shows its eighths
+/// as a bar, an unfilled floor when nothing has arrived, or a gap when nothing there is wanted.
 fn progress_mark(buf: &mut Buffer, x: u16, y: u16, cells: u16, meter: Meter) {
-    let ink = if meter.downloading { ACTION } else { PENCIL };
-    let halves = (meter.fraction().clamp(0.0, 1.0) * f64::from(cells) * 2.0).floor() as u16;
-    for i in 0..cells {
-        let (glyph, color) = match halves.saturating_sub(i * 2) {
-            0 => ("─", RULE),
-            1 => ("╸", ink),
-            _ => ("━", ink),
-        };
-        put(buf, x + i, y, 1, glyph, fg(color));
+    match meter {
+        Meter::Share { verified, size, getting } => {
+            let ink = if getting { ACTION } else { PENCIL };
+            let fraction = match size {
+                Some(0) => 1.0,
+                Some(size) => verified as f64 / size as f64,
+                None => 0.0,
+            };
+            let halves = (fraction.clamp(0.0, 1.0) * f64::from(cells) * 2.0).floor() as u16;
+            for i in 0..cells {
+                let (glyph, color) = match halves.saturating_sub(i * 2) {
+                    0 => ("─", RULE),
+                    1 => ("╸", ink),
+                    _ => ("━", ink),
+                };
+                put(buf, x + i, y, 1, glyph, fg(color));
+            }
+        }
+        Meter::Pieces(map) => {
+            const BARS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+            let slices = map.slices();
+            let span = |i: u16| usize::from(i) * slices.len() / usize::from(cells);
+            for i in 0..cells {
+                let run = &slices[span(i)..span(i + 1).max(span(i) + 1)];
+                let (got, wanted) = run.iter().fold((0, 0), |(got, wanted), slice| match slice {
+                    Slice::Wanted(eighths) => (got + u32::from(eighths.get()), wanted + 8),
+                    Slice::Unwanted => (got, wanted),
+                });
+                let (glyph, style) = match Slice::of(got, wanted) {
+                    Slice::Unwanted => (" ", Style::new()),
+                    Slice::Wanted(eighths) => match eighths.get() {
+                        0 => ("▁", fg(RULE)),
+                        n => (BARS[usize::from(n) - 1], fg(ACTION)),
+                    },
+                };
+                put(buf, x + i, y, 1, glyph, style);
+            }
+        }
     }
 }
 
