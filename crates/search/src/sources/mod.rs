@@ -204,7 +204,8 @@ impl Source {
     }
 }
 
-/// Builds the registry: the built-in rows, then the configured Torznab endpoints.
+/// Builds the registry: the built-in rows, then the configured Torznab endpoints,
+/// less the disabled sources.
 pub(crate) fn registry(config: &SearchConfig) -> Result<Vec<Arc<Source>>, Error> {
     for name in config.endpoints.keys() {
         if !BUILTIN.iter().any(|row| row.name == name) {
@@ -236,6 +237,12 @@ pub(crate) fn registry(config: &SearchConfig) -> Result<Vec<Arc<Source>>, Error>
         let adapter = Adapter::Torznab { api_key: api_key.clone() };
         sources.push(Arc::new(Source { meta: Arc::new(meta), default_on: true, base, adapter }));
     }
+    for name in &config.disabled {
+        if !sources.iter().any(|s| s.meta.name == *name) {
+            return Err(config_error(format!("sources.disabled names an unknown source {name:?}")));
+        }
+    }
+    sources.retain(|s| !config.disabled.contains(&s.meta.name));
     Ok(sources)
 }
 
@@ -256,7 +263,7 @@ fn base_url(name: &str, raw: &str) -> Result<Url, Error> {
 }
 
 fn config_error(message: String) -> Error {
-    Error::new(ErrorCode::Usage, message).with_hint("fix the [search] section of the torrential config")
+    Error::new(ErrorCode::Usage, message).with_hint("fix the [sources] section of the torrential config")
 }
 
 /// Joins a fixed relative path onto a validated `http(s)` base, which cannot fail.

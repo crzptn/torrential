@@ -48,6 +48,8 @@ pub struct SearchConfig {
     /// Replacement base URLs for built-in sources, by source name, such as a
     /// mirror. torrential never adds mirrors on its own.
     pub endpoints: BTreeMap<String, String>,
+    /// Sources never searched, by name. A query that names one fails.
+    pub disabled: Vec<String>,
 }
 
 /// A Jackett, Prowlarr, or bitmagnet Torznab endpoint, such as
@@ -96,7 +98,9 @@ pub struct Search {
 
 struct Inner {
     http: Http,
+    /// The enabled sources.
     sources: Vec<Arc<Source>>,
+    disabled: Vec<String>,
     stores: Stores,
     cache: ResultCache,
 }
@@ -107,7 +111,7 @@ impl Search {
         Inner::new(config, cache, false).map(|inner| Search { inner: Arc::new(inner) })
     }
 
-    /// Every source, most authoritative first.
+    /// Every enabled source, most authoritative first.
     pub fn sources(&self) -> Vec<SourceInfo> {
         self.inner
             .sources
@@ -224,6 +228,10 @@ impl Search {
         let mut chosen: Vec<Arc<Source>> = Vec::new();
         for name in names {
             let Some(source) = all.iter().find(|s| s.meta.name.eq_ignore_ascii_case(name.trim())) else {
+                if let Some(off) = self.inner.disabled.iter().find(|d| d.eq_ignore_ascii_case(name.trim())) {
+                    return Err(Error::new(ErrorCode::Usage, format!("source {off:?} is disabled"))
+                        .with_hint("remove it from sources.disabled in the torrential config"));
+                }
                 let known: Vec<&str> = all.iter().map(|s| s.meta.name.as_str()).collect();
                 return Err(Error::new(ErrorCode::Usage, format!("unknown source {name:?}"))
                     .with_hint(format!("sources are {}", known.join(", "))));
@@ -240,7 +248,8 @@ impl Inner {
     fn new(config: &SearchConfig, cache: ResultCache, record: bool) -> Result<Inner, Error> {
         let http = Http::new(record).map_err(|e| Error::internal(format!("cannot build the HTTP client: {e}")))?;
         let sources = sources::registry(config)?;
-        Ok(Inner { http, sources, stores: Stores::new(config.cache_dir.clone()), cache })
+        let disabled = config.disabled.clone();
+        Ok(Inner { http, sources, disabled, stores: Stores::new(config.cache_dir.clone()), cache })
     }
 
     /// Also says whether the answer is complete enough to cache.

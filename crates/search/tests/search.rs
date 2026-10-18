@@ -600,6 +600,24 @@ async fn progress_shows_each_answer_and_the_final_ranking_is_unchanged() {
 }
 
 #[tokio::test]
+async fn a_disabled_source_is_neither_searched_nor_nameable() {
+    let server = Server::start(vec![("/apibay/", vec![ok(fixture("apibay/q.php-ubuntu.json"))])]).await;
+    let config = SearchConfig { disabled: vec!["knaben".into(), "nyaa".into()], ..server.config(&["apibay"]) };
+    let search = Search::new(&config, ResultCache::new()).unwrap();
+
+    let named = search.search(&query("ubuntu", &["apibay", "knaben"])).await.unwrap_err();
+    let unknown = Search::new(&SearchConfig { disabled: vec!["1337x".into()], ..config.clone() }, ResultCache::new())
+        .err()
+        .unwrap();
+
+    let names: Vec<String> = search.sources().into_iter().map(|s| s.name).collect();
+    assert_eq!(names, ["archlinux", "ubuntu", "debian", "archive.org", "academictorrents", "apibay"]);
+    assert_eq!((named.code, named.message.as_str()), (ErrorCode::Usage, "source \"knaben\" is disabled"));
+    assert_eq!(server.hits("/apibay/"), 0);
+    assert_eq!(unknown.message, "sources.disabled names an unknown source \"1337x\"");
+}
+
+#[tokio::test]
 async fn a_torrent_fetch_failure_never_quotes_the_link() {
     let torrent = netinst();
     let server = Server::start(vec![
