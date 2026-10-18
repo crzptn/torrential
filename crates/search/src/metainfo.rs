@@ -179,9 +179,9 @@ mod tests {
 
     #[test]
     fn rejects_truncated_and_hostile_input() {
-        assert!(parse(b"d4:infod6:lengthi1").is_err());
-        assert!(parse(b"d4:info99999999999:x").is_err());
-        assert!(parse(&[b'l'; 100]).is_err());
-        assert!(parse(b"d4:infoi3ee").is_err());
+        assert_eq!(parse(b"d4:infod6:lengthi1").unwrap_err(), "unterminated number");
+        assert_eq!(parse(b"d4:info99999999999:x").unwrap_err(), "string runs past the end");
+        assert_eq!(parse(&[vec![b'l'; 100], vec![b'e'; 100]].concat()).unwrap_err(), "nested too deeply");
+        assert_eq!(parse(b"d4:infoi3ee").unwrap_err(), "info is not a dictionary");
     }
 }

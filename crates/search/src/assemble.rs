@@ -122,15 +122,15 @@ type Sighting<'a> = (&'a SourceMeta, &'a Observation);
 /// listing that only knows the v2 hash joins the same release.
 fn merge<'a>(sightings: impl Iterator<Item = Sighting<'a>>, terms: &Terms) -> Vec<Candidate> {
     let sightings: Vec<Sighting<'a>> = sightings.collect();
-    let aliases: HashMap<TorrentId, TorrentId> = sightings
-        .iter()
-        .filter_map(|(_, o)| match o.identity {
-            Identity::Hash { hash: InfoHash::Hybrid { v1, v2 }, .. } => {
-                Some((InfoHash::V2(v2).id(), TorrentId::from_bytes(v1)))
-            }
-            _ => None,
-        })
-        .collect();
+    let mut aliases: HashMap<TorrentId, TorrentId> = HashMap::new();
+    for (_, o) in &sightings {
+        if let Identity::Hash { hash: InfoHash::Hybrid { v1, v2 }, .. } = o.identity {
+            // Two hybrids claiming one v2 hash is bad data; picking the smaller v1
+            // keeps the result independent of row order.
+            let v1 = TorrentId::from_bytes(v1);
+            aliases.entry(InfoHash::V2(v2).id()).and_modify(|known| *known = (*known).min(v1)).or_insert(v1);
+        }
+    }
     let mut groups: HashMap<ReleaseId, Vec<Sighting<'a>>> = HashMap::new();
     for sighting in sightings {
         let id = match &sighting.1.identity {

@@ -7,9 +7,9 @@ const CAM_ANY_CASE: &[&str] = &["hdcam", "camrip", "hdcamrip", "telesync", "tele
 /// release groups put the source.
 const CAM_AFTER_YEAR: &[&str] = &["CAM", "TS"];
 
-/// Brands and terms that do not occur in ordinary titles. Bare "xxx" and "sex" are
-/// left out because they collide with "xXx (2002)" and "Sex Education"; a source's
-/// adult category catches those listings instead.
+/// Brands and terms that do not occur in ordinary titles. Bare "xxx", "sex", and
+/// "hentai" are left out because they collide with "xXx (2002)", "Sex Education",
+/// and "Hentai Kamen"; a source's adult category catches those listings instead.
 const ADULT: &[&str] = &[
     "bangbros",
     "brazzers",
@@ -18,7 +18,6 @@ const ADULT: &[&str] = &[
     "digitalplayground",
     "evilangel",
     "fansly",
-    "hentai",
     "javhd",
     "manyvids",
     "myfreecams",
@@ -88,5 +87,7 @@ mod tests {
         assert!(!is_adult("Sussex Documentary 2021"));
         assert!(!is_adult("Portlandia S01 1080p"));
         assert!(!is_adult("Ubuntu 24.04 LTS"));
+        assert!(!is_adult("[SubsPlease] Hentai Ouji to Warawanai Neko - 01 (1080p)"));
+        assert!(!is_adult("HK Hentai Kamen 2013"));
     }
 }

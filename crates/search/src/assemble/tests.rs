@@ -132,6 +132,23 @@ fn a_v2_listing_joins_the_hybrid_listing_of_the_same_torrent() {
 }
 
 #[test]
+fn conflicting_hybrids_resolve_the_same_way_in_any_order() {
+    let hybrid = |v1: u8| {
+        let hash = InfoHash::Hybrid { v1: [v1; 20], v2: [0x22; 32] };
+        Observation::new(Identity::Hash { hash, torrent_url: None }, "ImageNet 2012").unwrap()
+    };
+    let q = SearchQuery::new("imagenet");
+    let ids = |rows: Vec<Observation>| -> Vec<(String, String)> {
+        search(&q, &[fresh(&knaben(), rows)]).releases.into_iter().map(|r| (r.id.to_ref(), r.name)).collect()
+    };
+    let v2_only = || row(&"22".repeat(32), "ImageNet 2012 train");
+    let one_way = ids(vec![hybrid(0x02), hybrid(0x01), v2_only()]);
+    let other_way = ids(vec![v2_only(), hybrid(0x01), hybrid(0x02)]);
+    assert_eq!(one_way, [(h(0x01), "ImageNet 2012 train".to_string()), (h(0x02), "ImageNet 2012".to_string())]);
+    assert_eq!(other_way, one_way);
+}
+
+#[test]
 fn private_links_stay_out_of_results_and_with_their_own_listing() {
     let torznab = source("tracker", 8, false, false);
     let mut public = row(&h(0x33), "Debian 13 netinst");
