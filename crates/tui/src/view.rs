@@ -8,7 +8,7 @@ use std::time::Duration;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use torrential_core::units::format_duration;
+use torrential_core::units::{count, format_duration};
 use torrential_core::{Eighths, Flag, Job, JobStatus, Release, ReleaseId, Slice, SourceOutcome, TorrentFile};
 
 use crate::format::{self, age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
@@ -328,7 +328,7 @@ fn search_status(state: &State, short: bool) -> Vec<(String, Style)> {
             let text = match asked {
                 0 => "searching".to_string(),
                 _ if short => format!("{answered} of {asked}"),
-                _ => format!("searching · {answered} of {asked} sources"),
+                _ => format!("searching · {answered} of {}", count(asked, "source")),
             };
             vec![(text, fg(PENCIL)), (state.spinner().into(), fg(PENCIL))]
         }
@@ -427,8 +427,7 @@ fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
                 margin(&mut sheet, y, word, fg(PENCIL));
                 last = Some(word);
                 let n = state.downloads.iter().filter(|j| label(&j.status) == word).count();
-                let text = if n == 1 { "1 download".to_string() } else { format!("{n} downloads") };
-                put(&mut sheet, CONTENT, y, right - CONTENT, &text, fg(PENCIL));
+                put(&mut sheet, CONTENT, y, right - CONTENT, &count(n, "download"), fg(PENCIL));
             }
             Block::Gap => last = None,
             Block::Heads => {
@@ -511,7 +510,7 @@ fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
             _ if state.stalled(job) => "stalled".into(),
             _ => String::new(),
         },
-        JobStatus::Metadata => format!("{} peers", p.peers),
+        JobStatus::Metadata => count(p.peers as usize, "peer"),
         _ => String::new(),
     };
     put_right(buf, g.right, y, &tail, if is_selected { ink } else { fg(PENCIL) });
@@ -545,7 +544,7 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
         facts.push(rate(p.down_rate));
     }
     if matches!(job.status, JobStatus::Downloading | JobStatus::Metadata) {
-        facts.push(format!("{} peers", p.peers));
+        facts.push(count(p.peers as usize, "peer"));
     }
     put(buf, DETAIL, row + 1, room, &facts.join(" · "), fg(PENCIL));
     row += 2;
@@ -586,7 +585,7 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
         arrow(buf, row - 1, "↓");
     }
     if more {
-        let text = format!("and {} more files · press enter to list them", picked.len() - shown);
+        let text = format!("and {} · press enter to list them", count(picked.len() - shown, "more file"));
         put(buf, DETAIL, row, room, &text, fg(PENCIL));
     }
 }
@@ -682,8 +681,7 @@ fn result_detail(buf: &mut Buffer, state: &State, id: ReleaseId, c: &Columns, y:
     facts.extend(release.flags.iter().map(|f| flag_words(*f).to_string()));
     match files {
         Some(Files::Ready(tree)) => {
-            let n = tree.files.len();
-            facts.push(if n == 1 { "1 file".into() } else { format!("{n} files") });
+            facts.push(count(tree.files.len(), "file"));
         }
         Some(Files::Loading { .. }) => facts.push(format!("counting files{}", state.spinner())),
         Some(Files::Failed(_)) | None => {}
@@ -741,14 +739,17 @@ fn file_tree(buf: &mut Buffer, state: &State, tree: &Tree, c: &Columns, y: u16, 
     let ruled = y + rows as u16;
     let left_out = tree.risky_left_out();
     if left_out > 0 {
-        let text = format!("{left_out} executable{} left out", if left_out == 1 { "" } else { "s" });
+        let text = format!("{} left out", count(left_out, "executable"));
         put(buf, DETAIL, ruled, before_size(c) - DETAIL, &text, fg(ERROR));
     }
     put_right(buf, c.size, ruled, "────────", fg(PENCIL));
     let total = ruled + 1;
     let picked = tree.picked_count();
-    let summary =
-        if picked == 0 { "nothing picked".to_string() } else { format!("{picked} of {} files", tree.files.len()) };
+    let summary = if picked == 0 {
+        "nothing picked".to_string()
+    } else {
+        format!("{picked} of {}", count(tree.files.len(), "file"))
+    };
     let used = put(buf, DETAIL, total, before_size(c) - DETAIL, &summary, fg(TEXT));
     if let Some(free) = state.free_space {
         let picked = tree.picked_size();

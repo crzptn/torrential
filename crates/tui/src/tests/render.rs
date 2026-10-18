@@ -259,6 +259,32 @@ fn every_file_of_a_download_is_one_key_away() {
 }
 
 #[test]
+fn one_peer_reads_as_one_peer() {
+    let mut state = with_downloads((100, 30));
+    let mut job = jobs()[0].clone();
+    job.progress.peers = 1;
+    state.update(Msg::Watch(Event::Job { job: Box::new(job.clone()) }));
+    let buf = render(&state);
+    assert_eq!(line(&buf, 6), "            │   5.3 GiB of 23.0 GiB · 10.0 MiB/s · 1 peer");
+    job.status = JobStatus::Metadata;
+    state.update(Msg::Watch(Event::Job { job: Box::new(job) }));
+    let buf = render(&state);
+    assert!(line(&buf, 4).ends_with("1 peer"), "{}", line(&buf, 4));
+    assert_eq!(line(&buf, 6), "            │   fetching the file list from peers · 1 peer");
+}
+
+#[test]
+fn one_source_reads_as_one_source() {
+    let mut state = with_downloads((100, 30));
+    press(&mut state, "/night");
+    state.update(key(KeyCode::Enter));
+    let (partial, _) = partial();
+    let one = SearchResult { sources: partial.sources[..1].to_vec(), ..partial };
+    state.update(Msg::SearchUpdate { search: 1, result: one, pending: Vec::new() });
+    assert!(line(&render(&state), 2).ends_with("searching · 1 of 1 source"), "{}", line(&render(&state), 2));
+}
+
+#[test]
 fn a_typing_user_sees_that_f1_opens_the_keys() {
     let mut state = with_downloads((100, 30));
     press(&mut state, "/");
