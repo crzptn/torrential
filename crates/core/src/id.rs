@@ -335,7 +335,13 @@ fn decode_base32_20(s: &str) -> Option<[u8; 20]> {
 }
 
 fn invalid_ref(input: &str, why: &str) -> Error {
-    Error::new(ErrorCode::InvalidRef, format!("{input:?} is not a torrent reference: {why}"))
+    // A URL can carry an API key or a passkey, so it is never quoted back.
+    let message = if input.contains(':') {
+        "a URL is not a torrent reference unless it is a magnet link or an http or https URL".to_string()
+    } else {
+        format!("{input:?} is not a torrent reference: {why}")
+    };
+    Error::new(ErrorCode::InvalidRef, message)
         .with_hint("pass an ID from `torrential search`, a magnet link, a .torrent file, or a .torrent URL")
 }
 

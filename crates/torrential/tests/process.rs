@@ -487,3 +487,39 @@ fn get_max_size_raises_the_cap_of_a_magnet_that_stopped_over_it() {
     let done = home.run(&["wait", "2d9b6a", "--timeout", "50s"]);
     assert_eq!(done.code, 0, "{}{}", done.stdout, done.stderr);
 }
+
+#[test]
+fn errors_name_a_reference_by_its_hash_or_kind_never_its_url() {
+    let home = Home::with(&[("TORRENTIAL_TEST_ENGINE", "fake")]);
+    let hash = "ab".repeat(20);
+    let magnet = format!("magnet:?xt=urn:btih:{hash}&tr=https%3A%2F%2Fprivate.example%2Fannounce%2Fs3cret");
+
+    let runs = [
+        home.run(&["status", "https://private.example/dl/7.torrent?apikey=s3cret"]),
+        home.run(&["status", &magnet]),
+        home.run(&["pause", "udp://private.example/announce?passkey=s3cret"]),
+    ];
+
+    let errors: Vec<(i32, &str)> = runs.iter().map(|r| (r.code, r.stderr.as_str())).collect();
+    assert_eq!(
+        errors,
+        [
+            (
+                3,
+                "error[invalid_ref]: this command takes a download ID, not a .torrent URL\nhint: run torrential \
+                 status to list download IDs\n"
+            ),
+            (
+                3,
+                &*format!(
+                    "error[not_found]: no download matches {hash}\nhint: run torrential status to list downloads\n"
+                )
+            ),
+            (
+                3,
+                "error[invalid_ref]: a URL is not a torrent reference unless it is a magnet link or an http or https \
+                 URL\nhint: pass an ID from `torrential search`, a magnet link, a .torrent file, or a .torrent URL\n"
+            ),
+        ]
+    );
+}

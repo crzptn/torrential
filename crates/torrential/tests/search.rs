@@ -297,8 +297,13 @@ fn get_on_a_search_result_downloads_into_the_configured_folder() {
 #[test]
 fn private_indexer_links_never_reach_the_output() {
     let server = Server::start(|base| {
-        let feed =
-            String::from_utf8(fixture("torznab/jackett-ubuntu.xml")).unwrap().replace("http://127.0.0.1:9117", base);
+        let feed = String::from_utf8(fixture("torznab/jackett-ubuntu.xml"))
+            .unwrap()
+            .replace("http://127.0.0.1:9117", base)
+            .replace(
+                "<comments>https://privatehd.example/torrents/4471",
+                "<comments>https://privatehd.example/t/4471?passkey=s3cret",
+            );
         vec![
             ("/torznab/api", vec![ok(feed.into_bytes())]),
             ("/dl/privatehd/", vec![status(404), status(404), ok(torrent("ubuntu-private.iso"))]),
@@ -339,7 +344,10 @@ fn private_indexer_links_never_reach_the_output() {
     let runs = [&plain, &json, &refused, &refused_json, &started, &status, &status_json, &files, &files_json];
     for run in runs {
         let out = format!("{}{}", run.stdout, run.stderr);
-        assert!(!out.contains("k3y") && !out.contains("apikey"), "a private link reached the output: {out}");
+        assert!(
+            !out.contains("k3y") && !out.contains("apikey") && !out.contains("s3cret"),
+            "a private link reached the output: {out}"
+        );
     }
     assert_eq!(server.asked("/torznab/api"), ["/torznab/api?t=search&q=ubuntu&apikey=k3y"]);
     assert_eq!(server.asked("/dl/privatehd/"), vec!["/dl/privatehd/?jackett_apikey=k3y&path=def&file=ubuntu"; 3]);

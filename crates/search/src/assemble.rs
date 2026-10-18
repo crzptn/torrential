@@ -112,6 +112,8 @@ pub(crate) struct Candidate {
     private_url: bool,
     /// The trackers came from a private source and carry the user's passkey.
     private_trackers: bool,
+    /// The page link came from a private source, which may put a passkey in it.
+    private_info: bool,
     relevance: Relevance,
     /// Words in the shown name beyond the query.
     extra_words: u16,
@@ -137,6 +139,9 @@ impl Candidate {
         }
         if self.private_trackers {
             release.magnet = self.hash.map(|h| build_magnet(&h, &release.name, &[]));
+        }
+        if self.private_info {
+            release.info_url = None;
         }
         release
     }
@@ -210,6 +215,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     let trackers: Vec<String> = trackers.into_iter().take(MAX_TRACKERS).cloned().collect();
     let hash = combined_hash(group);
     let link = group.iter().filter_map(|(s, o)| o.torrent_url().map(|url| (s.authority, !s.public, url))).min();
+    let info = group.iter().filter_map(|(s, o)| o.info_url.as_deref().map(|url| (s.authority, !s.public, url))).min();
     let relevance = group.iter().map(|(_, o)| terms.relevance(o.name())).max().unwrap_or(terms.relevance(""));
     let extra_words = terms.extra_words(&name);
     let quality = Quality::parse(&name);
@@ -222,6 +228,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
         hash,
         private_url: link.is_some_and(|(_, private, _)| private),
         private_trackers: !any_public && !trackers.is_empty(),
+        private_info: info.is_some_and(|(_, private, _)| private),
         release: Release {
             id,
             magnet: hash.map(|h| build_magnet(&h, &name, &trackers)),
@@ -234,7 +241,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
             flags,
             sources: authorities.into_iter().map(|(_, name)| name.to_string()).collect(),
             torrent_url: link.map(|(.., url)| url.to_string()),
-            info_url: first(group, |o| o.info_url.clone()),
+            info_url: info.map(|(.., url)| url.to_string()),
         },
         relevance,
         extra_words,

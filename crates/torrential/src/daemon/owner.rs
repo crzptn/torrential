@@ -329,7 +329,11 @@ impl Owner {
                 }
             }
             Target::InfoHash(hash) => self.find_job(&hash).ok_or_else(|| no_download(reference)),
-            Target::Magnet(uri) => self.find_job(&magnet::parse(&uri)?.info_hash).ok_or_else(|| no_download(reference)),
+            // A magnet's trackers can carry a passkey, so the error names its hash.
+            Target::Magnet(uri) => {
+                let hash = magnet::parse(&uri)?.info_hash;
+                self.find_job(&hash).ok_or_else(|| no_download(&hash.id().to_hex()))
+            }
             Target::TorrentUrl(_) | Target::TorrentFile(_) => Err(Error::new(
                 ErrorCode::InvalidRef,
                 format!("{command} takes a download ID, not a .torrent file or URL"),

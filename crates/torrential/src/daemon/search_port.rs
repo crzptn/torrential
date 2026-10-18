@@ -246,7 +246,7 @@ impl SearchPort for Fake {
     fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>> {
         Box::pin(async move {
             self.0.lock().unwrap().torrents.get(&url).cloned().ok_or_else(|| {
-                Error::new(ErrorCode::FetchFailed, format!("could not fetch {url}: 404"))
+                Error::new(ErrorCode::FetchFailed, "could not fetch the .torrent file: http 404")
                     .with_hint("try the magnet link instead")
             })
         })

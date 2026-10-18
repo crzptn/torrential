@@ -156,8 +156,10 @@ fn private_links_stay_out_of_results_and_with_their_own_listing() {
     let torznab = source("tracker", 8, false, false);
     let mut public = row(&h(0x33), "Debian 13 netinst");
     public.trackers = vec!["udp://public.example:6969/announce".into()];
+    public.info_url = Some("https://knaben.org/t/33".into());
     let mut private = row(&h(0x33), "Debian 13 netinst");
     private.trackers = vec!["https://private.example/announce?passkey=secret".into()];
+    private.info_url = Some("https://private.example/details.php?id=33&passkey=secret".into());
     let mut private_only = Observation::new(
         Identity::Hash {
             hash: infohash(&h(0x44)).unwrap(),
@@ -167,6 +169,7 @@ fn private_links_stay_out_of_results_and_with_their_own_listing() {
     )
     .unwrap();
     private_only.trackers = vec!["https://private.example/announce?passkey=secret".into()];
+    private_only.info_url = Some("https://private.example/details.php?id=44&passkey=secret".into());
     let q = SearchQuery::new("debian 13");
 
     let (shown, linked) = assemble(
@@ -178,31 +181,33 @@ fn private_links_stay_out_of_results_and_with_their_own_listing() {
     )
     .unwrap();
 
-    let links = |releases: &[Release]| -> Vec<(Option<String>, Option<String>)> {
-        releases.iter().map(|r| (r.magnet.clone(), r.torrent_url.clone())).collect()
+    let links = |releases: &[Release]| -> Vec<[Option<String>; 3]> {
+        releases.iter().map(|r| [r.magnet.clone(), r.torrent_url.clone(), r.info_url.clone()]).collect()
     };
     let public_magnet = format!(
         "magnet:?xt=urn:btih:{}&dn=Debian%2013%20netinst&tr=udp%3A%2F%2Fpublic.example%3A6969%2Fannounce",
         h(0x33)
     );
+    let public_info = Some("https://knaben.org/t/33".to_string());
     assert_eq!(
         links(&shown.releases),
         [
-            (Some(format!("magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD", h(0x44))), None),
-            (Some(public_magnet.clone()), None),
+            [Some(format!("magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD", h(0x44))), None, None],
+            [Some(public_magnet.clone()), None, public_info.clone()],
         ]
     );
     assert_eq!(
         links(&linked),
         [
-            (
+            [
                 Some(format!(
                     "magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD&tr=https%3A%2F%2Fprivate.example%2Fannounce%3Fpasskey%3Dsecret",
                     h(0x44)
                 )),
-                Some("http://127.0.0.1:9117/dl/x/?jackett_apikey=k3y".into())
-            ),
-            (Some(public_magnet), None),
+                Some("http://127.0.0.1:9117/dl/x/?jackett_apikey=k3y".into()),
+                Some("https://private.example/details.php?id=44&passkey=secret".into()),
+            ],
+            [Some(public_magnet), None, public_info],
         ]
     );
 }

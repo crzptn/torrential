@@ -220,13 +220,16 @@ fn job_refs(references: &[String], cwd: &Path) -> Result<Vec<String>, Error> {
             Target::Prefix(prefix) => Ok(prefix),
             Target::InfoHash(_) => Ok(reference.trim().to_string()),
             Target::Magnet(magnet) => Ok(magnet),
-            Target::TorrentUrl(_) | Target::TorrentFile(_) => Err(Error::new(
-                ErrorCode::InvalidRef,
-                format!("{reference:?} is a .torrent; this command takes a download ID"),
-            )
-            .with_hint("run torrential status to list download IDs")),
+            // A URL can carry an API key, so the error names what was passed, not the URL.
+            Target::TorrentUrl(_) => Err(not_a_download("a .torrent URL")),
+            Target::TorrentFile(_) => Err(not_a_download("a .torrent file")),
         })
         .collect()
+}
+
+fn not_a_download(kind: &str) -> Error {
+    Error::new(ErrorCode::InvalidRef, format!("this command takes a download ID, not {kind}"))
+        .with_hint("run torrential status to list download IDs")
 }
 
 fn changes(mut conn: Conn, request: Request, command: ChangeCommand, mode: Mode) -> Result<u8, Error> {
