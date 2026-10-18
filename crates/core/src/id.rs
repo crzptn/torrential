@@ -246,7 +246,7 @@ impl Target {
     /// `.torrent` path, then ID prefix. `cwd` resolves relative paths.
     pub fn parse(input: &str, cwd: &std::path::Path) -> Result<Self, Error> {
         let input = input.trim();
-        if input.len() > 8 && input[..8].eq_ignore_ascii_case("magnet:?") {
+        if input.get(..8).is_some_and(|scheme| scheme.eq_ignore_ascii_case("magnet:?")) {
             return Ok(Self::Magnet(input.to_string()));
         }
         let lower = input.to_ascii_lowercase();
@@ -288,7 +288,7 @@ pub fn shortest_unique_prefix<'a>(id: &TorrentId, others: impl IntoIterator<Item
         .map(|other| common_prefix_len(&hex, &other.to_hex()))
         .max()
         .unwrap_or(0);
-    hex[..(longest_shared + 1).clamp(min, 40)].to_string()
+    hex[..(longest_shared + 1).max(min).min(40)].to_string()
 }
 
 fn common_prefix_len(a: &str, b: &str) -> usize {
@@ -366,6 +366,18 @@ mod tests {
         );
         assert_eq!(Target::parse("9b5", cwd).unwrap_err().code, ErrorCode::InvalidRef);
         assert_eq!(Target::parse("missing.torrent", cwd).unwrap_err().code, ErrorCode::InvalidRef);
+    }
+
+    #[test]
+    fn multibyte_input_is_rejected_without_panicking() {
+        let err = Target::parse("abcdefgé", Path::new("/nonexistent")).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidRef);
+    }
+
+    #[test]
+    fn a_minimum_longer_than_an_id_returns_the_whole_id() {
+        let id: TorrentId = ARCH.parse().unwrap();
+        assert_eq!(shortest_unique_prefix(&id, [&id], 64), ARCH);
     }
 
     #[test]
