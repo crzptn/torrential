@@ -158,7 +158,14 @@ mod tests {
     fn sizes_keep_three_figures() {
         let mib = 1 << 20;
         assert_eq!(
-            [size(512), size(52_633), size(734 * mib), size(1022 * mib + mib / 2), size(1366 * mib), size(21_812 * mib)],
+            [
+                size(512),
+                size(52_633),
+                size(734 * mib),
+                size(1022 * mib + mib / 2),
+                size(1366 * mib),
+                size(21_812 * mib)
+            ],
             ["512 B", "51.4 KiB", "734 MiB", "1.0 GiB", "1.3 GiB", "21.3 GiB"]
         );
         assert_eq!(rate(10 * mib), "10.0 MiB/s");

@@ -7,6 +7,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
+use torrential_core::protocol::{GetOutcome, GetReply};
 
 use super::*;
 use crate::theme::{self, ColorMode};
@@ -153,7 +154,8 @@ fn the_mark_shows_where_keys_go() {
 fn the_margin_labels_each_group_once() {
     let state = searched((100, 30));
     let buf = render(&state);
-    let margins: Vec<String> = (0..30).map(|y| line(&buf, y).chars().take(11).collect::<String>().trim().to_string()).collect();
+    let margins: Vec<String> =
+        (0..30).map(|y| line(&buf, y).chars().take(11).collect::<String>().trim().to_string()).collect();
     let labels: Vec<&str> = margins.iter().map(String::as_str).filter(|m| !m.is_empty()).collect();
     assert_eq!(labels, ["torrential", "search", "getting", "failed", "paused", "done", "found"]);
     let (x, y) = find(&buf, "failed │");
@@ -183,6 +185,19 @@ fn remove_asks_in_the_margin_and_says_the_files_stay() {
     assert!(line(&buf, y).contains("● stackexchange"), "{}", line(&buf, y));
     assert!(line(&buf, y + 1).contains("Its files stay in ~/Downloads/torrential."), "{}", line(&buf, y + 1));
     assert!(line(&buf, y + 1).ends_with("enter removes it   esc keeps it"));
+    assert_eq!(line(&buf, 29), "", "the footer does not repeat the keys");
+}
+
+#[test]
+fn a_result_in_downloads_offers_the_way_there() {
+    let mut state = searched((100, 30));
+    let job = torrential_core::Job { id: id("4c1e9a"), ..jobs()[0].clone() };
+    let reply = GetReply { outcome: GetOutcome::Started, job, plan: None, previous_selection: None };
+    state.update(Msg::Started { release: result_id("4c1e9a"), result: Ok(Box::new(reply)) });
+    state.toast = None;
+    let buf = render(&state);
+    assert!(line(&buf, 29).ends_with("d downloads   s sort   ? keys"), "{}", line(&buf, 29));
+    assert!(shot(&state).contains("in downloads · press d to see it"));
 }
 
 #[test]

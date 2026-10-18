@@ -10,9 +10,7 @@ use torrential_core::{Error, Job, JobStatus, ReleaseId, SearchQuery, SearchResul
 
 use crate::format::home_path;
 use crate::layout;
-use crate::state::{
-    DownloadFiles, Engine, Files, Focus, Input, Item, JobAction, Search, SearchPhase, State, Tone,
-};
+use crate::state::{DownloadFiles, Engine, Files, Focus, Input, Item, JobAction, Search, SearchPhase, State, Tone};
 use crate::tree::Tree;
 
 #[derive(Debug)]

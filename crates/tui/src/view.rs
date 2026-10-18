@@ -246,7 +246,8 @@ fn search_status(state: &State, short: bool) -> Vec<(String, Style)> {
     let Some(search) = &state.search else { return Vec::new() };
     if state.filtering() {
         let (shown, all) = (state.results().len(), search.releases.len());
-        let text = if short { format!("{shown} of {all}") } else { format!("{shown} of {all} match · enter searches") };
+        let text =
+            if short { format!("{shown} of {all}") } else { format!("{shown} of {all} match · enter searches") };
         return vec![(text, fg(PENCIL))];
     }
     match &search.phase {
@@ -267,7 +268,8 @@ fn search_status(state: &State, short: bool) -> Vec<(String, Style)> {
             let failed: Vec<&str> =
                 search.sources.iter().filter(|s| !s.outcome.is_ok()).map(|s| s.source.as_str()).collect();
             if !failed.is_empty() {
-                let text = if short { format!("{} failed", failed.len()) } else { format!("{} failed", and_list(&failed)) };
+                let text =
+                    if short { format!("{} failed", failed.len()) } else { format!("{} failed", and_list(&failed)) };
                 out.extend([(" · ".into(), fg(PENCIL)), (text, fg(ERROR))]);
             }
             out
@@ -657,7 +659,8 @@ fn file_tree(buf: &mut Buffer, state: &State, tree: &Tree, c: &Columns, y: u16, 
     put_right(buf, c.size, ruled, "────────", fg(PENCIL));
     let total = ruled + 1;
     let picked = tree.picked_count();
-    let summary = if picked == 0 { "nothing picked".to_string() } else { format!("{picked} of {} files", tree.files.len()) };
+    let summary =
+        if picked == 0 { "nothing picked".to_string() } else { format!("{picked} of {} files", tree.files.len()) };
     let used = put(buf, DETAIL, total, before_size(c) - DETAIL, &summary, fg(TEXT));
     if let Some(free) = state.free_space {
         let text = format!(" · {} free", size(free));
@@ -694,7 +697,9 @@ fn empty(buf: &mut Buffer, state: &State, right: u16, y: u16) {
     let nothing = format!("Nothing found for \"{}\".", search.text);
     match &search.phase {
         SearchPhase::Running { .. } => {}
-        SearchPhase::Done if failures.is_empty() => lines("found", &nothing, false, "Try fewer or different words.", PENCIL),
+        SearchPhase::Done if failures.is_empty() => {
+            lines("found", &nothing, false, "Try fewer or different words.", PENCIL)
+        }
         SearchPhase::Done => lines("found", &nothing, false, &failures.join(" · "), ERROR),
         SearchPhase::Failed(error) => {
             let hint = error.hint.as_deref().unwrap_or("Check the connection, then press enter to search again.");
@@ -768,17 +773,21 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
         }
         _ => "pause",
     };
+    let downloaded = matches!(state.cursor, Some(Item::Result(ReleaseId::Torrent(t))) if state.job(t).is_some());
     let pairs: Vec<(&str, &str)> = match (state.focus, state.cursor) {
-        _ if state.confirm.is_some() => vec![("enter", "remove"), ("esc", "keep")],
+        _ if state.confirm.is_some() => Vec::new(),
         _ if state.help => vec![("esc", "close")],
         (Focus::Query, _) if state.items().is_empty() => vec![("enter", "search")],
         (Focus::Query, _) => vec![("enter", "search"), ("↓", "list")],
         (Focus::Files, _) => vec![("space", "pick"), ("a", "all"), ("enter", "download"), ("esc", "back")],
         (Focus::List, Some(Item::Download(_))) => vec![("space", pause), ("x", "remove"), ("o", "open"), ("?", "keys")],
-        (Focus::List, Some(Item::Result(_))) => vec![("enter", "files"), ("D", "download"), ("s", "sort"), ("?", "keys")],
+        (Focus::List, Some(Item::Result(_))) if downloaded => vec![("d", "downloads"), ("s", "sort"), ("?", "keys")],
+        (Focus::List, Some(Item::Result(_))) => {
+            vec![("enter", "files"), ("D", "download"), ("s", "sort"), ("?", "keys")]
+        }
         (Focus::List, None) => vec![("/", "search"), ("?", "keys")],
     };
-    if room > 0 {
+    if room > 0 && !pairs.is_empty() {
         hints(buf, screen.right, y, room, &pairs);
     }
 }
