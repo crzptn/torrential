@@ -26,26 +26,30 @@ const WATCH_RETRY: Duration = Duration::from_secs(2);
 
 /// Runs the TUI until the user quits. Downloads keep running in the engine afterwards.
 pub fn run(backend: impl Backend) -> io::Result<()> {
-    let backend = Arc::new(backend);
     let mode = ColorMode::detect(|key| std::env::var(key).ok());
-    let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut terminal = ratatui::try_init()?;
-    let size = terminal.size()?;
-    let (tx, rx) = mpsc::channel();
-    let mut state = State::new(Instant::now(), unix_now(), (size.width, size.height), home);
-    state.say(Tone::Info, "Quitting keeps downloads running.");
-    terminal.draw(|frame| draw(frame, &state, mode))?;
-    listen(tx.clone());
-    watch(backend.clone(), tx.clone());
-    let result = run_loop(&mut terminal, &mut state, &rx, &tx, &backend, mode);
+    let result = session(&mut terminal, Arc::new(backend), mode);
     ratatui::restore();
-    result?;
-    match state.active() {
+    match result?.active() {
         0 => {}
         1 => println!("1 download continues in the background."),
         n => println!("{n} downloads continue in the background."),
     }
     Ok(())
+}
+
+/// Everything between taking the terminal and giving it back, so `run` always restores it.
+fn session<B: Backend>(terminal: &mut ratatui::DefaultTerminal, backend: Arc<B>, mode: ColorMode) -> io::Result<State> {
+    let size = terminal.size()?;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut state = State::new(Instant::now(), unix_now(), (size.width, size.height), home);
+    state.say(Tone::Info, "Quitting keeps downloads running.");
+    terminal.draw(|frame| draw(frame, &state, mode))?;
+    let (tx, rx) = mpsc::channel();
+    listen(tx.clone());
+    watch(backend.clone(), tx.clone());
+    run_loop(terminal, &mut state, &rx, &tx, &backend, mode)?;
+    Ok(state)
 }
 
 fn draw(frame: &mut ratatui::Frame, state: &State, mode: ColorMode) {

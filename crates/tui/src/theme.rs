@@ -86,7 +86,8 @@ pub fn degrade(buf: &mut Buffer, mode: ColorMode) {
                     cell.set_symbol("░");
                     cell.fg = FAINT;
                 }
-                cell.fg = if mode == ColorMode::NoColor { Color::Reset } else { named(cell.fg) };
+                // A filled row reverses as one block, so its colors cannot paint patches on it.
+                cell.fg = if mode == ColorMode::NoColor || filled { Color::Reset } else { named(cell.fg) };
                 cell.bg = Color::Reset;
                 if filled {
                     cell.modifier.insert(Modifier::REVERSED);
@@ -194,7 +195,7 @@ mod tests {
         buf.content[0].fg = ACCENT;
         buf.content[1].bg = TRACK;
         degrade(&mut buf, ColorMode::Ansi16);
-        assert_eq!((buf.content[0].fg, buf.content[0].bg), (Color::Yellow, Color::Reset));
+        assert_eq!((buf.content[0].fg, buf.content[0].bg), (Color::Reset, Color::Reset));
         assert!(buf.content[0].modifier.contains(Modifier::REVERSED));
         assert_eq!((buf.content[1].symbol(), buf.content[1].fg), ("░", Color::DarkGray));
     }

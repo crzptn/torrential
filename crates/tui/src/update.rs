@@ -19,7 +19,7 @@ use crate::tree::Tree;
 pub enum Msg {
     Key(KeyEvent),
     Resize(u16, u16),
-    /// Time passed: the spinner moves and an old toast goes.
+    /// Time passed: the spinner moves, an old toast goes, and a planned prefetch may start.
     Tick,
     Watch(Event),
     WatchLost(Error),
@@ -115,18 +115,17 @@ const RESULT_LIMIT: u16 = 50;
 impl State {
     pub fn update(&mut self, msg: Msg) -> Vec<Effect> {
         let before = self.anchor();
-        let effects = match msg {
+        if self.toast.as_ref().is_some_and(|t| t.until <= self.now) {
+            self.toast = None;
+        }
+        let mut effects = self.prefetch_due();
+        effects.extend(match msg {
             Msg::Key(key) => self.key(key),
             Msg::Resize(w, h) => {
                 self.size = (w, h);
                 Vec::new()
             }
-            Msg::Tick => {
-                if self.toast.as_ref().is_some_and(|t| t.until <= self.now) {
-                    self.toast = None;
-                }
-                self.prefetch_due()
-            }
+            Msg::Tick => Vec::new(),
             Msg::Watch(event) => self.watch(event),
             Msg::WatchLost(error) => {
                 if !matches!(self.engine, Engine::Unreachable(_)) {
@@ -157,7 +156,7 @@ impl State {
             Msg::Files { item, result } => self.files_arrived(item, result),
             Msg::Started { release, result } => self.started(release, result),
             Msg::Changed { id, action, result } => self.changed(id, action, result),
-        };
+        });
         self.plan_prefetch();
         self.settle(before);
         effects
