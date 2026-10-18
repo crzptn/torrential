@@ -2,12 +2,13 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use torrential_core::{Error, ErrorCode, InfoHash, Release, Selection, TorrentId};
+use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, Release, Selection, TorrentId};
 
 use super::book::{Intent, JobRecord};
 
 /// A database records how many entries it has run, so a shipped entry must never change.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE jobs (
     id TEXT PRIMARY KEY,
     info_hash TEXT NOT NULL,
@@ -49,7 +50,9 @@ CREATE TABLE results (
     release TEXT NOT NULL,
     seen_at INTEGER NOT NULL
 ) STRICT;
-"#];
+"#,
+    "ALTER TABLE jobs ADD COLUMN piece_map TEXT;",
+];
 
 /// A removed download, remembered briefly so a repeated `rm` reports `already_removed`.
 #[derive(Clone, PartialEq, Debug)]
@@ -146,7 +149,8 @@ impl Store {
             .conn
             .prepare(
                 "SELECT j.id, j.info_hash, j.name, j.dir, j.selection, j.max_size, j.magnet, j.intent, j.finished_at, \
-                 j.error, j.added_at, j.verified, m.bytes FROM jobs j LEFT JOIN metainfo m ON m.id = j.id ORDER BY j.added_at",
+                 j.error, j.added_at, j.verified, j.piece_map, m.bytes FROM jobs j LEFT JOIN metainfo m ON m.id = j.id \
+                 ORDER BY j.added_at",
             )
             .map_err(|e| self.fail(e))?;
         let rows = stmt
@@ -164,7 +168,8 @@ impl Store {
                     r.get::<_, Option<String>>(9)?,
                     r.get::<_, i64>(10)?,
                     r.get::<_, i64>(11)?,
-                    r.get::<_, Option<Vec<u8>>>(12)?,
+                    r.get::<_, Option<String>>(12)?,
+                    r.get::<_, Option<Vec<u8>>>(13)?,
                 ))
             })
             .map_err(|e| self.fail(e))?;
@@ -183,6 +188,7 @@ impl Store {
                 error,
                 added_at,
                 verified,
+                piece_map,
                 bytes,
             ) = row.map_err(|e| self.fail(e))?;
             let bad = |what: &str| corrupt(&self.path, &format!("job {id} has an unreadable {what}"));
@@ -206,6 +212,7 @@ impl Store {
                 added_at,
                 intent,
                 verified: verified as u64,
+                piece_map: piece_map.map(|m| m.parse()).transpose().map_err(|_| bad("piece map"))?,
             };
             jobs.push(StoredJob { record, metainfo: bytes });
         }
@@ -216,8 +223,8 @@ impl Store {
         let (intent, finished_at, error) = intent_columns(&record.intent);
         self.write(|tx| {
             tx.execute(
-                "INSERT INTO jobs (id, info_hash, name, dir, selection, max_size, magnet, intent, finished_at, error, added_at, verified) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO jobs (id, info_hash, name, dir, selection, max_size, magnet, intent, finished_at, error, added_at, verified, \
+                 piece_map) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     record.id.to_hex(),
                     json(&record.info_hash),
@@ -231,6 +238,7 @@ impl Store {
                     error,
                     record.added_at,
                     record.verified as i64,
+                    record.piece_map.map(|m| m.to_string()),
                 ],
             )?;
             insert_aliases(tx, record.id, &record.info_hash)?;
@@ -295,14 +303,21 @@ impl Store {
             .map_err(|e| self.fail(e))
     }
 
-    pub fn save_resume(&mut self, id: TorrentId, bytes: &[u8], verified: u64, now: i64) -> Result<(), Error> {
-        self.write(|tx| save_resume(tx, id, bytes, verified, now))
+    pub fn save_resume(
+        &mut self,
+        id: TorrentId,
+        bytes: &[u8],
+        verified: u64,
+        piece_map: Option<PieceMap>,
+        now: i64,
+    ) -> Result<(), Error> {
+        self.write(|tx| save_resume(tx, id, bytes, verified, piece_map, now))
     }
 
     /// One transaction, so a crash cannot mark a download done without its final resume data.
     pub fn finish(&mut self, id: TorrentId, finished_at: i64, bytes: &[u8], verified: u64) -> Result<(), Error> {
         self.write(|tx| {
-            save_resume(tx, id, bytes, verified, finished_at)?;
+            save_resume(tx, id, bytes, verified, None, finished_at)?;
             tx.execute(
                 "UPDATE jobs SET intent = 'done', finished_at = ?2, error = NULL WHERE id = ?1",
                 params![id.to_hex(), finished_at],
@@ -455,12 +470,24 @@ fn upsert_metainfo(tx: &Transaction, id: TorrentId, bytes: &[u8], now: i64) -> r
     .map(drop)
 }
 
-fn save_resume(tx: &Transaction, id: TorrentId, bytes: &[u8], verified: u64, now: i64) -> rusqlite::Result<()> {
+fn save_resume(
+    tx: &Transaction,
+    id: TorrentId,
+    bytes: &[u8],
+    verified: u64,
+    piece_map: Option<PieceMap>,
+    now: i64,
+) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO resume (job, bytes, saved_at) VALUES (?1, ?2, ?3)",
         params![id.to_hex(), bytes, now],
     )?;
-    tx.execute("UPDATE jobs SET verified = ?2 WHERE id = ?1", params![id.to_hex(), verified as i64]).map(drop)
+    let piece_map = piece_map.map(|m| m.to_string());
+    tx.execute(
+        "UPDATE jobs SET verified = ?2, piece_map = ?3 WHERE id = ?1",
+        params![id.to_hex(), verified as i64, piece_map],
+    )
+    .map(drop)
 }
 
 #[cfg(test)]
@@ -479,6 +506,7 @@ mod tests {
             added_at: 100,
             intent: Intent::Running,
             verified: 0,
+            piece_map: None,
         }
     }
 
@@ -496,12 +524,16 @@ mod tests {
             .unwrap();
         store.insert(&record(3), None, 100).unwrap();
         store.finish(TorrentId::from_bytes([3; 20]), 200, b"resume", 42).unwrap();
+        let map: PieceMap = format!("{}{}", "8".repeat(32), "-".repeat(32)).parse().unwrap();
+        store.insert(&record(5), None, 100).unwrap();
+        store.save_resume(TorrentId::from_bytes([5; 20]), b"resume", 9, Some(map), 150).unwrap();
         drop(store);
         let store = Store::open(&path).unwrap();
         let jobs = store.jobs().unwrap();
         assert_eq!(jobs[0].record.intent, Intent::Failed { error: Error::new(ErrorCode::DiskFull, "full") });
         assert_eq!(jobs[0].metainfo.as_deref(), Some(&b"torrent"[..]));
         assert_eq!(jobs[1].record, JobRecord { intent: Intent::Done { finished_at: 200 }, verified: 42, ..record(3) });
+        assert_eq!(jobs[2].record, JobRecord { verified: 9, piece_map: Some(map), ..record(5) });
         assert_eq!(store.resume(TorrentId::from_bytes([3; 20])).unwrap().as_deref(), Some(&b"resume"[..]));
     }
 
@@ -549,13 +581,13 @@ mod tests {
         let path = dir.path().join("state.db");
         let mut store = Store::open(&path).unwrap();
         store.insert(&record(1), None, 100).unwrap();
-        store.migrate(&[MIGRATIONS[0], "ALTER TABLE jobs ADD COLUMN note TEXT"]).unwrap();
+        store.migrate(&[MIGRATIONS, &["ALTER TABLE jobs ADD COLUMN note TEXT"]].concat()).unwrap();
         let version: i64 = store.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 2);
-        let backup = Connection::open(dir.path().join("state.v1.bak")).unwrap();
+        assert_eq!(version, 3);
+        let backup = Connection::open(dir.path().join("state.v2.bak")).unwrap();
         let rows: i64 = backup.query_row("SELECT count(*) FROM jobs", [], |r| r.get(0)).unwrap();
         let backup_version: i64 = backup.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!((rows, backup_version), (1, 1));
+        assert_eq!((rows, backup_version), (1, 2));
     }
 
     #[test]

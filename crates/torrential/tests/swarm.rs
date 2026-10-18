@@ -341,9 +341,16 @@ fn pause_stops_writes_and_resume_finishes() {
     let still = home.job(&fixture.id());
     assert_eq!((state(&still), verified(&still)), ("paused", verified(&paused)));
     assert!(verified(&still) < fixture.total(), "paused mid-download");
+    let map = paused["progress"]["piece_map"].as_str().expect("a paused download shows its piece map");
+    assert_eq!(still["progress"]["piece_map"], map);
+    assert!(map.len() == 64 && map.bytes().all(|b| b.is_ascii_digit()), "every run holds selected pieces: {map}");
+    let filled = map.bytes().map(|b| f64::from(b - b'0')).sum::<f64>() / (8.0 * 64.0);
+    let share = verified(&paused) as f64 / fixture.total() as f64;
+    assert!((filled - share).abs() < 0.07, "{map} fills {filled:.2}, but {share:.2} is verified");
     assert_eq!(home.ok(&["resume", &fixture.short()])["changes"][0]["result"], "resumed");
     let wait = home.run(&["wait", &fixture.short(), "--timeout", RECONNECT]);
     assert_eq!(wait.code, 0, "{}{}", wait.stdout, wait.stderr);
+    assert_eq!(home.job(&fixture.id())["progress"].get("piece_map"), None, "a done download has no map");
     for file in fixture.files.keys() {
         assert!(fixture.intact(&home, file), "{file} matches its source");
     }

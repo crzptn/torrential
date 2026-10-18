@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use torrential_core::{Error, InfoHash, Job, JobStatus, Progress, Selection, TorrentId};
+use torrential_core::{Error, InfoHash, Job, JobStatus, PieceMap, Progress, Selection, TorrentId};
 
 use super::engine_port::{Metainfo, Stats};
 use super::files;
@@ -95,6 +95,8 @@ pub struct JobRecord {
     pub intent: Intent,
     /// Verified bytes at the last save, so progress survives a restart.
     pub verified: u64,
+    /// The piece map at the last save, taken with `verified`.
+    pub piece_map: Option<PieceMap>,
 }
 
 #[derive(Clone, Debug)]
@@ -151,6 +153,15 @@ impl JobEntry {
         }
     }
 
+    /// Follows `verified`: the engine's latest map while in the engine, else the last save's.
+    pub fn piece_map(&self) -> Option<PieceMap> {
+        match (&self.record.intent, self.observed) {
+            (_, Observed::InEngine(_)) => self.stats.piece_map.or(self.record.piece_map),
+            (Intent::Done { .. }, _) => None,
+            _ => self.record.piece_map,
+        }
+    }
+
     pub fn remaining(&self) -> u64 {
         match self.record.intent {
             Intent::Running => self.selected_size().map_or(0, |size| size.saturating_sub(self.verified())),
@@ -180,7 +191,7 @@ impl JobEntry {
             progress: Progress {
                 size,
                 verified,
-                piece_map: None,
+                piece_map: self.piece_map(),
                 down_rate: s.down_rate,
                 up_rate: s.up_rate,
                 peers: s.peers,
@@ -261,6 +272,7 @@ mod tests {
             added_at,
             intent,
             verified: 0,
+            piece_map: None,
         };
         JobEntry::new(record, None, observed)
     }
@@ -295,5 +307,20 @@ mod tests {
         assert_eq!(ids, [3, 2]);
         let ids: Vec<u8> = to_start(jobs.iter(), 4).iter().map(|id| id.as_bytes()[0]).collect();
         assert_eq!(ids, [3, 2, 6]);
+    }
+
+    #[test]
+    fn the_piece_map_is_the_engines_then_the_last_saves_and_ends_when_done() {
+        let map = |c: &str| Some(c.repeat(64).parse::<PieceMap>().unwrap());
+        let mut job = entry(1, 0, Intent::Running, Observed::InEngine(Phase::Downloading));
+        job.record.piece_map = map("2");
+        assert_eq!(job.view().progress.piece_map, map("2"), "before the engine's first sample");
+        job.stats.piece_map = map("5");
+        assert_eq!(job.view().progress.piece_map, map("5"));
+        job.record.intent = Intent::Failed { error: Error::new(ErrorCode::DiskFull, "disk full") };
+        job.observed = Observed::Absent;
+        assert_eq!(job.view().progress.piece_map, map("2"), "out of the engine, the last save's");
+        job.record.intent = Intent::Done { finished_at: 7 };
+        assert_eq!(job.view().progress.piece_map, None);
     }
 }

@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use torrential_core::{Error, ErrorCode, InfoHash, TorrentId};
+use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, Slice, TorrentId};
 use torrential_engine as lt;
 
 use super::engine_port::{Activity, AddSource, AddTorrent, EngineEvent, EnginePort, MetaFile, Metainfo, Stats};
@@ -197,7 +197,8 @@ impl Libtorrent {
             (A::StateChanged { to, .. }, Some(id)) => self.state_changed(id, to),
             (A::ResumeDataSaved { data, .. }, Some(id)) => {
                 let verified = self.verified_bytes(id).ok();
-                self.events.push(EngineEvent::ResumeData { id, data: data.into_bytes(), verified });
+                let piece_map = piece_map(&self.session, id, &self.torrents[&id]);
+                self.events.push(EngineEvent::ResumeData { id, data: data.into_bytes(), verified, piece_map });
             }
             (A::ResumeDataFailed { error, .. }, Some(id)) => {
                 let error = Error::new(ErrorCode::StorageError, format!("libtorrent did not save its state: {error}"))
@@ -322,7 +323,8 @@ impl Libtorrent {
                 match counts {
                     Ok((pieces, verified)) => {
                         let damaged_pieces = pieces.selected - pieces.verified;
-                        self.events.push(EngineEvent::Checked { id, damaged_pieces, verified });
+                        let piece_map = piece_map(&self.session, id, &self.torrents[&id]);
+                        self.events.push(EngineEvent::Checked { id, damaged_pieces, verified, piece_map });
                     }
                     Err(error) => self.events.push(EngineEvent::Failed { id, error }),
                 }
@@ -347,7 +349,8 @@ impl Libtorrent {
         for (&id, t) in &self.torrents {
             let Ok(status) = self.session.status(engine_id(id)) else { continue };
             if !status.paused {
-                self.events.push(EngineEvent::Stats { id, stats: sample(&status, t) });
+                let stats = Stats { piece_map: piece_map(&self.session, id, t), ..sample(&status, t) };
+                self.events.push(EngineEvent::Stats { id, stats });
             }
         }
     }
@@ -355,7 +358,8 @@ impl Libtorrent {
     /// `stats` skips paused torrents, so a pause sends its own last count first.
     fn report_paused(&mut self, id: TorrentId) {
         if let (Some(t), Ok(status)) = (self.torrents.get(&id), self.session.status(engine_id(id))) {
-            self.events.push(EngineEvent::Stats { id, stats: sample(&status, t) });
+            let stats = Stats { piece_map: piece_map(&self.session, id, t), ..sample(&status, t) };
+            self.events.push(EngineEvent::Stats { id, stats });
         }
         self.events.push(EngineEvent::Paused { id });
     }
@@ -590,11 +594,22 @@ fn verified(progress: &lt::Progress, files: Option<&[lt::FileIndex]>, wanted: Op
 fn sample(status: &lt::TorrentStatus, t: &Torrent) -> Stats {
     Stats {
         verified: verified(&status.progress, t.files.as_deref(), t.wanted.as_deref()).iter().sum(),
+        piece_map: None,
         down_rate: status.download_rate,
         up_rate: status.upload_rate,
         peers: status.peers,
         seeds: status.seeds,
     }
+}
+
+/// Needs the file list and the owner's selection, which a metadata probe never has.
+fn piece_map(session: &lt::Session, id: TorrentId, t: &Torrent) -> Option<PieceMap> {
+    if t.files.is_none() || t.wanted.is_none() {
+        return None;
+    }
+    let slices = session.piece_slices(engine_id(id), PieceMap::SLICES as u32).ok()?;
+    let slices: [lt::SelectedPieces; PieceMap::SLICES] = slices.try_into().ok()?;
+    Some(PieceMap::new(slices.map(|s| Slice::of(s.verified, s.selected))))
 }
 
 fn storage_error(id: TorrentId, file: Option<&Path>, error: &lt::NativeError) -> Error {

@@ -625,5 +625,11 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
       "retryable": false
     }
   ],
+  "fields": [
+    {
+      "name": "progress.piece_map",
+      "help": "Where a download's data has arrived, in status, wait, and the TUI's watch stream: 64 characters, one per equal run of the torrent's pieces in order. 0 to 8 are eighths of the run's selected pieces that passed their hash check, and - is a run with no selected piece. Absent before the engine first samples it, which needs the file list, and once the download is done"
+    }
+  ],
   "next": null
 }

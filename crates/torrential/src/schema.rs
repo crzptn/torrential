@@ -12,6 +12,7 @@ pub struct Schema {
     global_flags: Vec<FlagSchema>,
     exit_codes: Vec<ExitSchema>,
     errors: Vec<ErrorSchema>,
+    fields: &'static [FieldSchema],
 }
 
 #[derive(Serialize)]
@@ -59,6 +60,21 @@ struct ErrorSchema {
     retryable: bool,
 }
 
+/// A field of the JSON documents whose meaning its name and value do not show.
+#[derive(Serialize)]
+struct FieldSchema {
+    name: &'static str,
+    help: &'static str,
+}
+
+const FIELDS: [FieldSchema; 1] = [FieldSchema {
+    name: "progress.piece_map",
+    help: "Where a download's data has arrived, in status, wait, and the TUI's watch stream: 64 characters, one per \
+           equal run of the torrent's pieces in order. 0 to 8 are eighths of the run's selected pieces that passed \
+           their hash check, and - is a run with no selected piece. Absent before the engine first samples it, which \
+           needs the file list, and once the download is done",
+}];
+
 pub fn build(cli: &Command, version: String) -> Schema {
     let global_flags = cli.get_arguments().filter(|a| a.is_global_set()).map(flag).collect();
     Schema {
@@ -71,6 +87,7 @@ pub fn build(cli: &Command, version: String) -> Schema {
             .iter()
             .map(|c| ErrorSchema { code: c.as_str(), exit: c.exit_code(), retryable: c.retryable() })
             .collect(),
+        fields: &FIELDS,
     }
 }
 

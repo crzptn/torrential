@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
-use torrential_core::{Error, ErrorCode, InfoHash, TorrentId};
+use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, TorrentId};
 
 /// A torrent's file list. Only [`Metainfo::new`] builds one, so every path in it stays
 /// inside the torrent's folder. A port that receives a hostile file list reports the
@@ -89,6 +89,8 @@ pub enum Activity {
 pub struct Stats {
     /// Wanted bytes in pieces that passed their hash check.
     pub verified: u64,
+    /// `None` until the engine has the file list and the owner's selection.
+    pub piece_map: Option<PieceMap>,
     pub down_rate: u64,
     pub up_rate: u64,
     pub peers: u32,
@@ -122,12 +124,15 @@ pub enum EngineEvent {
         data: Vec<u8>,
         /// Wanted bytes verified when the data was taken, if the engine could count them.
         verified: Option<u64>,
+        /// The piece map when the data was taken, if the engine could sample it.
+        piece_map: Option<PieceMap>,
     },
     /// A recheck finished. Counts wanted pieces that failed it, and wanted bytes that passed.
     Checked {
         id: TorrentId,
         damaged_pieces: u32,
         verified: u64,
+        piece_map: Option<PieceMap>,
     },
     /// A command failed, or the torrent stopped with an error such as a full disk.
     Failed {
@@ -439,7 +444,7 @@ impl EnginePort for Fake {
         t.stop_downloading();
         let verified = t.verified as u64;
         self.events.push_back(EngineEvent::Activity { id, activity: Activity::Checking });
-        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged, verified });
+        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged, verified, piece_map: None });
         Ok(())
     }
 
@@ -447,7 +452,7 @@ impl EnginePort for Fake {
         let t = self.torrent(id)?;
         t.saved = t.verified;
         let (data, verified) = (t.verified.to_string().into_bytes(), Some(t.verified as u64));
-        self.events.push_back(EngineEvent::ResumeData { id, data, verified });
+        self.events.push_back(EngineEvent::ResumeData { id, data, verified, piece_map: None });
         Ok(())
     }
 
@@ -501,7 +506,8 @@ impl EnginePort for Fake {
             let done = t.verified as u64 >= size;
             if stats_due || done {
                 let down_rate = if done { 0 } else { rate };
-                let stats = Stats { verified: t.verified as u64, down_rate, up_rate: 0, peers: 3, seeds: 2 };
+                let stats =
+                    Stats { verified: t.verified as u64, piece_map: None, down_rate, up_rate: 0, peers: 3, seeds: 2 };
                 self.events.push_back(EngineEvent::Stats { id, stats });
             }
             if done {

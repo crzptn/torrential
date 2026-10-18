@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use torrential_core::protocol::{Change, GetOutcome, GetReply};
-use torrential_core::{Error, ErrorCode, HexPrefix, InfoHash, Job, Release, Selection, Target, TorrentId};
+use torrential_core::{Error, ErrorCode, HexPrefix, InfoHash, Job, PieceMap, Release, Selection, Target, TorrentId};
 
 use super::admission::{self, DEFAULT_MAX_SIZE, Disk};
 use super::book::{self, Intent, JobEntry, JobRecord, Observed, Phase, Verify};
@@ -413,6 +413,7 @@ impl Owner {
             added_at: now(),
             intent: Intent::Running,
             verified: 0,
+            piece_map: None,
         };
         if dry_run {
             let job = JobEntry::new(record, metainfo, Observed::Absent).view();
@@ -835,8 +836,12 @@ impl Owner {
                 }
             }
             EngineEvent::Paused { id } => self.paused(id),
-            EngineEvent::ResumeData { id, data, verified } => self.resume_data(id, data, verified),
-            EngineEvent::Checked { id, damaged_pieces, verified } => self.checked(id, damaged_pieces, verified),
+            EngineEvent::ResumeData { id, data, verified, piece_map } => {
+                self.resume_data(id, data, verified, piece_map)
+            }
+            EngineEvent::Checked { id, damaged_pieces, verified, piece_map } => {
+                self.checked(id, damaged_pieces, verified, piece_map)
+            }
             EngineEvent::Failed { id, error } => {
                 if self.probes.remove(&id) {
                     self.engine.send(EngineCommand::Remove(id));
@@ -964,7 +969,7 @@ impl Owner {
         }
     }
 
-    fn resume_data(&mut self, id: TorrentId, data: Vec<u8>, verified: Option<u64>) {
+    fn resume_data(&mut self, id: TorrentId, data: Vec<u8>, verified: Option<u64>, piece_map: Option<PieceMap>) {
         let job = self.jobs.get(&id);
         // A periodic save asked for before a pause can arrive after it began. Only the save that
         // follows stopped writes is the last one.
@@ -975,8 +980,9 @@ impl Owner {
             stopping.waiting.remove(&id);
         }
         let Some(job) = job else { return };
-        // The engine's count when the data was taken. The last stats can be older than the data.
+        // The engine's count and map when the data was taken. The last stats can be older than the data.
         let verified = verified.unwrap_or_else(|| job.verified());
+        let piece_map = piece_map.or_else(|| job.piece_map());
         if job.observed == Observed::InEngine(Phase::Finishing { writes_stopped: true }) {
             let finished_at = now();
             let size = job.selected_size().unwrap_or(verified);
@@ -991,17 +997,21 @@ impl Owner {
             self.engine.send(EngineCommand::Remove(id));
             self.draining.insert(id);
             self.publish(id);
-        } else if self.store.save_resume(id, &data, verified, now()).is_ok() {
-            self.jobs.get_mut(&id).expect("checked above").record.verified = verified;
+        } else if self.store.save_resume(id, &data, verified, piece_map, now()).is_ok() {
+            let record = &mut self.jobs.get_mut(&id).expect("checked above").record;
+            record.verified = verified;
+            record.piece_map = piece_map;
         }
     }
 
-    fn checked(&mut self, id: TorrentId, damaged: u32, verified: u64) {
+    fn checked(&mut self, id: TorrentId, damaged: u32, verified: u64, piece_map: Option<PieceMap>) {
         let Some(job) = self.jobs.get_mut(&id) else { return };
         let Some(mode) = job.verify.take() else { return };
         // The check replaces what the last save recorded, so progress and the next restart start from it.
         job.record.verified = verified;
         job.stats.verified = verified;
+        job.record.piece_map = piece_map;
+        job.stats.piece_map = piece_map;
         self.engine.send(EngineCommand::SaveResume(id));
         let short = id.to_hex()[..6].to_string();
         let intent = job.record.intent.clone();
