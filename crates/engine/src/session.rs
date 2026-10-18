@@ -16,6 +16,11 @@ use crate::torrent::{
 /// to that thread, and not `Sync`, so no two threads call it at once. Other
 /// threads talk to the owner through channels.
 ///
+/// ```compile_fail
+/// fn shared<T: Sync>() {}
+/// shared::<torrential_engine::Session>();
+/// ```
+///
 /// Calls that change a torrent return once libtorrent has queued the change.
 /// The matching alert from `wait_alerts` confirms it. Dropping the session
 /// blocks until libtorrent has shut down.
@@ -184,5 +189,14 @@ fn with_id(e: cxx::Exception, id: TorrentId) -> EngineError {
             EngineError::new(e.kind(), id.to_string())
         }
         _ => e,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_session_can_move_to_its_owning_thread() {
+        fn send<T: Send>() {}
+        send::<super::Session>();
     }
 }

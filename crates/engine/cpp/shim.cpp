@@ -37,12 +37,6 @@ struct Error : std::runtime_error {
   throw Error(std::string(kind) + ":" + message);
 }
 
-// The order matches SessionStats in src/bridge.rs.
-constexpr char const* stats_metrics[] = {
-    "net.sent_payload_bytes", "net.recv_payload_bytes", "net.sent_bytes",
-    "net.recv_bytes",         "dht.dht_nodes",          "peer.num_peers_connected",
-};
-
 rust::String str(std::string const& s) { return rust::String::lossy(s); }
 
 lt::span<char const> as_span(rust::Slice<const std::uint8_t> bytes) {
@@ -242,6 +236,12 @@ lt::ip_filter every_peer_global() {
   return filter;
 }
 
+int metric(char const* name) {
+  int const index = lt::find_metric_idx(name);
+  if (index < 0) fail("native", std::string("missing session metric ") + name);
+  return index;
+}
+
 bool torrent_record(lt::alert const* a, AlertKind kind, AlertRecord& r) {
   lt::info_hash_t const ih = static_cast<lt::torrent_alert const*>(a)->handle.info_hashes();
   // An alert can outlive its torrent. Without a live handle there is no
@@ -269,11 +269,11 @@ std::string describe_exception(std::exception_ptr error) {
   }
 }
 
-Session::Session(SessionSettings const& settings) : session_(make_params(settings)), stats_index_{} {
-  for (std::size_t i = 0; i < stats_index_.size(); ++i) {
-    stats_index_[i] = lt::find_metric_idx(stats_metrics[i]);
-    if (stats_index_[i] < 0) fail("native", std::string("missing session metric ") + stats_metrics[i]);
-  }
+Session::Session(SessionSettings const& settings)
+    : session_(make_params(settings)),
+      stats_{metric("net.sent_payload_bytes"), metric("net.recv_payload_bytes"),
+             metric("net.sent_bytes"),         metric("net.recv_bytes"),
+             metric("dht.dht_nodes"),          metric("peer.num_peers_connected")} {
   session_.set_peer_class_filter(every_peer_global());
 }
 
@@ -532,7 +532,7 @@ rust::Vec<AlertRecord> Session::wait_alerts(std::uint32_t timeout_ms) {
       case lt::listen_failed_alert::alert_type: {
         auto const* l = lt::alert_cast<lt::listen_failed_alert>(a);
         r.kind = AlertKind::ListenFailed;
-        r.path = str(l->listen_interface());
+        r.interface_name = str(l->listen_interface());
         r.address = str(l->address.to_string());
         r.port = static_cast<std::uint16_t>(l->port);
         r.transport = to_transport(l->socket_type);
@@ -546,9 +546,11 @@ rust::Vec<AlertRecord> Session::wait_alerts(std::uint32_t timeout_ms) {
         keep = true;
         break;
       case lt::session_stats_alert::alert_type: {
-        auto const counters = lt::alert_cast<lt::session_stats_alert>(a)->counters();
+        auto const c = lt::alert_cast<lt::session_stats_alert>(a)->counters();
         r.kind = AlertKind::SessionStats;
-        for (int const index : stats_index_) r.stats.push_back(counters[index]);
+        r.stats = StatsRecord{c[stats_.sent_payload_bytes], c[stats_.received_payload_bytes],
+                              c[stats_.sent_bytes],         c[stats_.received_bytes],
+                              c[stats_.dht_nodes],          c[stats_.peers_connected]};
         keep = true;
         break;
       }

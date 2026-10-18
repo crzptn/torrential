@@ -177,8 +177,18 @@ pub(crate) mod ffi {
         address: String,
         port: u16,
         transport: Transport,
+        interface_name: String,
         bytes: Vec<u8>,
-        stats: Vec<i64>,
+        stats: StatsRecord,
+    }
+
+    struct StatsRecord {
+        sent_payload_bytes: i64,
+        received_payload_bytes: i64,
+        sent_bytes: i64,
+        received_bytes: i64,
+        dht_nodes: i64,
+        peers_connected: i64,
     }
 
     unsafe extern "C++" {
@@ -334,7 +344,7 @@ pub(crate) fn settings(config: &Config) -> ffi::SessionSettings {
     };
     let (upload_rate_limit, upload_off) = match config.upload {
         UploadPolicy::Normal => (0, false),
-        UploadPolicy::Capped(rate) => (rate_limit(rate.get()), false),
+        UploadPolicy::Capped(rate) => (setting_int(rate.get()), false),
         UploadPolicy::Off => (0, true),
     };
     ffi::SessionSettings {
@@ -344,10 +354,10 @@ pub(crate) fn settings(config: &Config) -> ffi::SessionSettings {
         lsd: config.lsd,
         upnp: config.upnp,
         natpmp: config.natpmp,
-        download_rate_limit: config.download_limit.map_or(0, |r| rate_limit(r.get())),
+        download_rate_limit: config.download_limit.map_or(0, |r| setting_int(r.get())),
         upload_rate_limit,
         upload_off,
-        connections_limit: rate_limit(config.connections.max_connections.get()),
+        connections_limit: setting_int(config.connections.max_connections.get()),
         multiple_connections_per_ip: config.connections.multiple_per_ip,
         peer_fingerprint: config.client.peer_id_prefix.clone(),
         user_agent: config.client.user_agent.clone(),
@@ -359,7 +369,7 @@ pub(crate) fn settings(config: &Config) -> ffi::SessionSettings {
 }
 
 /// libtorrent stores these settings as `int`.
-fn rate_limit(value: u32) -> i32 {
+fn setting_int(value: u32) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
 }
 
@@ -522,14 +532,14 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
             transport: transport(r.transport)?,
         },
         K::ListenFailed => Alert::ListenFailed {
-            interface: r.path,
+            interface: r.interface_name,
             port: r.port,
             transport: transport(r.transport)?,
             operation: r.operation,
             error: required_error(r.error),
         },
         K::DhtBootstrapped => Alert::DhtBootstrapped,
-        K::SessionStats => Alert::SessionStats(session_stats(&r.stats)?),
+        K::SessionStats => Alert::SessionStats(session_stats(&r.stats)),
         _ => return Err(EngineError::new(ErrorKind::Native, "unknown alert kind")),
     })
 }
@@ -543,28 +553,13 @@ fn ip(address: &str) -> Result<IpAddr, EngineError> {
     })
 }
 
-/// The order matches `stats_metrics` in the shim.
-fn session_stats(values: &[i64]) -> Result<SessionStats, EngineError> {
-    let &[
-        sent_payload,
-        received_payload,
-        sent,
-        received,
-        dht_nodes,
-        peers,
-    ] = values
-    else {
-        return Err(EngineError::new(
-            ErrorKind::Native,
-            format!("expected 6 session counters, got {}", values.len()),
-        ));
-    };
-    Ok(SessionStats {
-        sent_payload_bytes: non_negative(sent_payload),
-        received_payload_bytes: non_negative(received_payload),
-        sent_bytes: non_negative(sent),
-        received_bytes: non_negative(received),
-        dht_nodes: non_negative(dht_nodes),
-        peers_connected: non_negative(peers),
-    })
+fn session_stats(s: &ffi::StatsRecord) -> SessionStats {
+    SessionStats {
+        sent_payload_bytes: non_negative(s.sent_payload_bytes),
+        received_payload_bytes: non_negative(s.received_payload_bytes),
+        sent_bytes: non_negative(s.sent_bytes),
+        received_bytes: non_negative(s.received_bytes),
+        dht_nodes: non_negative(s.dht_nodes),
+        peers_connected: non_negative(s.peers_connected),
+    }
 }

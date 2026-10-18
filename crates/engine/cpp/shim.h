@@ -2,7 +2,6 @@
 // src/bridge.rs and libtorrent calls, and holds no policy of its own.
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -71,8 +70,17 @@ class Session {
   lt::torrent_handle find(rust::Slice<const std::uint8_t> id) const;
   lt::torrent_handle find_with_metadata(rust::Slice<const std::uint8_t> id) const;
 
+  struct StatsIndex {
+    int sent_payload_bytes;
+    int received_payload_bytes;
+    int sent_bytes;
+    int received_bytes;
+    int dht_nodes;
+    int peers_connected;
+  };
+
   lt::session session_;
-  std::array<int, 6> stats_index_;
+  StatsIndex stats_;
 };
 
 std::unique_ptr<Session> new_session(SessionSettings const& settings);
