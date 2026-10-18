@@ -190,13 +190,14 @@ impl Libtorrent {
                 if t.own_pause_pending {
                     t.own_pause_pending = false;
                 } else {
-                    self.events.push(EngineEvent::Paused { id });
+                    self.report_paused(id);
                 }
             }
             (A::TorrentChecked { .. }, Some(id)) => self.checked(id),
             (A::StateChanged { to, .. }, Some(id)) => self.state_changed(id, to),
             (A::ResumeDataSaved { data, .. }, Some(id)) => {
-                self.events.push(EngineEvent::ResumeData { id, data: data.into_bytes() });
+                let verified = self.verified_bytes(id).ok();
+                self.events.push(EngineEvent::ResumeData { id, data: data.into_bytes(), verified });
             }
             (A::ResumeDataFailed { error, .. }, Some(id)) => {
                 let error = Error::new(ErrorCode::StorageError, format!("libtorrent did not save its state: {error}"))
@@ -312,18 +313,18 @@ impl Libtorrent {
                 }
             }
             Check::Hashing { hold, started: true } => {
-                let t = self.torrents.get_mut(&id).expect("found above");
-                t.check = Check::Idle;
-                let counts = self.session.selected_pieces(eid).and_then(|pieces| {
-                    let status = self.session.status(eid)?;
-                    Ok((pieces, verified(&status.progress, t.files.as_deref(), t.wanted.as_deref()).iter().sum()))
-                });
+                self.torrents.get_mut(&id).expect("found above").check = Check::Idle;
+                let counts = self
+                    .session
+                    .selected_pieces(eid)
+                    .map_err(engine_error)
+                    .and_then(|pieces| Ok((pieces, self.verified_bytes(id)?)));
                 match counts {
                     Ok((pieces, verified)) => {
                         let damaged_pieces = pieces.selected - pieces.verified;
                         self.events.push(EngineEvent::Checked { id, damaged_pieces, verified });
                     }
-                    Err(e) => self.events.push(EngineEvent::Failed { id, error: engine_error(e) }),
+                    Err(error) => self.events.push(EngineEvent::Failed { id, error }),
                 }
                 if !hold {
                     self.report_if_finished(id);
@@ -336,21 +337,27 @@ impl Libtorrent {
         }
     }
 
+    fn verified_bytes(&self, id: TorrentId) -> Result<u64, Error> {
+        let t = self.torrents.get(&id).ok_or_else(|| Error::internal(format!("the engine has no torrent {id}")))?;
+        let status = self.session.status(engine_id(id)).map_err(engine_error)?;
+        Ok(sample(&status, t).verified)
+    }
+
     fn stats(&mut self) {
         for (&id, t) in &self.torrents {
             let Ok(status) = self.session.status(engine_id(id)) else { continue };
-            if status.paused {
-                continue;
+            if !status.paused {
+                self.events.push(EngineEvent::Stats { id, stats: sample(&status, t) });
             }
-            let stats = Stats {
-                verified: verified(&status.progress, t.files.as_deref(), t.wanted.as_deref()).iter().sum(),
-                down_rate: status.download_rate,
-                up_rate: status.upload_rate,
-                peers: status.peers,
-                seeds: status.seeds,
-            };
-            self.events.push(EngineEvent::Stats { id, stats });
         }
+    }
+
+    /// `stats` skips paused torrents, so a pause sends its own last count first.
+    fn report_paused(&mut self, id: TorrentId) {
+        if let (Some(t), Ok(status)) = (self.torrents.get(&id), self.session.status(engine_id(id))) {
+            self.events.push(EngineEvent::Stats { id, stats: sample(&status, t) });
+        }
+        self.events.push(EngineEvent::Paused { id });
     }
 
     fn save_dht_state(&mut self) {
@@ -415,7 +422,7 @@ impl EnginePort for Libtorrent {
         match (paused, t.own_pause_pending) {
             // The port's own pause is still closing files. Its alert answers the owner instead.
             (true, true) => t.own_pause_pending = false,
-            (true, false) => self.events.push(EngineEvent::Paused { id }),
+            (true, false) => self.report_paused(id),
             (false, _) => self.session.pause(engine_id(id)).map_err(engine_error)?,
         }
         Ok(())
@@ -578,6 +585,16 @@ fn verified(progress: &lt::Progress, files: Option<&[lt::FileIndex]>, wanted: Op
     let (lt::Progress::Known(known), Some(files), Some(wanted)) = (progress, files, wanted) else { return Vec::new() };
     let by_index: BTreeMap<lt::FileIndex, u64> = known.iter().map(|f| (f.index, f.verified)).collect();
     files.iter().zip(wanted).map(|(i, w)| if *w { by_index.get(i).copied().unwrap_or(0) } else { 0 }).collect()
+}
+
+fn sample(status: &lt::TorrentStatus, t: &Torrent) -> Stats {
+    Stats {
+        verified: verified(&status.progress, t.files.as_deref(), t.wanted.as_deref()).iter().sum(),
+        down_rate: status.download_rate,
+        up_rate: status.upload_rate,
+        peers: status.peers,
+        seeds: status.seeds,
+    }
 }
 
 fn storage_error(id: TorrentId, file: Option<&Path>, error: &lt::NativeError) -> Error {

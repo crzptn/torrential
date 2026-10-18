@@ -113,13 +113,15 @@ pub enum EngineEvent {
     Finished {
         id: TorrentId,
     },
-    /// Writes stopped and files are closed.
+    /// Writes stopped and files are closed. A `Stats` with the final count comes first.
     Paused {
         id: TorrentId,
     },
     ResumeData {
         id: TorrentId,
         data: Vec<u8>,
+        /// Wanted bytes verified when the data was taken, if the engine could count them.
+        verified: Option<u64>,
     },
     /// A recheck finished. Counts wanted pieces that failed it, and wanted bytes that passed.
     Checked {
@@ -417,6 +419,8 @@ impl EnginePort for Fake {
         let t = self.torrent(id)?;
         t.paused = true;
         t.stop_downloading();
+        let stats = Stats { verified: t.verified as u64, ..Stats::default() };
+        self.events.push_back(EngineEvent::Stats { id, stats });
         self.events.push_back(EngineEvent::Paused { id });
         Ok(())
     }
@@ -442,8 +446,8 @@ impl EnginePort for Fake {
     fn save_resume_data(&mut self, id: TorrentId) -> Result<(), Error> {
         let t = self.torrent(id)?;
         t.saved = t.verified;
-        let data = t.verified.to_string().into_bytes();
-        self.events.push_back(EngineEvent::ResumeData { id, data });
+        let (data, verified) = (t.verified.to_string().into_bytes(), Some(t.verified as u64));
+        self.events.push_back(EngineEvent::ResumeData { id, data, verified });
         Ok(())
     }
 

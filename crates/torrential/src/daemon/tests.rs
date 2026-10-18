@@ -462,6 +462,21 @@ async fn resume_after_a_failed_verify_downloads_the_damaged_pieces_again() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_crash_keeps_the_progress_of_the_last_periodic_save() {
+    let h = Harness::new();
+    h.swarm.set_rate(GIB / 2);
+    let iso = torrent(30, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    h.until("a quarter is verified", |jobs| jobs[0].progress.verified >= GIB / 4).await;
+    h.swarm.set_rate(0);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let before = h.status().await[0].progress.verified;
+    let h = h.crash_and_restart().await;
+    let jobs = h.status().await;
+    assert_eq!((jobs[0].status.name(), jobs[0].progress.verified), ("interrupted", before));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_result_with_only_a_torrent_url_is_fetched_once_found() {
     let iso = torrent(27, "debian.iso", &[("debian.iso", GIB)]);
     let url = "https://cdimage.example/debian.iso.torrent";

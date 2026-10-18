@@ -835,7 +835,7 @@ impl Owner {
                 }
             }
             EngineEvent::Paused { id } => self.paused(id),
-            EngineEvent::ResumeData { id, data } => self.resume_data(id, data),
+            EngineEvent::ResumeData { id, data, verified } => self.resume_data(id, data, verified),
             EngineEvent::Checked { id, damaged_pieces, verified } => self.checked(id, damaged_pieces, verified),
             EngineEvent::Failed { id, error } => {
                 if self.probes.remove(&id) {
@@ -964,7 +964,7 @@ impl Owner {
         }
     }
 
-    fn resume_data(&mut self, id: TorrentId, data: Vec<u8>) {
+    fn resume_data(&mut self, id: TorrentId, data: Vec<u8>, verified: Option<u64>) {
         let job = self.jobs.get(&id);
         // A periodic save asked for before a pause can arrive after it began. Only the save that
         // follows stopped writes is the last one.
@@ -975,7 +975,8 @@ impl Owner {
             stopping.waiting.remove(&id);
         }
         let Some(job) = job else { return };
-        let verified = job.verified();
+        // The engine's count when the data was taken. The last stats can be older than the data.
+        let verified = verified.unwrap_or_else(|| job.verified());
         if job.observed == Observed::InEngine(Phase::Finishing { writes_stopped: true }) {
             let finished_at = now();
             let size = job.selected_size().unwrap_or(verified);
