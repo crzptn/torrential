@@ -74,7 +74,7 @@ fn bar(buf: &mut Buffer, x: u16, y: u16, cells: u16, fraction: Option<f64>, colo
     let eighths = (fraction.unwrap_or(0.0).clamp(0.0, 1.0) * f64::from(cells) * 8.0).floor() as u16;
     for i in 0..cells {
         let n = eighths.saturating_sub(i * 8).min(8);
-        if x + i < buf.area.right() {
+        if x + i < buf.area.right() && y < buf.area.bottom() {
             buf[(x + i, y)].set_symbol(EIGHTHS[n as usize]).set_fg(color).set_bg(TRACK);
         }
     }
@@ -105,8 +105,9 @@ pub fn render(buf: &mut Buffer, state: &State, mode: ColorMode) -> Option<Positi
     let area = buf.area;
     fill(buf, area, BG);
     buf.set_style(area, fg(TEXT));
-    let Some(screen) = layout::screen(state.size, state.help) else {
-        too_small(buf, state.size);
+    let size = (area.width, area.height);
+    let Some(screen) = layout::screen(size, state.help) else {
+        too_small(buf, size);
         degrade(buf, mode);
         return None;
     };
@@ -153,7 +154,7 @@ fn header(buf: &mut Buffer, state: &State, col: Rect) {
     let engine: Vec<(&str, Style)> = match &state.engine {
         Engine::Starting => vec![(state.spinner(), fg(ACCENT)), (" starting engine", fg(MUTED))],
         Engine::Ready => vec![("●", fg(SUCCESS)), (" engine ready", fg(MUTED))],
-        Engine::Unreachable(_) => vec![("✗", fg(ERROR)), (" engine unreachable", fg(ERROR))],
+        Engine::Unreachable(_) => vec![("●", fg(ERROR)), (" engine unreachable", fg(ERROR))],
     };
     let ready = state.engine == Engine::Ready;
     let mut full: Vec<(&str, Style)> = Vec::new();
@@ -337,7 +338,7 @@ fn list(buf: &mut Buffer, state: &State, area: Rect) {
             }
             Block::DownloadDetail(id) => {
                 if let Some(job) = state.job(id) {
-                    download_detail(&mut sheet, state, job, x, right, y, p.height);
+                    download_detail(&mut sheet, state, job, x, right, (y, p.height, area.height));
                 }
             }
             Block::Folded => {
@@ -448,7 +449,15 @@ fn spans_right(buf: &mut Buffer, right: u16, y: u16, parts: &[(&str, Style)]) {
     spans(buf, right.saturating_sub(w), y, w, parts);
 }
 
-fn download_detail(buf: &mut Buffer, state: &State, job: &Job, x: u16, right: u16, y: u16, height: u16) {
+/// `height` is the block's own; `viewport` is the list's, which caps the files shown.
+fn download_detail(
+    buf: &mut Buffer,
+    state: &State,
+    job: &Job,
+    x: u16,
+    right: u16,
+    (y, height, viewport): (u16, u16, u16),
+) {
     fill(buf, Rect::new(x + 2, y, right - x - 2, height), PANEL);
     let c = columns(x, right);
     let room = right.saturating_sub(c.name + 1);
@@ -489,7 +498,7 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, x: u16, right: u1
             row += 1;
         }
     }
-    let (shown, more) = layout::download_file_rows(state, job, layout::list_height(state));
+    let (shown, more) = layout::download_file_rows(state, job, viewport);
     let Some(files) = state.download_files.get(&job.id) else { return };
     let picked: Vec<_> = files.files.iter().filter(|f| f.selected).collect();
     let any_progress = picked.iter().any(|f| f.verified > 0) || job.progress.verified == 0;

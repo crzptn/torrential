@@ -133,7 +133,7 @@ fn download_detail_height(state: &State, job: &Job, viewport: u16) -> u16 {
 
 /// File rows shown in an open tree: as many as fit beside the result and the tree's own two lines.
 pub fn tree_rows(nodes: usize, viewport: u16) -> usize {
-    nodes.min(usize::from(viewport.saturating_sub(4).max(3)))
+    nodes.min(usize::from(viewport.saturating_sub(4).max(1)))
 }
 
 fn result_detail_height(state: &State, id: ReleaseId, viewport: u16) -> u16 {

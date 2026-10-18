@@ -225,6 +225,7 @@ impl State {
             return Vec::new();
         }
         self.touched = true;
+        self.follow_top = false;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('c') {
             self.quit = true;
@@ -270,7 +271,7 @@ impl State {
             PageUp => Action::Move(Move::PageUp),
             Home | Char('g') => Action::Move(Move::First),
             End | Char('G') => Action::Move(Move::Last),
-            Enter if files => Action::Download,
+            Enter if files && self.tree_ready() => Action::Download,
             Enter | Right | Char('l') => Action::Open,
             Left | Char('h') => Action::Collapse,
             Char(' ') if files => Action::Pick,
@@ -308,7 +309,11 @@ impl State {
                 Some(tree) => tree.fold(),
                 None => self.collapsed = true,
             },
-            Action::Download => return self.download(),
+            Action::Download => {
+                if let Some(Item::Result(id)) = self.cursor {
+                    return self.download(id);
+                }
+            }
             Action::Sort => {
                 self.sort = self.sort.next();
                 self.say(Tone::Info, format!("Sorted by {}", self.sort.label()));
@@ -373,6 +378,10 @@ impl State {
             Some(Item::Download(id)) => self.job(id).cloned(),
             _ => None,
         }
+    }
+
+    fn tree_ready(&self) -> bool {
+        matches!(self.cursor, Some(Item::Result(id)) if matches!(self.files.get(&id), Some(Files::Ready(_))))
     }
 
     /// The open file tree, when the cursor is inside one.
@@ -549,8 +558,7 @@ impl State {
     }
 
     /// `D`, or `enter` in a file tree: download the picked files, or every safe file.
-    fn download(&mut self) -> Vec<Effect> {
-        let Some(Item::Result(id)) = self.cursor else { return Vec::new() };
+    fn download(&mut self, id: ReleaseId) -> Vec<Effect> {
         if self.downloaded(id) {
             self.say(Tone::Info, "Already in downloads. Press d to view it.");
             return Vec::new();
@@ -578,7 +586,10 @@ impl State {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             Enter => return self.run_search(),
-            Esc if self.help => self.help = false,
+            Esc if self.help => {
+                self.help = false;
+                return Vec::new();
+            }
             Esc if !self.items().is_empty() => return self.enter_list(),
             Down | Tab => return self.enter_list(),
             BackTab => return self.cycle(-1),
@@ -677,9 +688,10 @@ impl State {
         search.phase = phase;
         if self.follow_top
             && self.focus != Focus::Query
-            && let Some(first) = self.results().first().map(|r| r.id)
+            && let Some(first) = self.results().first().map(|r| Item::Result(r.id))
+            && self.cursor != Some(first)
         {
-            self.cursor = Some(Item::Result(first));
+            self.cursor = Some(first);
             self.collapsed = false;
         }
     }
@@ -774,6 +786,7 @@ impl State {
                 Vec::new()
             }
             (Item::Download(_), Err(_)) => Vec::new(),
+            (Item::Result(id), _) if matches!(self.files.get(&id), Some(Files::Ready(_))) => Vec::new(),
             (Item::Result(id), result) => {
                 let then_download = matches!(self.files.get(&id), Some(Files::Loading { then_download: true, .. }));
                 match result {
@@ -781,8 +794,8 @@ impl State {
                         let name = reply.name.clone().or_else(|| self.release(id).map(|r| r.name.clone()));
                         let tree = Tree::new(&name.unwrap_or_default(), reply.files);
                         self.files.insert(id, Files::Ready(tree));
-                        if then_download && self.cursor == Some(Item::Result(id)) {
-                            return self.download();
+                        if then_download {
+                            return self.download(id);
                         }
                     }
                     Err(error) => {
@@ -798,9 +811,11 @@ impl State {
     }
 
     fn started(&mut self, release: ReleaseId, result: Result<Box<GetReply>, Error>) -> Vec<Effect> {
-        let name = self.release(release).map_or_else(String::new, |r| r.name.clone());
+        let titled = self.release(release).map(|r| r.name.clone());
         match result {
             Ok(reply) => {
+                let name =
+                    titled.or_else(|| reply.job.name.clone()).unwrap_or_else(|| release.to_ref()[..6].to_string());
                 let text = match reply.outcome {
                     GetOutcome::Existing => "Already in downloads. Press d to view it.".to_string(),
                     GetOutcome::Updated => format!("Changed the files of {name}"),

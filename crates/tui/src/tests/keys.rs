@@ -347,3 +347,77 @@ fn a_result_with_a_torrent_link_fetches_its_files_after_the_cursor_rests() {
     later(&mut state, 400);
     assert_eq!(state.update(Msg::Tick), [], "a magnet-only result waits for enter");
 }
+
+#[test]
+fn opening_the_top_result_stops_the_cursor_following_new_top_results() {
+    let mut state = with_downloads((100, 30));
+    press(&mut state, "/");
+    press(&mut state, "night of the living dead");
+    state.update(key(KeyCode::Enter));
+    let (first, pending) = partial();
+    state.update(Msg::SearchUpdate { search: 1, result: first, pending });
+    state.update(key(KeyCode::Enter));
+    assert_eq!(state.focus, Focus::Files);
+    let mut ranked = night();
+    ranked.rotate_right(1);
+    state.update(Msg::SearchUpdate {
+        search: 1,
+        result: result(ranked, final_sources()),
+        pending: vec!["nyaa".into()],
+    });
+    assert_eq!((state.focus, cursor_name(&state)), (Focus::Files, "Night of the Living Dead (1968)".into()));
+}
+
+#[test]
+fn enter_in_a_failed_file_list_asks_again_instead_of_downloading() {
+    let mut state = searched((100, 30));
+    state.update(key(KeyCode::Enter));
+    let timeout = Error::new(ErrorCode::MetadataTimeout, "no peer sent the file list for 4c1e9a in time");
+    state.update(Msg::Files { item: Item::Result(result_id("4c1e9a")), result: Err(timeout) });
+    let effects = state.update(key(KeyCode::Enter));
+    assert_eq!(effects, [Effect::Files(Item::Result(result_id("4c1e9a")))]);
+    assert_eq!(state.focus, Focus::Files);
+    assert_eq!(state.update(key(KeyCode::Enter)), [], "enter while loading waits");
+}
+
+#[test]
+fn a_requested_download_starts_even_after_the_cursor_moves_on() {
+    let mut state = searched((100, 30));
+    press(&mut state, "jD");
+    press(&mut state, "j");
+    let effects = state.update(Msg::Files { item: Item::Result(result_id("b7f20d")), result: Ok(dvd_files()) });
+    assert!(matches!(&effects[..], [Effect::Get { release, .. }] if *release == result_id("b7f20d")), "{effects:?}");
+}
+
+#[test]
+fn esc_that_closes_help_keeps_the_query() {
+    let mut state = with_downloads((100, 30));
+    press(&mut state, "?/night");
+    state.update(key(KeyCode::Esc));
+    assert_eq!((state.help, state.query.text.as_str()), (false, "night"));
+}
+
+#[test]
+fn a_second_file_list_keeps_the_picks() {
+    let mut state = searched((100, 30));
+    press(&mut state, "j");
+    state.update(key(KeyCode::Enter));
+    let reply = || Msg::Files { item: Item::Result(result_id("b7f20d")), result: Ok(dvd_files()) };
+    state.update(reply());
+    press(&mut state, "a");
+    state.update(reply());
+    let Some(Files::Ready(tree)) = state.files.get(&result_id("b7f20d")) else { panic!("no tree") };
+    assert_eq!(tree.picked_count(), 0);
+}
+
+#[test]
+fn a_started_toast_names_the_download_after_the_results_change() {
+    let mut state = searched((100, 30));
+    let job =
+        torrential_core::Job { id: id("4c1e9a"), name: Some("night_of_the_living_dead".into()), ..jobs()[0].clone() };
+    press(&mut state, "/x");
+    state.update(key(KeyCode::Enter));
+    let reply = GetReply { outcome: GetOutcome::Started, job, plan: None, previous_selection: None };
+    state.update(Msg::Started { release: result_id("4c1e9a"), result: Ok(Box::new(reply)) });
+    assert_eq!(state.toast.as_ref().unwrap().text, "Started night_of_the_living_dead");
+}

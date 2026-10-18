@@ -315,7 +315,7 @@ async fn watch(ctx: &Ctx, refs: Vec<String>, mut rd: OwnedReadHalf, mut wr: Owne
                 Ok(Update::Removed(id)) if everything || watched.contains(&id) => Event::Removed { id: id.to_hex() },
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    let refs = watched.iter().map(|id| id.to_hex()).collect();
+                    let refs = if everything { Vec::new() } else { watched.iter().map(|id| id.to_hex()).collect() };
                     match ctx.owner.ask(|reply| Command::Status { refs, reply }).await {
                         Ok(jobs) => Event::Snapshot { jobs },
                         Err(_) => return Ok(()),

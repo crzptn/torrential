@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use torrential_core::text::sanitize;
 use torrential_core::{Error, ErrorCode, FileRisk, Selection};
 
 use super::engine_port::Metainfo;
@@ -23,7 +24,9 @@ pub fn wanted(metainfo: &Metainfo, selection: &Selection) -> Result<Vec<bool>, E
         Selection::Patterns(patterns) => patterns,
     };
     let set = compile(patterns)?;
-    let wanted: Vec<bool> = metainfo.files.iter().map(|f| set.is_match(&f.path)).collect();
+    // People and the TUI pick from `torrential files`, which shows each path sanitized.
+    let wanted: Vec<bool> =
+        metainfo.files.iter().map(|f| set.is_match(&f.path) || set.is_match(sanitize(&f.path))).collect();
     if wanted.contains(&true) {
         Ok(wanted)
     } else {
@@ -90,6 +93,20 @@ mod tests {
         assert_eq!(pick(&["*.mp4"]), [true, false, true, false]);
         assert_eq!(pick(&["Night.mp4", "night.asr.srt"]), [true, true, false, false]);
         assert_eq!(wanted(&film(), &Selection::All).unwrap(), [true; 4]);
+    }
+
+    #[test]
+    fn a_path_as_the_file_list_shows_it_picks_the_file() {
+        let odd = FakeTorrentFile {
+            info_hash: InfoHash::V1([0x6c; 20]),
+            name: "show".into(),
+            files: vec![("Ep  01\u{202e}.mkv".into(), 10), ("Ep 02.mkv".into(), 10)],
+        }
+        .metainfo()
+        .unwrap();
+        let shown = globset::escape(&sanitize("Ep  01\u{202e}.mkv"));
+        assert_eq!(shown, "Ep 01.mkv");
+        assert_eq!(wanted(&odd, &Selection::Patterns(vec![shown])).unwrap(), [true, false]);
     }
 
     #[test]

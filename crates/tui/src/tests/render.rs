@@ -156,8 +156,20 @@ fn an_unreachable_engine_says_so_with_its_hint() {
         .with_hint("see ~/.local/state/torrential/engine.log");
     state.update(Msg::WatchLost(error));
     let screen = shot(&state);
-    assert!(screen.contains("✗ engine unreachable"), "{screen}");
+    assert!(screen.contains("● engine unreachable"), "{screen}");
     assert!(screen.contains("✗ Cannot reach the engine."), "{screen}");
     assert!(screen.contains("see ~/.local/state/torrential/engine.log"), "{screen}");
     assert!(screen.contains("Cannot reach the engine: the engine did not start within 10s"), "{screen}");
+}
+
+#[test]
+fn a_frame_drawn_before_the_resize_message_arrives_still_fits() {
+    let mut state = searched((160, 45));
+    press(&mut state, "d");
+    state.update(Msg::Files { item: Item::Download(id("6f2c81")), result: Ok(wikipedia_files()) });
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    view::render(&mut buf, &state, ColorMode::TrueColor);
+    let mut tiny = Buffer::empty(Rect::new(0, 0, 61, 16));
+    view::render(&mut tiny, &state, ColorMode::TrueColor);
+    assert_eq!(find(&buf, "torrential"), (2, 0));
 }
