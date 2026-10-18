@@ -208,6 +208,17 @@ struct Seeder {
 
 impl Seeder {
     fn start(fixture: &Fixture, rate: Option<NonZeroU32>) -> Self {
+        Self::serving(fixture, rate, fixture.total())
+    }
+
+    /// A seeder whose copy has no `file`, so it has every piece but those holding that file's bytes.
+    fn lacking(fixture: &Fixture, file: &str, has: u64) -> Self {
+        std::fs::remove_file(fixture.dir.path().join(fixture.name).join(file)).unwrap();
+        Self::serving(fixture, None, has)
+    }
+
+    /// Starts once the seeder has verified `has` bytes on disk.
+    fn serving(fixture: &Fixture, rate: Option<NonZeroU32>, has: u64) -> Self {
         let config = lt::Config {
             listen: vec![SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)],
             dht: lt::Dht::Off,
@@ -222,7 +233,7 @@ impl Seeder {
         let source = lt::TorrentSource::Metainfo(fixture.torrent.clone());
         let id = session.add(lt::AddTorrent::new(source, fixture.dir.path())).unwrap().id();
         let deadline = Instant::now() + Duration::from_secs(20);
-        let seeding = |s: &lt::Session| s.status(id).unwrap().progress.verified_selected_bytes() == fixture.total();
+        let seeding = |s: &lt::Session| s.status(id).unwrap().progress.verified_selected_bytes() == has;
         let port = loop {
             if let (true, Some(port)) = (seeding(&session), session.listen_port().unwrap()) {
                 break port;
@@ -455,21 +466,37 @@ fn a_killed_engine_trusts_its_last_periodic_save_instead_of_hashing_the_files() 
 }
 
 #[test]
-fn a_download_whose_only_seeder_leaves_stops_with_no_source() {
+fn a_download_whose_seeder_lacks_the_rest_stops_with_no_source_and_keeps_what_it_verified() {
     let fixture = Fixture::new("big", &BIG, 10);
-    let seeder = Seeder::start(&fixture, SLOW);
+    // a.bin's pieces but the one it shares with b.bin.
+    let a_alone = 73 * u64::from(PIECE);
+    let seeder = Seeder::lacking(&fixture, "b.bin", a_alone);
     let mut home = Home::new(&seeder);
     home.stall_after = Some("3s");
     home.get(&fixture.torrent_file(), &[]);
-    home.until(&fixture.id(), "a third is verified", |j| verified(j) >= fixture.total() / 3);
-    drop(seeder);
     let wait = home.run(&["wait", &fixture.short(), "--timeout", "60s", "--json"]);
     assert_eq!(wait.code, 7, "{}{}", wait.stdout, wait.stderr);
     let result: Value = serde_json::from_str(wait.stdout.lines().last().unwrap()).unwrap();
     assert_eq!(result["outcome"], "error");
     let job = home.job(&fixture.id());
     assert_eq!((state(&job), job["error"]["code"].as_str()), ("error", Some("no_source")), "{job:#}");
-    assert!(verified(&job) < fixture.total(), "nothing unverified counts as done");
+    assert_eq!(verified(&job), a_alone, "nothing unverified counts, and nothing verified is lost");
+    home.ok(&["daemon", "stop"]);
+    assert_eq!(verified(&home.job(&fixture.id())), a_alone, "what it verified outlived the engine");
+}
+
+#[test]
+fn a_download_whose_only_seeder_leaves_keeps_waiting() {
+    let fixture = Fixture::new("big", &BIG, 12);
+    let seeder = Seeder::start(&fixture, SLOW);
+    let mut home = Home::new(&seeder);
+    home.stall_after = Some("2s");
+    home.get(&fixture.torrent_file(), &[]);
+    home.until(&fixture.id(), "a third is verified", |j| verified(j) >= fixture.total() / 3);
+    drop(seeder);
+    let wait = home.run(&["wait", &fixture.short(), "--timeout", "8s"]);
+    assert_eq!(wait.code, 8, "with nothing connected there is nothing to judge: {}{}", wait.stdout, wait.stderr);
+    assert_eq!(state(&home.job(&fixture.id())), "downloading");
 }
 
 #[test]

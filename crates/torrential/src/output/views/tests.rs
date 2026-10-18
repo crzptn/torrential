@@ -694,7 +694,7 @@ fn sample(code: ErrorCode) -> Error {
         ),
         ErrorCode::NoSource => given(
             code,
-            "no peer or web seed has had the last 2 pieces (488.8 KiB) for 10m",
+            "no peer or web seed has had the 2 pieces still missing (488.8 KiB) for 20m",
             "torrential resume 770e77 looks for them again; the 33.0 MiB verified stays",
         ),
         ErrorCode::Interrupted => given(code, "interrupted", "run the command again"),

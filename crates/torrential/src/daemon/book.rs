@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use torrential_core::{Error, ErrorCode, InfoHash, Job, JobStatus, PieceMap, Progress, Selection, TorrentId};
+use torrential_core::{Error, InfoHash, Job, JobStatus, PieceMap, Progress, Selection, TorrentId};
 
 use super::engine_port::{Metainfo, Stats};
 use super::files;
@@ -111,9 +111,9 @@ pub struct JobEntry {
     receiving_since: Option<Instant>,
     /// The rate had stayed above zero for `ETA_AFTER` at the last sample.
     rate_settled: bool,
-    /// Since when no connected peer or web seed has had any piece the download still needs, as
-    /// of the last sample while downloading.
-    pub unsourced_since: Option<Instant>,
+    /// Since when the connected peers and web seeds have had none of the pieces the download
+    /// still needs, as of the last sample while downloading.
+    unsourced_since: Option<Instant>,
     pub verify: Option<Verify>,
 }
 
@@ -134,39 +134,24 @@ impl JobEntry {
     pub fn sample(&mut self, stats: Stats, at: Instant) {
         self.receiving_since = if stats.down_rate > 0 { self.receiving_since.or(Some(at)) } else { None };
         self.rate_settled = self.receiving_since.is_some_and(|since| at - since >= ETA_AFTER);
-        let unsourced = self.observed == Observed::InEngine(Phase::Downloading)
-            && stats.missing.is_some_and(|m| m.pieces > 0 && m.unavailable == m.pieces);
-        self.unsourced_since = if unsourced { self.unsourced_since.or(Some(at)) } else { None };
+        if self.observed != Observed::InEngine(Phase::Downloading) {
+            self.unsourced_since = None;
+        } else if stats.peers > 0 {
+            // With nothing connected, as in a network outage, a sample says nothing about sources.
+            let unsourced = stats.missing.is_some_and(|m| m.pieces > 0 && m.unavailable == m.pieces);
+            self.unsourced_since = if unsourced { self.unsourced_since.or(Some(at)) } else { None };
+        }
         self.stats = stats;
     }
 
-    /// Once no peer or web seed has had any of the pieces still missing for `limit`, the download
-    /// can only wait for a new source, so it stops with this error and `resume` looks again.
-    pub fn stalled(&self, at: Instant, limit: Duration) -> Option<Error> {
-        let since = self.unsourced_since?;
-        if at - since < limit {
-            return None;
-        }
-        let pieces = self.stats.missing?.pieces as usize;
-        let size = self.selected_size()?;
-        let verified = self.verified();
-        let short = &self.record.id.to_hex()[..6];
-        let format = |bytes| crate::output::format::size(Some(bytes));
-        Some(
-            Error::new(
-                ErrorCode::NoSource,
-                format!(
-                    "no peer or web seed has had the last {} ({}) for {}",
-                    crate::output::format::count(pieces, "piece"),
-                    format(size.saturating_sub(verified)),
-                    crate::output::format::elapsed(limit),
-                ),
-            )
-            .with_hint(format!(
-                "torrential resume {short} looks for them again; the {} verified stays",
-                format(verified)
-            )),
-        )
+    /// How long the connected peers and web seeds have had none of the pieces still missing.
+    pub fn unsourced_for(&self, at: Instant) -> Option<Duration> {
+        self.unsourced_since.map(|since| at - since)
+    }
+
+    /// The download left the engine, so its next run judges its sources afresh.
+    pub fn forget_sources(&mut self) {
+        self.unsourced_since = None;
     }
 
     pub fn id(&self) -> TorrentId {
@@ -331,8 +316,34 @@ mod tests {
         }
         assert_eq!(etas, [None, None, Some(60), None, None, Some(60)]);
         let missing = Some(Missing { pieces: 2, unavailable: 2 });
-        job.sample(Stats { down_rate: 10 << 20, missing, ..Stats::default() }, start + Duration::from_secs(23));
+        let stats = Stats { down_rate: 10 << 20, missing, peers: 2, ..Stats::default() };
+        job.sample(stats, start + Duration::from_secs(23));
         assert_eq!(job.view().progress.eta, None, "bytes arrive, but no source has the pieces still missing");
+    }
+
+    #[test]
+    fn only_connected_sources_that_lack_every_missing_piece_count_as_none() {
+        let mut job = entry(1, 0, Intent::Running, Observed::InEngine(Phase::Downloading));
+        let start = Instant::now();
+        let at = |second| start + Duration::from_secs(second);
+        let sample = |job: &mut JobEntry, second, peers, unavailable| {
+            let missing = Some(Missing { pieces: 2, unavailable });
+            job.sample(Stats { peers, missing, ..Stats::default() }, at(second));
+        };
+        sample(&mut job, 0, 0, 2);
+        assert_eq!(job.unsourced_for(at(0)), None, "nothing connected");
+        sample(&mut job, 1, 2, 1);
+        assert_eq!(job.unsourced_for(at(1)), None, "a peer has one of the pieces");
+        sample(&mut job, 2, 2, 2);
+        sample(&mut job, 3, 0, 2);
+        assert_eq!(
+            job.unsourced_for(at(9)),
+            Some(Duration::from_secs(7)),
+            "a gap with nothing connected keeps the clock"
+        );
+        job.observed = Observed::InEngine(Phase::Pausing);
+        sample(&mut job, 10, 2, 2);
+        assert_eq!(job.unsourced_for(at(10)), None, "only downloading counts");
     }
 
     #[test]

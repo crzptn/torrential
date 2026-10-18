@@ -473,10 +473,13 @@ impl EnginePort for Fake {
         let piece = t.metainfo.as_ref().map_or(0, |m| fake_piece_size(m.total()));
         t.arrived = (t.arrived - f64::from(damaged) * piece as f64).max(0.0);
         t.stop_downloading();
-        let (verified, piece_map) = t.progress();
-        let files = t.files();
+        let landing = t.landing();
+        // Like libtorrent, a wanted piece that never arrived counts as damaged.
+        let damaged_pieces = landing.as_ref().map_or(0, |l| l.missing.pieces);
+        let (verified, piece_map) = landing.as_ref().map_or((0, None), |l| (l.verified, l.piece_map));
+        let files = landing.map(|l| l.files).unwrap_or_default();
         self.events.push_back(EngineEvent::Activity { id, activity: Activity::Checking });
-        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged, verified, piece_map, files });
+        self.events.push_back(EngineEvent::Checked { id, damaged_pieces, verified, piece_map, files });
         Ok(())
     }
 

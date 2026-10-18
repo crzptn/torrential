@@ -368,7 +368,7 @@ hint: torrential verify 6bc1af --repair downloads them again
   "next": null
 }
 === no_source, exit 7
-error[no_source]: no peer or web seed has had the last 2 pieces (488.8 KiB) for 10m
+error[no_source]: no peer or web seed has had the 2 pieces still missing (488.8 KiB) for 20m
 hint: torrential resume 770e77 looks for them again; the 33.0 MiB verified stays
 --- json
 {
@@ -376,7 +376,7 @@ hint: torrential resume 770e77 looks for them again; the 33.0 MiB verified stays
   "type": "error",
   "error": {
     "code": "no_source",
-    "message": "no peer or web seed has had the last 2 pieces (488.8 KiB) for 10m",
+    "message": "no peer or web seed has had the 2 pieces still missing (488.8 KiB) for 20m",
     "hint": "torrential resume 770e77 looks for them again; the 33.0 MiB verified stays"
   },
   "next": null

@@ -31,8 +31,8 @@ pub struct OwnerConfig {
     pub resume_on_start: bool,
     /// How often running downloads save resume data, so a crash costs this much progress, not a hash of every file.
     pub save_resume_every: Duration,
-    /// How long a download may go with no source for any piece it still needs before it stops
-    /// with `no_source`. Longer than `save_resume_every`, so the last progress is saved first.
+    /// How long a download's connected peers and web seeds may lack every piece it still needs
+    /// before it stops with `no_source`.
     pub stall_after: Duration,
 }
 
@@ -836,9 +836,10 @@ impl Owner {
                 if let Some(job) = self.jobs.get_mut(&id) {
                     let now = Instant::now();
                     job.sample(stats, now);
-                    match job.stalled(now, self.config.stall_after) {
-                        Some(error) => self.fail(id, error),
-                        None => self.publish(id),
+                    if job.unsourced_for(now).is_some_and(|d| d >= self.config.stall_after) {
+                        self.stop_unsourced(id);
+                    } else {
+                        self.publish(id);
                     }
                 }
             }
@@ -957,6 +958,38 @@ impl Owner {
             self.draining.insert(id);
         }
         job.observed = Observed::Absent;
+        job.forget_sources();
+        self.publish(id);
+    }
+
+    /// Fails a download whose sources have lacked every piece it still needs for `stall_after`.
+    /// It pauses first and leaves the engine once that pause is saved, so what it verified stays.
+    fn stop_unsourced(&mut self, id: TorrentId) {
+        let job = &self.jobs[&id];
+        let pieces = job.stats.missing.map_or(0, |m| m.pieces) as usize;
+        let verified = job.verified();
+        let missing = job.selected_size().unwrap_or(verified).saturating_sub(verified);
+        let size = |bytes| crate::output::format::size(Some(bytes));
+        let error = Error::new(
+            ErrorCode::NoSource,
+            format!(
+                "no peer or web seed has had the {} still missing ({}) for {}",
+                crate::output::format::count(pieces, "piece"),
+                size(missing),
+                crate::output::format::elapsed(self.config.stall_after),
+            ),
+        )
+        .with_hint(format!(
+            "torrential resume {} looks for them again; the {} verified stays",
+            &id.to_hex()[..6],
+            size(verified)
+        ));
+        let failed = Intent::Failed { error };
+        let _ = self.store.set_intent(id, &failed);
+        let job = self.jobs.get_mut(&id).expect("caller checked");
+        job.record.intent = failed;
+        job.observed = Observed::InEngine(Phase::Pausing);
+        self.engine.send(EngineCommand::Pause(id));
         self.publish(id);
     }
 
@@ -1033,9 +1066,11 @@ impl Owner {
                 job.record.piece_map = piece_map;
                 job.record.files_verified = files;
             }
-            // A failed check held the torrent for this save. A new verify or a resume moved it on.
+            // A failed check or a stop for lack of sources held the torrent for this save. A new
+            // verify or a resume moved it on.
             if matches!(job.record.intent, Intent::Failed { .. }) && job.observed == Observed::InEngine(Phase::Paused) {
                 job.observed = Observed::Absent;
+                job.forget_sources();
                 self.engine.send(EngineCommand::Remove(id));
                 self.draining.insert(id);
                 self.publish(id);
@@ -1108,7 +1143,7 @@ impl Owner {
     }
 
     fn start(&mut self, id: TorrentId) {
-        self.jobs.get_mut(&id).expect("scheduled").unsourced_since = None;
+        self.jobs.get_mut(&id).expect("scheduled").forget_sources();
         let job = &self.jobs[&id];
         if job.observed == Observed::InEngine(Phase::Paused) {
             self.engine.send(EngineCommand::Resume(id));

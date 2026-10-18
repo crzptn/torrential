@@ -38,8 +38,8 @@ use store::Store;
 
 const DEFAULT_IDLE: Duration = Duration::from_secs(120);
 const SAVE_RESUME_EVERY: Duration = Duration::from_secs(5 * 60);
-/// Spans twenty web seed retries and ten peer retries, at libtorrent's 30 and 60 seconds.
-const STALL_AFTER: Duration = Duration::from_secs(10 * 60);
+/// Longer than libtorrent's 15-minute DHT announce, so a new source gets a round of discovery.
+const STALL_AFTER: Duration = Duration::from_secs(20 * 60);
 pub const MAX_ACTIVE: usize = 3;
 
 /// The pieces the engine process is built from, so tests can swap in fakes.
