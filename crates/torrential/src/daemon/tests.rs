@@ -6,13 +6,15 @@ use torrential_core::protocol::{Change, GetOutcome, GetReply, GetRequest, Reques
 use torrential_core::{Error, ErrorCode, InfoHash, Job, JobStatus, Selection, Target};
 
 use super::admission::{FakeDisk, GIB, Space};
-use super::engine_port::{Fake, FakeTorrentFile, Swarm, parse_fake};
+use super::engine_port::{Fake, FakeTorrentFile, Swarm, disagreement, parse_fake};
 use super::owner::OwnerConfig;
 use super::search_port::{self, fake_catalog};
 use super::store::Store;
 use super::{Ports, Running, server, start};
 
 const ROOMY: Space = Space { device: 1, total: 1000 * GIB, free: 500 * GIB };
+/// A 1 GiB fake torrent's piece size.
+const GIB_PIECE: u64 = GIB / 1024;
 
 struct Harness {
     dir: tempfile::TempDir,
@@ -123,6 +125,14 @@ impl Harness {
             }
             assert!(Instant::now() < deadline, "timed out waiting until {what}: {jobs:#?}");
             tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Each file's verified bytes, as `files` reports them.
+    async fn file_bytes(&self, t: &FakeTorrentFile) -> Vec<u64> {
+        match self.ask(Request::Files { target: Target::Prefix(prefix(t)), timeout_ms: 1_000 }).await {
+            Response::Files { files } => files.files.iter().map(|f| f.verified).collect(),
+            other => panic!("unexpected {other:?}"),
         }
     }
 
@@ -438,7 +448,7 @@ async fn repair_counts_the_damaged_pieces_as_missing_until_they_download_again()
     h.swarm.damage(iso.info_hash.id(), 3);
     h.changes(Request::Verify { reference: prefix(&iso), repair: true }).await.unwrap();
     let jobs = h.until("repairing", |jobs| jobs[0].status.name() == "downloading").await;
-    assert_eq!(jobs[0].progress.verified, GIB - 3 * 16_384);
+    assert_eq!(jobs[0].progress.verified, GIB - 3 * GIB_PIECE);
     h.swarm.set_rate(100 * GIB);
     let jobs = h.until("repaired", |jobs| jobs[0].status.name() == "done").await;
     assert_eq!(jobs[0].progress.verified, GIB);
@@ -455,10 +465,10 @@ async fn resume_after_a_failed_verify_downloads_the_damaged_pieces_again() {
     h.swarm.damage(iso.info_hash.id(), 2);
     h.changes(Request::Verify { reference: prefix(&iso), repair: false }).await.unwrap();
     let jobs = h.until("damage reported", |jobs| jobs[0].status.name() == "error").await;
-    assert_eq!(jobs[0].progress.verified, GIB - 2 * 16_384);
+    assert_eq!(jobs[0].progress.verified, GIB - 2 * GIB_PIECE);
     h.changes(Request::Resume { refs: vec![prefix(&iso)], all: false }).await.unwrap();
     let jobs = h.until("downloading", |jobs| jobs[0].status.name() == "downloading").await;
-    assert_eq!(jobs[0].progress.verified, GIB - 2 * 16_384);
+    assert_eq!(jobs[0].progress.verified, GIB - 2 * GIB_PIECE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -494,6 +504,23 @@ async fn a_crash_keeps_the_piece_map_of_the_last_save_and_done_drops_it() {
     h.changes(Request::Resume { refs: vec![prefix(&set)], all: false }).await.unwrap();
     let jobs = h.until("done", |jobs| jobs[0].status.name() == "done").await;
     assert_eq!(jobs[0].progress.piece_map, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_running_downloads_files_agree_with_its_piece_map() {
+    let h = Harness::new();
+    h.swarm.set_rate(GIB / 2);
+    let set = torrent(32, "set", &[("a.bin", GIB), ("b.bin", GIB / 3), ("c.bin", GIB / 5)]);
+    h.get(h.torrent_file(&set), &["a.bin", "c.bin"]).await.unwrap();
+    h.until("a third is verified", |jobs| jobs[0].progress.verified >= GIB / 3).await;
+    h.swarm.set_rate(0);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let progress = h.status().await[0].progress;
+    let files = h.file_bytes(&set).await;
+    let map = progress.piece_map.expect("a running download has a piece map");
+    let wanted = [true, false, true];
+    assert_eq!(disagreement(&set.metainfo().unwrap(), &wanted, progress.verified, &files, &map), None, "{map}");
+    assert!(files[2] > 0, "c.bin, last in the torrent, gets pieces too: {files:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

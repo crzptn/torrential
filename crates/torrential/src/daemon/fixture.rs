@@ -12,7 +12,7 @@ use torrential_core::{
 
 use super::admission::DEFAULT_MAX_SIZE;
 use super::book::{Intent, JobRecord};
-use super::engine_port::{FakeTorrentFile, Swarm, fake_piece_map};
+use super::engine_port::{FakeTorrentFile, Swarm, fake_landing};
 use super::search_port::{self, FakeSource};
 use super::store::Store;
 
@@ -340,9 +340,9 @@ pub fn seed(store: &mut Store, downloads: &Path, now: i64) -> Result<(), Error> 
     ];
     for seed in seeds {
         let size: u64 = seed.torrent.files.iter().map(|(_, size)| size).sum();
-        let verified = size / 100 * seed.done_percent;
+        let arrived = size / 100 * seed.done_percent;
         let metainfo = seed.torrent.metainfo()?;
-        let piece_map = fake_piece_map(&metainfo, &vec![true; metainfo.files.len()], verified);
+        let landing = fake_landing(&metainfo, &vec![true; metainfo.files.len()], arrived);
         let id = seed.torrent.info_hash.id();
         let added_at = now - seed.added_days_ago * DAY - 3_600;
         let record = JobRecord {
@@ -355,11 +355,11 @@ pub fn seed(store: &mut Store, downloads: &Path, now: i64) -> Result<(), Error> 
             magnet: None,
             added_at,
             intent: seed.intent,
-            verified,
-            piece_map,
+            verified: landing.verified,
+            piece_map: landing.piece_map,
         };
         store.insert(&record, Some(&seed.torrent.bytes()), added_at)?;
-        store.save_resume(id, verified.to_string().as_bytes(), verified, piece_map, added_at)?;
+        store.save_resume(id, arrived.to_string().as_bytes(), landing.verified, landing.piece_map, added_at)?;
     }
     Ok(())
 }
