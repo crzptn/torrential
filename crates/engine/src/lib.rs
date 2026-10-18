@@ -1,13 +1,30 @@
+//! torrential's libtorrent engine. This crate is the only code that touches
+//! libtorrent, and no libtorrent or cxx type appears in its API.
+//!
+//! libtorrent 2.1 is built from `vendor/libtorrent` and linked statically. A
+//! daemon owns one [`Session`] on one thread and reads its [`Alert`]s.
+
+mod alert;
 mod bridge;
+mod config;
+mod create;
+mod error;
+mod identity;
+mod session;
+mod torrent;
 
-pub fn libtorrent_version() -> String {
-    bridge::ffi::libtorrent_version().unwrap()
-}
+pub use alert::{Alert, SessionStats, Transport};
+pub use config::{ClientIdentity, Config, ConnectionLimits, Dht, DhtState, UploadPolicy};
+pub use create::{PieceSize, TorrentFormat, create_torrent};
+pub use error::{EngineError, ErrorKind, NativeError};
+pub use identity::{InfoHash, InfoHashV1, InfoHashV2, TorrentId};
+pub use session::Session;
+pub use torrent::{
+    AddTorrent, Added, FileEntry, FileIndex, FilePriority, FileProgress, FileSelection, Magnet,
+    Metainfo, Progress, ResumeData, TorrentSource, TorrentState, TorrentStatus,
+};
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn links() {
-        assert_eq!(super::libtorrent_version(), "2.1.2.0");
-    }
+/// The version of the linked libtorrent, such as `2.1.2.0`.
+pub fn libtorrent_version() -> Result<String, EngineError> {
+    bridge::ffi::libtorrent_version().map_err(bridge::error)
 }
