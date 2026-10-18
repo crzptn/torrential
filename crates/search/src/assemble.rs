@@ -15,7 +15,7 @@ use torrential_core::{
 use crate::classify;
 use crate::observation::{Identity, Observation, build_magnet};
 use crate::sources::{Failure, SourceMeta};
-use crate::terms::{Relevance, Terms};
+use crate::terms::{self, Relevance, Terms};
 
 const MAX_TRACKERS: usize = 32;
 
@@ -110,6 +110,8 @@ pub(crate) struct Candidate {
     /// The trackers came from a private source and carry the user's passkey.
     private_trackers: bool,
     relevance: Relevance,
+    /// Words in the shown name beyond the query.
+    extra_words: u16,
     lawful: bool,
 }
 
@@ -197,6 +199,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     let hash = combined_hash(group);
     let link = group.iter().filter_map(|(s, o)| o.torrent_url().map(|url| (s.authority, !s.public, url))).min();
     let relevance = group.iter().map(|(_, o)| terms.relevance(o.name())).max().unwrap_or(terms.relevance(""));
+    let extra_words = terms.extra_words(&name);
     Candidate {
         hash,
         private_url: link.is_some_and(|(_, private, _)| private),
@@ -216,6 +219,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
             info_url: first(group, |o| o.info_url.clone()),
         },
         relevance,
+        extra_words,
         lawful: group.iter().any(|(s, _)| s.lawful),
     }
 }
@@ -257,8 +261,10 @@ fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) 
 }
 
 /// One total order. `relevance` sorts by query relevance, then official and lawful
-/// sources, then seeders, then size, then ID. The other sorts put their key first
-/// and fall back to that order. Unknown values sort last.
+/// sources, then seeders, then names with fewer words beyond the query, then newer
+/// names, then ID. A bigger file is no closer a match, so size never breaks a tie.
+/// The other sorts put their key first and fall back to that order. Unknown values
+/// sort last.
 fn rank(candidates: &mut [Candidate], sort: Sort) {
     candidates.sort_by(|a, b| {
         let (ra, rb) = (&a.release, &b.release);
@@ -272,7 +278,8 @@ fn rank(candidates: &mut [Candidate], sort: Sort) {
             .then_with(|| b.relevance.cmp(&a.relevance))
             .then_with(|| standing(b).cmp(&standing(a)))
             .then_with(|| known_first_desc(ra.seeders, rb.seeders))
-            .then_with(|| known_first_desc(ra.size, rb.size))
+            .then_with(|| a.extra_words.cmp(&b.extra_words))
+            .then_with(|| terms::newer_first(&ra.name, &rb.name))
             .then_with(|| ra.id.to_ref().cmp(&rb.id.to_ref()))
     });
 }

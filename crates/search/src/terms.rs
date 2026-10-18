@@ -1,3 +1,4 @@
+use std::cmp::{Ordering, Reverse};
 use std::collections::HashSet;
 
 /// Words that say little on their own. They count toward coverage, but a row that
@@ -79,6 +80,14 @@ impl Terms {
         Relevance { matched: u16::try_from(matched).unwrap_or(u16::MAX), year }
     }
 
+    /// Words in the name beyond one for each query word it matches, so a remaster's
+    /// "4k Remaster" counts two that the plain title does not.
+    pub fn extra_words(&self, name: &str) -> u16 {
+        let name_tokens = tokens(name);
+        let matched = self.matches(name, &name_tokens).iter().filter(|hit| **hit).count();
+        u16::try_from(name_tokens.len().saturating_sub(matched)).unwrap_or(u16::MAX)
+    }
+
     /// True when the name matches a query word that is not a stopword, or any word
     /// when the query is only stopwords.
     pub fn is_relevant(&self, name: &str) -> bool {
@@ -116,6 +125,21 @@ impl Terms {
         }
         hits
     }
+}
+
+/// Orders names word by word without case, with numbers before other words and the
+/// higher number first. Of two releases that match a query equally well, the newer
+/// one leads: the 2026-09-30 dump before the 2026-06-30 one, 13.7 before 13.6.
+pub(crate) fn newer_first(a: &str, b: &str) -> Ordering {
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    enum Word {
+        Number(Reverse<u64>),
+        Text(String),
+    }
+    let words = |name: &str| -> Vec<Word> {
+        tokens(name).into_iter().map(|t| t.parse().map_or(Word::Text(t), |n| Word::Number(Reverse(n)))).collect()
+    };
+    words(a).cmp(&words(b))
 }
 
 /// Two numbers side by side are a version or a channel count, as in "5.1", not
@@ -157,6 +181,36 @@ mod tests {
         assert_eq!(absent, Relevance { matched: 5, year: YearMatch::Absent });
         assert_eq!(other, Relevance { matched: 5, year: YearMatch::Other });
         assert!(same > absent && absent > other);
+    }
+
+    #[test]
+    fn counts_the_words_a_name_adds_to_the_query() {
+        let terms = Terms::parse("debian 13.7 netinst");
+        assert_eq!(terms.extra_words("debian-13.7.0-amd64-netinst.iso"), 3);
+        assert_eq!(terms.extra_words("debian-edu-13.7.0-amd64-netinst.iso"), 4);
+        assert_eq!(Terms::parse("night of the living dead 1968").extra_words("Night of the Living Dead (1968)"), 0);
+    }
+
+    #[test]
+    fn newer_versions_and_dates_sort_first() {
+        let mut names = [
+            "Stack Exchange Data Dump (2026-06-30)",
+            "debian-13.7.0-arm64-netinst.iso",
+            "Stack Exchange Data Dump (2026-09-30)",
+            "debian-13.10.0-amd64-netinst.iso",
+            "DEBIAN-13.7.0-AMD64-netinst.iso",
+        ];
+        names.sort_by(|a, b| newer_first(a, b));
+        assert_eq!(
+            names,
+            [
+                "debian-13.10.0-amd64-netinst.iso",
+                "DEBIAN-13.7.0-AMD64-netinst.iso",
+                "debian-13.7.0-arm64-netinst.iso",
+                "Stack Exchange Data Dump (2026-09-30)",
+                "Stack Exchange Data Dump (2026-06-30)",
+            ]
+        );
     }
 
     #[test]

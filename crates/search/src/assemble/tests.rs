@@ -144,7 +144,7 @@ fn conflicting_hybrids_resolve_the_same_way_in_any_order() {
     let v2_only = || row(&"22".repeat(32), "ImageNet 2012 train");
     let one_way = ids(vec![hybrid(0x02), hybrid(0x01), v2_only()]);
     let other_way = ids(vec![v2_only(), hybrid(0x01), hybrid(0x02)]);
-    assert_eq!(one_way, [(h(0x01), "ImageNet 2012 train".to_string()), (h(0x02), "ImageNet 2012".to_string())]);
+    assert_eq!(one_way, [(h(0x02), "ImageNet 2012".to_string()), (h(0x01), "ImageNet 2012 train".to_string())]);
     assert_eq!(other_way, one_way);
 }
 
@@ -184,14 +184,13 @@ fn private_links_stay_out_of_results_and_with_their_own_listing() {
     assert_eq!(
         links(&shown.releases),
         [
+            (Some(format!("magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD", h(0x44))), None),
             (Some(public_magnet.clone()), None),
-            (Some(format!("magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD", h(0x44))), None)
         ]
     );
     assert_eq!(
         links(&linked),
         [
-            (Some(public_magnet), None),
             (
                 Some(format!(
                     "magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD&tr=https%3A%2F%2Fprivate.example%2Fannounce%3Fpasskey%3Dsecret",
@@ -199,6 +198,7 @@ fn private_links_stay_out_of_results_and_with_their_own_listing() {
                 )),
                 Some("http://127.0.0.1:9117/dl/x/?jackett_apikey=k3y".into())
             ),
+            (Some(public_magnet), None),
         ]
     );
 }
@@ -251,14 +251,14 @@ fn films() -> Vec<Run> {
 }
 
 #[test]
-fn ranks_relevance_before_popularity_then_lawful_seeders_size() {
+fn ranks_relevance_before_popularity_then_lawful_seeders_extra_words() {
     let result = search(&SearchQuery::new("night of the living dead 1968"), &films());
     assert_eq!(
         names(&result),
         [
             "Night of the Living Dead (1968)",
-            "Night of the Living Dead 1968 1080p BluRay",
             "Night of the Living Dead 1968",
+            "Night of the Living Dead 1968 1080p BluRay",
             "Night of the Living Dead (1990)",
             "Living Dead Night Collection",
         ]
@@ -277,8 +277,8 @@ fn alternate_sorts_keep_the_same_tie_breaks() {
         [
             "Living Dead Night Collection",
             "Night of the Living Dead (1990)",
-            "Night of the Living Dead 1968 1080p BluRay",
             "Night of the Living Dead 1968",
+            "Night of the Living Dead 1968 1080p BluRay",
             "Night of the Living Dead (1968)",
         ]
     );
@@ -295,8 +295,8 @@ fn alternate_sorts_keep_the_same_tie_breaks() {
     assert_eq!(
         sorted(Sort::Age),
         [
-            "Night of the Living Dead 1968 1080p BluRay",
             "Night of the Living Dead 1968",
+            "Night of the Living Dead 1968 1080p BluRay",
             "Night of the Living Dead (1990)",
             "Night of the Living Dead (1968)",
             "Living Dead Night Collection",
@@ -351,7 +351,7 @@ fn hides_adult_releases_without_eating_lookalike_titles() {
     let shown = search(&q, &runs);
     let adult: Vec<&str> =
         shown.releases.iter().filter(|r| r.flags.contains(&Flag::Adult)).map(|r| r.name.as_str()).collect();
-    assert_eq!(adult, ["xXx 2002 scene pack", "Brazzers xXx 2002"]);
+    assert_eq!(adult, ["Brazzers xXx 2002", "xXx 2002 scene pack"]);
     assert_eq!((shown.total, shown.hidden_adult), (4, 0));
 }
 

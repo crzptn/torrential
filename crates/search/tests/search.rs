@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use torrential_core::error::Details;
-use torrential_core::{ErrorCode, Flag, HexPrefix, SearchQuery, SourceOutcome};
+use torrential_core::{Category, ErrorCode, Flag, HexPrefix, SearchQuery, SourceOutcome};
 use torrential_search::{Progress, ResultCache, Search, SearchConfig, TorznabConfig};
 
 #[derive(Clone)]
@@ -506,6 +506,59 @@ async fn an_answer_missing_a_directory_is_asked_again() {
     assert_eq!(first.releases[0].id.to_ref(), "bf7ed99351f7b08f0916b7b3e49cfa574d206879");
     assert_eq!(outcomes(&again), [("debian".into(), SourceOutcome::Ok { results: 1 })]);
     assert_eq!(server.hits(ARM64_CD), 2);
+}
+
+#[tokio::test]
+async fn the_plain_image_outranks_bigger_variants() {
+    let torrents = [
+        "amd64/bt-cd/debian-13.7.0-amd64-netinst.iso.torrent",
+        "amd64/bt-cd/debian-edu-13.7.0-amd64-netinst.iso.torrent",
+        "amd64/bt-cd/debian-mac-13.7.0-amd64-netinst.iso.torrent",
+        "arm64/bt-cd/debian-13.7.0-arm64-netinst.iso.torrent",
+    ];
+    let mut routes = Vec::new();
+    for path in torrents.into_iter().chain(["amd64/bt-cd/", "amd64/bt-dvd/", "arm64/bt-cd/", "arm64/bt-dvd/"]) {
+        let name = path.replace('/', "-");
+        let page = if path.ends_with('/') { format!("{}.html", name.trim_end_matches('-')) } else { name };
+        let route: &'static str = format!("/debian/debian-cd/current/{path}").leak();
+        routes.push((route, vec![ok(fixture(&format!("debian/debian-cd-current-{page}")))]));
+    }
+    let server = Server::start(routes).await;
+    let search = Search::new(&server.config(&["debian"]), ResultCache::new()).unwrap();
+
+    let result = search.search(&query("debian 13.7 netinst", &["debian"])).await.unwrap();
+
+    let listed: Vec<(&str, Option<u64>)> = result.releases.iter().map(|r| (r.name.as_str(), r.size)).collect();
+    assert_eq!(
+        listed,
+        [
+            ("debian-13.7.0-amd64-netinst.iso", Some(792_723_456)),
+            ("debian-13.7.0-arm64-netinst.iso", Some(735_358_976)),
+            ("debian-edu-13.7.0-amd64-netinst.iso", Some(801_112_064)),
+            ("debian-mac-13.7.0-amd64-netinst.iso", Some(793_772_032)),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_plain_title_outranks_bigger_remasters() {
+    let answer = fixture("archive.org/advancedsearch.php-night-of-the-living-dead-1968.json");
+    let server = Server::start(vec![("/archive.org/advancedsearch.php", vec![ok(answer)])]).await;
+    let search = Search::new(&server.config(&["archive.org"]), ResultCache::new()).unwrap();
+    let q = SearchQuery { category: Some(Category::Video), ..query("night of the living dead 1968", &["archive.org"]) };
+
+    let result = search.search(&q).await.unwrap();
+
+    let top: Vec<(&str, Option<u64>)> = result.releases.iter().take(4).map(|r| (r.name.as_str(), r.size)).collect();
+    assert_eq!(
+        top,
+        [
+            ("Night Of The Living Dead 1968", Some(599_397_613)),
+            ("Night Of The Living Dead 1968", Some(253_292_883)),
+            ("NIGHT OF THE LIVING DEAD - 1968", Some(3_605_425_312)),
+            ("Night of the Living Dead (1968)", Some(1_173_905_516)),
+        ]
+    );
 }
 
 #[tokio::test]
