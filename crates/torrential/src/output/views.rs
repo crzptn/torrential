@@ -556,7 +556,7 @@ pub fn daemon_status(report: &DaemonReport) -> Doc {
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize)]
 pub struct Check {
-    pub check: &'static str,
+    pub check: String,
     pub status: CheckStatus,
     pub detail: String,
 }
@@ -582,7 +582,7 @@ impl CheckStatus {
 }
 
 pub fn doctor(checks: &[Check], fix: Option<String>) -> Doc {
-    let rows = checks.iter().map(|c| vec![Cell::new(c.check), c.status.cell(), Cell::new(c.detail.clone())]).collect();
+    let rows = checks.iter().map(|c| vec![Cell::new(&c.check), c.status.cell(), Cell::new(c.detail.clone())]).collect();
     let problems = checks.iter().filter(|c| matches!(c.status, CheckStatus::Warn | CheckStatus::Fail)).count();
     Doc {
         body: Body::Table { header: vec!["CHECK", "STATUS", "DETAIL"], rows },

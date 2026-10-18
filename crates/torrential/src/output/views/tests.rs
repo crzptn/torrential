@@ -460,19 +460,20 @@ fn daemon_status_running_and_stopped() {
 #[test]
 fn doctor_report() {
     let checks = vec![
-        Check { check: "sandbox", status: CheckStatus::Fail, detail: "CODEX_SANDBOX_NETWORK_DISABLED=1".into() },
+        Check { check: "sandbox".into(), status: CheckStatus::Fail, detail: "CODEX_SANDBOX_NETWORK_DISABLED=1".into() },
         Check {
-            check: "disk",
+            check: "disk".into(),
             status: CheckStatus::Ok,
             detail: "410.2 GiB free in /Users/ada/Downloads/torrential".into(),
         },
-        Check { check: "state", status: CheckStatus::Ok, detail: "/Users/ada/.local/state/torrential".into() },
-        Check { check: "engine", status: CheckStatus::Ok, detail: "not running; the next command starts it".into() },
+        Check { check: "state".into(), status: CheckStatus::Ok, detail: "/Users/ada/.local/state/torrential".into() },
         Check {
-            check: "sources",
-            status: CheckStatus::Skipped,
-            detail: "search is not wired into this build yet".into(),
+            check: "engine".into(),
+            status: CheckStatus::Ok,
+            detail: "not running; the next command starts it".into(),
         },
+        Check { check: "sources".into(), status: CheckStatus::Skipped, detail: "8 enabled".into() },
+        Check { check: "source knaben".into(), status: CheckStatus::Fail, detail: "http 503, 211 ms".into() },
     ];
     let fix = Some(
         "in interactive Codex, rerun with sandbox_permissions \"require_escalated\" and prefix_rule [\"torrential\"]"

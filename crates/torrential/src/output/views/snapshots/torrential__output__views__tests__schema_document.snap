@@ -268,9 +268,16 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
     },
     {
       "name": "doctor",
-      "about": "Diagnose sandbox, disk, state, engine, and sources",
+      "about": "Diagnose sandbox, disk, state, engine, config, and sources",
       "arguments": [],
-      "flags": []
+      "flags": [
+        {
+          "name": "--network",
+          "help": "Also search each enabled source once, and report how it answered and how long it took",
+          "takes_value": false,
+          "repeatable": false
+        }
+      ]
     },
     {
       "name": "tui",

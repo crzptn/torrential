@@ -1,5 +1,6 @@
 pub mod connect;
 pub mod launch;
+mod probe;
 pub mod service;
 pub mod tui;
 pub mod wait;
@@ -106,7 +107,7 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
             let reference = job_refs(std::slice::from_ref(&args.reference), &cwd)?.remove(0);
             changes(engine()?, Request::Verify { reference, repair: args.repair }, ChangeCommand::Verify, mode)
         }
-        Command::Doctor => Ok(doctor(env, mode)),
+        Command::Doctor(args) => Ok(doctor(env, mode, args.network)),
         Command::Tui => tui::run(env),
         Command::Daemon { command } => daemon(command, env, mode),
         Command::Schema => {
@@ -309,10 +310,10 @@ fn service_report(report: service::Report, mode: Mode) -> Result<u8, Error> {
     Ok(emit(mode, &doc, &Typed { kind: "daemon_service", body: payload }))
 }
 
-fn doctor(env: &Env, mode: Mode) -> u8 {
+fn doctor(env: &Env, mode: Mode, network: bool) -> u8 {
     use crate::daemon::admission::{Disk, RealDisk, reserve};
     use torrential_core::units::format_size;
-    let check = |check, status, detail: String| Check { check, status, detail };
+    let check = |check: &str, status, detail: String| Check { check: check.into(), status, detail };
     let mut checks = Vec::new();
     let mut fix = None;
     match launch::sandbox_signal(env, launch::send_udp) {
@@ -334,13 +335,15 @@ fn doctor(env: &Env, mode: Mode) -> u8 {
             );
         }
     };
-    match RealDisk.space(&paths.downloads) {
+    let settings = crate::config::Config::load(&paths, env);
+    let downloads = settings.as_ref().map_or_else(|_| paths.downloads.clone(), |s| s.downloads_dir(&paths));
+    match RealDisk.space(&downloads) {
         Ok(space) => {
             let low = space.free < reserve(space.total);
-            let detail = format!("{} free in {}", format_size(space.free), paths.downloads.display());
+            let detail = format!("{} free in {}", format_size(space.free), downloads.display());
             checks.push(check("disk", if low { CheckStatus::Warn } else { CheckStatus::Ok }, detail));
         }
-        Err(e) => checks.push(check("disk", CheckStatus::Fail, format!("{}: {e}", paths.downloads.display()))),
+        Err(e) => checks.push(check("disk", CheckStatus::Fail, format!("{}: {e}", downloads.display()))),
     }
     let state = if paths.state.exists() { crate::paths::check_state_filesystem(&paths.state) } else { Ok(()) };
     match state {
@@ -354,7 +357,7 @@ fn doctor(env: &Env, mode: Mode) -> u8 {
         Ok(None) => checks.push(check("engine", CheckStatus::Ok, "not running; the next command starts it".into())),
         Err(error) => checks.push(check("engine", CheckStatus::Fail, error.message)),
     }
-    checks.push(check("sources", CheckStatus::Skipped, "search is not wired into this build yet".into()));
+    checks.extend(probe::checks(&paths, settings, network));
     emit(mode, &views::doctor(&checks, fix), &Typed { kind: "doctor", body: Checks { checks: &checks } })
 }
 

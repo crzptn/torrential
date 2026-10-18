@@ -7,8 +7,9 @@ sandbox	fail	CODEX_SANDBOX_NETWORK_DISABLED=1
 disk	ok	410.2 GiB free in /Users/ada/Downloads/torrential
 state	ok	/Users/ada/.local/state/torrential
 engine	ok	not running; the next command starts it
-sources	skipped	search is not wired into this build yet
-# 1 problem
+sources	skipped	8 enabled
+source knaben	fail	http 503, 211 ms
+# 2 problems
 next: in interactive Codex, rerun with sandbox_permissions "require_escalated" and prefix_rule ["torrential"]
 
 --- json
@@ -39,7 +40,12 @@ next: in interactive Codex, rerun with sandbox_permissions "require_escalated" a
     {
       "check": "sources",
       "status": "skipped",
-      "detail": "search is not wired into this build yet"
+      "detail": "8 enabled"
+    },
+    {
+      "check": "source knaben",
+      "status": "fail",
+      "detail": "http 503, 211 ms"
     }
   ],
   "next": "in interactive Codex, rerun with sandbox_permissions \"require_escalated\" and prefix_rule [\"torrential\"]"

@@ -55,8 +55,8 @@ pub enum Command {
     Rm(RefsArgs),
     /// Re-hash the data on disk and report damaged pieces
     Verify(VerifyArgs),
-    /// Diagnose sandbox, disk, state, engine, and sources
-    Doctor,
+    /// Diagnose sandbox, disk, state, engine, config, and sources
+    Doctor(DoctorArgs),
     /// Open the terminal UI, which `torrential` alone also opens on a terminal
     Tui,
     /// Inspect or manage the engine process
@@ -105,6 +105,13 @@ pub struct SearchArgs {
     /// Skip the result cache
     #[arg(long)]
     pub fresh: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct DoctorArgs {
+    /// Also search each enabled source once, and report how it answered and how long it took
+    #[arg(long)]
+    pub network: bool,
 }
 
 #[derive(Args, Debug)]
