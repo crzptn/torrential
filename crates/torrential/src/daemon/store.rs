@@ -68,6 +68,12 @@ pub struct Tombstone {
 
 pub const TOMBSTONE_SECS: i64 = 86_400;
 pub const RESULTS_SECS: i64 = 7 * 86_400;
+/// A file list no download uses is a cache for a search result's ID, which resolves for as long
+/// as the result is kept.
+pub const METAINFO_SECS: i64 = RESULTS_SECS;
+/// The file lists no download uses: four of the largest `.torrent` files torrential reads, so the
+/// one `files` just fetched is never the one evicted, and hundreds of the usual 50 to 500 KiB.
+pub const METAINFO_BYTES: i64 = 64 << 20;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct StoredJob {
@@ -392,8 +398,8 @@ impl Store {
                     tombstone.removed_at
                 ],
             )?;
-            tx.execute("DELETE FROM tombstones WHERE removed_at < ?1", [tombstone.removed_at - TOMBSTONE_SECS])
-                .map(drop)
+            tx.execute("DELETE FROM tombstones WHERE removed_at < ?1", [tombstone.removed_at - TOMBSTONE_SECS])?;
+            evict_metainfo(tx, tombstone.removed_at)
         })
     }
 
@@ -519,6 +525,22 @@ fn upsert_metainfo(tx: &Transaction, id: TorrentId, bytes: &[u8], now: i64) -> r
     tx.execute(
         "INSERT OR REPLACE INTO metainfo (id, bytes, saved_at) VALUES (?1, ?2, ?3)",
         params![id.to_hex(), bytes, now],
+    )?;
+    evict_metainfo(tx, now)
+}
+
+/// Drops the file lists no download uses once they are older than `METAINFO_SECS`, then the
+/// oldest of them until the rest fit in `METAINFO_BYTES`. A download's own is never dropped.
+fn evict_metainfo(tx: &Transaction, now: i64) -> rusqlite::Result<()> {
+    tx.execute("DELETE FROM metainfo WHERE id NOT IN (SELECT id FROM jobs) AND saved_at < ?1", [now - METAINFO_SECS])?;
+    tx.execute(
+        "DELETE FROM metainfo WHERE id IN (\
+           SELECT id FROM (\
+             SELECT id, sum(length(bytes)) OVER (ORDER BY saved_at DESC, id) AS newer \
+             FROM metainfo WHERE id NOT IN (SELECT id FROM jobs)\
+           ) WHERE newer > ?1\
+         )",
+        [METAINFO_BYTES],
     )
     .map(drop)
 }
@@ -634,6 +656,29 @@ mod tests {
         assert!(store.jobs().unwrap().is_empty());
         assert_eq!(store.tombstones(1_000 + 60).unwrap(), [tomb]);
         assert!(store.tombstones(1_000 + TOMBSTONE_SECS + 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn cached_file_lists_expire_and_fit_a_budget_but_a_downloads_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("state.db")).unwrap();
+        let id = TorrentId::from_bytes;
+        let largest = vec![7; 16 << 20];
+        let t0 = 1_000_000;
+        let later = t0 + METAINFO_SECS + 1;
+
+        store.insert(&record(1), Some(b"tracked"), t0).unwrap();
+        store.insert(&record(3), Some(b"removed"), t0).unwrap();
+        store.cache_metainfo(id([2; 20]), b"old", t0).unwrap();
+        store.cache_metainfo(id([4; 20]), b"recent", later).unwrap();
+        for n in 5..10 {
+            store.cache_metainfo(id([n; 20]), &largest, later + i64::from(n)).unwrap();
+        }
+        store.remove(&Tombstone { id: id([3; 20]), name: None, path: None, removed_at: later + 10 }).unwrap();
+
+        let kept: Vec<u8> = (1..10).filter(|n| store.metainfo(id([*n; 20])).unwrap().is_some()).collect();
+        assert_eq!(kept, [1, 6, 7, 8, 9]);
+        assert_eq!(store.jobs().unwrap()[0].metainfo.as_deref(), Some(&b"tracked"[..]));
     }
 
     #[test]
