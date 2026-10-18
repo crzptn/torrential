@@ -145,6 +145,8 @@ pub trait EnginePort: Send {
     fn resume(&mut self, id: TorrentId) -> Result<(), Error>;
     fn recheck(&mut self, id: TorrentId) -> Result<(), Error>;
     fn save_resume_data(&mut self, id: TorrentId) -> Result<(), Error>;
+    /// Saves only if the torrent downloaded or checked data since its last save. Otherwise no event follows.
+    fn save_resume_data_if_progressed(&mut self, id: TorrentId) -> Result<(), Error>;
     /// Removes the torrent and keeps its files.
     fn remove(&mut self, id: TorrentId) -> Result<(), Error>;
     /// Verified bytes per file.
@@ -160,6 +162,7 @@ pub enum EngineCommand {
     Resume(TorrentId),
     Recheck(TorrentId),
     SaveResume(TorrentId),
+    SaveResumeIfProgressed(TorrentId),
     Remove(TorrentId),
     FileProgress(TorrentId, oneshot::Sender<Result<Vec<u64>, Error>>),
 }
@@ -225,6 +228,7 @@ fn apply(port: &mut dyn EnginePort, command: EngineCommand) -> Option<EngineEven
         EngineCommand::Resume(id) => (id, port.resume(id)),
         EngineCommand::Recheck(id) => (id, port.recheck(id)),
         EngineCommand::SaveResume(id) => (id, port.save_resume_data(id)),
+        EngineCommand::SaveResumeIfProgressed(id) => (id, port.save_resume_data_if_progressed(id)),
         EngineCommand::Remove(id) => (id, port.remove(id)),
         EngineCommand::FileProgress(id, reply) => {
             let _ = reply.send(port.file_progress(id));
@@ -315,6 +319,8 @@ struct FakeTorrent {
     metainfo: Option<Metainfo>,
     wanted: Option<Vec<bool>>,
     verified: f64,
+    /// `verified` at the last resume data.
+    saved: f64,
     paused: bool,
     finished: bool,
     downloading: bool,
@@ -391,6 +397,7 @@ impl EnginePort for Fake {
             metainfo,
             wanted: torrent.wanted,
             verified,
+            saved: verified,
             paused: torrent.paused,
             finished: false,
             downloading: false,
@@ -433,8 +440,18 @@ impl EnginePort for Fake {
     }
 
     fn save_resume_data(&mut self, id: TorrentId) -> Result<(), Error> {
-        let verified = self.torrent(id)?.verified;
-        self.events.push_back(EngineEvent::ResumeData { id, data: verified.to_string().into_bytes() });
+        let t = self.torrent(id)?;
+        t.saved = t.verified;
+        let data = t.verified.to_string().into_bytes();
+        self.events.push_back(EngineEvent::ResumeData { id, data });
+        Ok(())
+    }
+
+    fn save_resume_data_if_progressed(&mut self, id: TorrentId) -> Result<(), Error> {
+        let t = self.torrent(id)?;
+        if t.verified != t.saved {
+            self.save_resume_data(id)?;
+        }
         Ok(())
     }
 

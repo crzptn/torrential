@@ -384,6 +384,11 @@ void Session::save_resume_data(rust::Slice<const std::uint8_t> id) {
   find(id).save_resume_data(lt::torrent_handle::flush_disk_cache | lt::torrent_handle::save_info_dict);
 }
 
+void Session::save_resume_data_if_progressed(rust::Slice<const std::uint8_t> id) {
+  find(id).save_resume_data(lt::torrent_handle::flush_disk_cache | lt::torrent_handle::save_info_dict |
+                            lt::torrent_handle::if_download_progress);
+}
+
 void Session::remove(rust::Slice<const std::uint8_t> id) { session_.remove_torrent(find(id)); }
 
 void Session::connect_peer(rust::Slice<const std::uint8_t> id, rust::Str address, std::uint16_t port) {
@@ -527,10 +532,13 @@ rust::Vec<AlertRecord> Session::wait_alerts(std::uint32_t timeout_ms) {
         r.bytes = to_vec(lt::write_resume_data_buf(lt::alert_cast<lt::save_resume_data_alert>(a)->params));
         keep = torrent_record(a, AlertKind::ResumeDataSaved, r);
         break;
-      case lt::save_resume_data_failed_alert::alert_type:
-        r.error = to_error(lt::alert_cast<lt::save_resume_data_failed_alert>(a)->error);
-        keep = torrent_record(a, AlertKind::ResumeDataFailed, r);
+      case lt::save_resume_data_failed_alert::alert_type: {
+        auto const& error = lt::alert_cast<lt::save_resume_data_failed_alert>(a)->error;
+        bool const unchanged = error == lt::errors::make_error_code(lt::errors::resume_data_not_modified);
+        r.error = to_error(error);
+        keep = torrent_record(a, unchanged ? AlertKind::ResumeDataUnchanged : AlertKind::ResumeDataFailed, r);
         break;
+      }
       case lt::torrent_error_alert::alert_type: {
         auto const* e = lt::alert_cast<lt::torrent_error_alert>(a);
         r.error = to_error(e->error);

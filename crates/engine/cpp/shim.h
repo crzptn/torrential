@@ -54,6 +54,7 @@ class Session {
   void force_recheck(rust::Slice<const std::uint8_t> id);
   void announce_to_dht(rust::Slice<const std::uint8_t> id);
   void save_resume_data(rust::Slice<const std::uint8_t> id);
+  void save_resume_data_if_progressed(rust::Slice<const std::uint8_t> id);
   void remove(rust::Slice<const std::uint8_t> id);
   void connect_peer(rust::Slice<const std::uint8_t> id, rust::Str address, std::uint16_t port);
   rust::Vec<std::uint8_t> metainfo(rust::Slice<const std::uint8_t> id) const;

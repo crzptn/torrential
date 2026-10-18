@@ -24,6 +24,8 @@ const RECONNECT: &str = "4m";
 struct Home {
     dir: tempfile::TempDir,
     seeder: SocketAddr,
+    /// `None` keeps the engine's own interval, which no test outlasts.
+    save_resume_every: Option<&'static str>,
 }
 
 struct Run {
@@ -34,7 +36,7 @@ struct Run {
 
 impl Home {
     fn new(seeder: &Seeder) -> Self {
-        Self { dir: tempfile::tempdir().unwrap(), seeder: seeder.addr }
+        Self { dir: tempfile::tempdir().unwrap(), seeder: seeder.addr, save_resume_every: None }
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -50,6 +52,9 @@ impl Home {
             .env("TORRENTIAL_TEST_PEERS", self.seeder.to_string())
             .env("TORRENTIAL_TEST_DISK", "roomy")
             .timeout(Duration::from_secs(300));
+        if let Some(every) = self.save_resume_every {
+            cmd.env("TORRENTIAL_TEST_SAVE_RESUME_EVERY", every);
+        }
         cmd
     }
 
@@ -88,6 +93,19 @@ impl Home {
 
     fn pid(&self) -> i32 {
         self.ok(&["daemon", "status"])["pid"].as_i64().expect("the engine runs") as i32
+    }
+
+    /// SIGKILL, so the engine saves nothing on the way out.
+    fn kill_engine(&self) {
+        let pid = self.pid();
+        // SAFETY: kill only sends a signal, and this pid is the engine this test started.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: signal 0 only checks that the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(Instant::now() < deadline, "the killed engine is still alive");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn logged_addrs(&self) -> Vec<SocketAddr> {
@@ -341,15 +359,7 @@ fn a_killed_engine_resumes_without_downloading_verified_pieces_again() {
     let before_kill = verified(&job);
     let addr = home.logged_addrs().pop().expect("the engine logged its listen address");
     std::thread::sleep(Duration::from_secs(1));
-    let pid = home.pid();
-    // SAFETY: kill only sends a signal, and this pid is the engine this test started.
-    unsafe { libc::kill(pid, libc::SIGKILL) };
-    let deadline = Instant::now() + Duration::from_secs(5);
-    // SAFETY: signal 0 only checks that the process exists.
-    while unsafe { libc::kill(pid, 0) } == 0 {
-        assert!(Instant::now() < deadline, "the killed engine is still alive");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    home.kill_engine();
     let sent_before_restart = seeder.uploaded();
 
     assert_eq!(state(&home.job(&fixture.id())), "interrupted");
@@ -366,6 +376,35 @@ fn a_killed_engine_resumes_without_downloading_verified_pieces_again() {
     for file in fixture.files.keys() {
         assert!(fixture.intact(&home, file), "{file} matches its source");
     }
+}
+
+#[test]
+fn a_killed_engine_trusts_its_last_periodic_save_instead_of_hashing_the_files() {
+    let fixture = Fixture::new("big", &BIG, 8);
+    let seeder = Seeder::start(&fixture, SLOW);
+    let mut home = Home::new(&seeder);
+    home.save_resume_every = Some("1s");
+    home.get(&fixture.torrent_file(), &[]);
+    home.until(&fixture.id(), "a third is verified", |j| verified(j) >= fixture.total() / 3);
+    drop(seeder);
+    std::thread::sleep(Duration::from_secs(3));
+    let saved = verified(&home.job(&fixture.id()));
+    home.kill_engine();
+    for file in fixture.files.keys() {
+        let path = fixture.downloaded(&home, file);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            std::fs::write(&path, vec![0; meta.len() as usize]).unwrap();
+        }
+    }
+
+    let job = home.job(&fixture.id());
+    assert_eq!((state(&job), verified(&job)), ("interrupted", saved), "the save outlived the engine");
+    assert_eq!(home.ok(&["resume", &fixture.short()])["changes"][0]["result"], "resumed");
+    home.until(&fixture.id(), "the engine has it again", |j| state(j) == "downloading");
+    let files = home.ok(&["files", &fixture.short()]);
+    let in_engine: u64 =
+        files["files"]["files"].as_array().unwrap().iter().map(|f| f["verified"].as_u64().unwrap()).sum();
+    assert_eq!(in_engine, saved, "the engine kept the saved pieces, which a hash of the zeroed files would reject");
 }
 
 #[test]

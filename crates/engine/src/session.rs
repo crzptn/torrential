@@ -116,6 +116,17 @@ impl Session {
         r.map_err(|e| with_id(e, id))
     }
 
+    /// Like `save_resume_data`, but only if the torrent downloaded or checked
+    /// data since its last save. Otherwise `Alert::ResumeDataUnchanged`
+    /// follows.
+    pub fn save_resume_data_if_progressed(&mut self, id: TorrentId) -> Result<(), EngineError> {
+        let r = self
+            .native
+            .pin_mut()
+            .save_resume_data_if_progressed(id.as_bytes());
+        r.map_err(|e| with_id(e, id))
+    }
+
     /// Removes the torrent and keeps its files. `Alert::TorrentRemoved`
     /// follows.
     pub fn remove(&mut self, id: TorrentId) -> Result<(), EngineError> {

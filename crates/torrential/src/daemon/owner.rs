@@ -29,6 +29,8 @@ pub struct OwnerConfig {
     /// `None` never exits when idle, for a service-managed engine.
     pub idle_timeout: Option<Duration>,
     pub resume_on_start: bool,
+    /// How often running downloads save resume data, so a crash costs this much progress, not a hash of every file.
+    pub save_resume_every: Duration,
 }
 
 /// How long pause and shutdown wait for the engine to confirm that writes stopped.
@@ -158,6 +160,7 @@ pub struct Owner {
     config: OwnerConfig,
     connections: usize,
     idle_since: Instant,
+    resume_saved_at: Instant,
 }
 
 pub fn now() -> i64 {
@@ -208,6 +211,7 @@ impl Owner {
             config,
             connections: 0,
             idle_since: Instant::now(),
+            resume_saved_at: Instant::now(),
         };
         owner.schedule();
         Ok(owner)
@@ -961,10 +965,16 @@ impl Owner {
     }
 
     fn resume_data(&mut self, id: TorrentId, data: Vec<u8>) {
-        if let Some(stopping) = &mut self.stopping {
+        let job = self.jobs.get(&id);
+        // A periodic save asked for before a pause can arrive after it began. Only the save that
+        // follows stopped writes is the last one.
+        let last = job.is_none_or(|j| {
+            matches!(j.observed, Observed::InEngine(Phase::Paused | Phase::Finishing { writes_stopped: true }))
+        });
+        if last && let Some(stopping) = &mut self.stopping {
             stopping.waiting.remove(&id);
         }
-        let Some(job) = self.jobs.get(&id) else { return };
+        let Some(job) = job else { return };
         let verified = job.verified();
         if job.observed == Observed::InEngine(Phase::Finishing { writes_stopped: true }) {
             let finished_at = now();
@@ -1101,6 +1111,19 @@ impl Owner {
         self.finish_pauses();
         self.finish_stop_if_done();
         self.check_idle(now);
+        self.save_progress(now);
+    }
+
+    fn save_progress(&mut self, now: Instant) {
+        if self.stopping.is_some() || now.duration_since(self.resume_saved_at) < self.config.save_resume_every {
+            return;
+        }
+        self.resume_saved_at = now;
+        for job in self.jobs.values() {
+            if job.record.intent == Intent::Running && job.observed == Observed::InEngine(Phase::Downloading) {
+                self.engine.send(EngineCommand::SaveResumeIfProgressed(job.id()));
+            }
+        }
     }
 
     fn busy(&self) -> bool {

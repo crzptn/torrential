@@ -145,6 +145,7 @@ pub(crate) mod ffi {
         StateChanged,
         ResumeDataSaved,
         ResumeDataFailed,
+        ResumeDataUnchanged,
         TorrentError,
         FileError,
         HashFailed,
@@ -213,6 +214,7 @@ pub(crate) mod ffi {
         fn force_recheck(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn announce_to_dht(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn save_resume_data(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
+        fn save_resume_data_if_progressed(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn remove(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn connect_peer(self: Pin<&mut Session>, id: &[u8], address: &str, port: u16)
         -> Result<()>;
@@ -511,6 +513,9 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
         K::ResumeDataFailed => Alert::ResumeDataFailed {
             torrent: torrent()?,
             error: required_error(r.error),
+        },
+        K::ResumeDataUnchanged => Alert::ResumeDataUnchanged {
+            torrent: torrent()?,
         },
         K::TorrentError => Alert::TorrentError {
             torrent: torrent()?,

@@ -46,6 +46,10 @@ pub enum Alert {
         torrent: InfoHash,
         error: NativeError,
     },
+    /// `Session::save_resume_data_if_progressed` found nothing new to save.
+    ResumeDataUnchanged {
+        torrent: InfoHash,
+    },
     /// The torrent stopped with an error, which `TorrentStatus::error` then
     /// reports.
     TorrentError {
@@ -99,6 +103,7 @@ impl Alert {
             | Alert::StateChanged { torrent, .. }
             | Alert::ResumeDataSaved { torrent, .. }
             | Alert::ResumeDataFailed { torrent, .. }
+            | Alert::ResumeDataUnchanged { torrent }
             | Alert::TorrentError { torrent, .. }
             | Alert::FileError { torrent, .. }
             | Alert::HashFailed { torrent, .. }

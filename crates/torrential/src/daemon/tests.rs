@@ -29,6 +29,7 @@ fn config(dir: &std::path::Path) -> OwnerConfig {
         max_active: super::MAX_ACTIVE,
         idle_timeout: None,
         resume_on_start: false,
+        save_resume_every: Duration::from_millis(100),
     }
 }
 

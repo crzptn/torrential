@@ -235,7 +235,14 @@ impl Libtorrent {
                     let _ = self.session.announce_to_dht(engine_id(id));
                 }
             }
-            (A::TorrentResumed { .. } | A::TorrentRemoved { .. } | A::HashFailed { .. } | A::SessionStats(_), _) => {}
+            (
+                A::TorrentResumed { .. }
+                | A::TorrentRemoved { .. }
+                | A::ResumeDataUnchanged { .. }
+                | A::HashFailed { .. }
+                | A::SessionStats(_),
+                _,
+            ) => {}
             (_, None) => {}
         }
     }
@@ -442,6 +449,10 @@ impl EnginePort for Libtorrent {
 
     fn save_resume_data(&mut self, id: TorrentId) -> Result<(), Error> {
         self.session.save_resume_data(engine_id(id)).map_err(engine_error)
+    }
+
+    fn save_resume_data_if_progressed(&mut self, id: TorrentId) -> Result<(), Error> {
+        self.session.save_resume_data_if_progressed(engine_id(id)).map_err(engine_error)
     }
 
     fn remove(&mut self, id: TorrentId) -> Result<(), Error> {

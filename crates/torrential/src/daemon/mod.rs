@@ -37,6 +37,7 @@ use server::{Ctx, OwnerHandle};
 use store::Store;
 
 const DEFAULT_IDLE: Duration = Duration::from_secs(120);
+const SAVE_RESUME_EVERY: Duration = Duration::from_secs(5 * 60);
 pub const MAX_ACTIVE: usize = 3;
 
 /// The pieces the engine process is built from, so tests can swap in fakes.
@@ -184,6 +185,10 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         .var("TORRENTIAL_TEST_IDLE_TIMEOUT")
         .and_then(torrential_core::units::parse_duration)
         .unwrap_or(DEFAULT_IDLE);
+    let save_resume_every = env
+        .var("TORRENTIAL_TEST_SAVE_RESUME_EVERY")
+        .and_then(torrential_core::units::parse_duration)
+        .unwrap_or(SAVE_RESUME_EVERY);
     let config = OwnerConfig {
         default_dir,
         probe_dir: paths.cache.join("probes"),
@@ -191,6 +196,7 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         idle_timeout: (!service).then_some(idle_timeout),
         // Seeded downloads start as if a service had restarted, not as interrupted ones.
         resume_on_start: service || seed,
+        save_resume_every,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

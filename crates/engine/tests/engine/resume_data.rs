@@ -73,6 +73,33 @@ fn resume_data_restarts_a_dropped_session_without_a_full_recheck() {
     }
 }
 
+#[test]
+fn a_save_if_progressed_skips_a_torrent_with_nothing_new() {
+    let fixture = Fixture::new("unchanged", &[("a.bin", 100_000)], 9);
+    let torrent = fixture.torrent(TorrentFormat::V1);
+    let mut node = Node::new(loopback());
+    let id = node.seed(&torrent, fixture.save_path());
+    let answer = |node: &mut Node| {
+        node.session.save_resume_data_if_progressed(id).unwrap();
+        node.wait_for("an answer", |a| {
+            matches!(
+                a,
+                Alert::ResumeDataSaved { .. } | Alert::ResumeDataUnchanged { .. }
+            )
+        })
+    };
+    assert!(
+        matches!(answer(&mut node), Alert::ResumeDataSaved { .. }),
+        "checking the files is progress"
+    );
+    assert_eq!(
+        answer(&mut node),
+        Alert::ResumeDataUnchanged {
+            torrent: torrent.info_hash()
+        }
+    );
+}
+
 /// Bytes in the pieces the resume data marks as on disk. libtorrent writes
 /// `pieces` as a bitfield, most significant bit first. It lists flushed
 /// pieces only, so it can trail the verified count in the status.
