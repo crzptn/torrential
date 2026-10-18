@@ -450,3 +450,33 @@ fn get_takes_its_size_cap_from_setup_unless_max_size_is_passed() {
     assert_eq!(allowed.code, 0, "{}", allowed.stderr);
     assert!(allowed.stdout.starts_with("started "), "{}", allowed.stdout);
 }
+
+#[test]
+fn get_max_size_raises_the_cap_of_a_magnet_that_stopped_over_it() {
+    let home = Home::with(&[("TORRENTIAL_TEST_ENGINE", "fake"), ("TORRENTIAL_TEST_FAKE_RATE", "100MiB")]);
+    assert_eq!(home.run(&["setup", "--max-size", "2GB"]).code, 0);
+    assert_eq!(home.run(&["search", "night", "of", "the", "living", "dead", "1968", "720p"]).code, 0);
+    let started = home.run(&["get", "2d9b6a", "--dir", &home.downloads()]);
+    assert!(started.stdout.starts_with("started 2d9b6a"), "{}", started.stdout);
+    let status = || home.run(&["status", "2d9b6a"]).stdout;
+    eventually("the file list arrives", Duration::from_secs(30), || status().contains("state:    error"));
+    let stopped = status();
+    let refusal = "the selection is 2.1 GiB, over the 2 GB cap from torrential setup";
+    let hint = "torrential get 2d9b6a --max-size 3GiB allows it, or pick fewer files with --files";
+    assert!(stopped.ends_with(&format!("error:    [too_large] {refusal}\n# hint: {hint}\n")), "{stopped}");
+
+    let resumed = home.run(&["resume", "2d9b6a"]);
+    assert_eq!((resumed.code, resumed.stderr), (7, format!("error[too_large]: {refusal}\nhint: {hint}\n")));
+    let raised = home.run(&["get", "2d9b6a", "--max-size", "4GiB"]);
+    let again = home.run(&["get", "2d9b6a", "--max-size", "4GiB"]);
+    let paused = home.run(&["pause", "2d9b6a"]);
+    let resumed = home.run(&["resume", "2d9b6a"]);
+
+    assert!(raised.stdout.starts_with("started 2d9b6a"), "{}{}", raised.stdout, raised.stderr);
+    assert!(again.stdout.starts_with("existing 2d9b6a"), "{}{}", again.stdout, again.stderr);
+    let name = "Night of the Living Dead 1968 720p WEB";
+    assert_eq!(paused.stdout, format!("ID\tRESULT\tNAME\n2d9b6a\tpaused\t{name}\nnext: torrential resume 2d9b6a\n"));
+    assert_eq!(resumed.stdout, format!("ID\tRESULT\tNAME\n2d9b6a\tresumed\t{name}\nnext: torrential wait 2d9b6a\n"));
+    let done = home.run(&["wait", "2d9b6a", "--timeout", "50s"]);
+    assert_eq!(done.code, 0, "{}{}", done.stdout, done.stderr);
+}

@@ -378,6 +378,28 @@ async fn get_runs_a_download_stopped_over_its_cap_once_it_fits() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn resume_leaves_a_download_over_its_cap_stopped() {
+    let h = Harness::new();
+    let film = over_its_setup_cap(&h, 41).await;
+    let iso = torrent(42, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    h.changes(Request::Pause { refs: vec![prefix(&iso)] }).await.unwrap();
+
+    let one = h.changes(Request::Resume { refs: vec![prefix(&film)], all: false }).await.unwrap_err();
+    let all = h.changes(Request::Resume { refs: Vec::new(), all: true }).await.unwrap();
+
+    assert_eq!(
+        (one.code, one.hint.as_deref()),
+        (
+            ErrorCode::TooLarge,
+            Some("torrential get 292929 --max-size 3GiB allows it, or pick fewer files with --files")
+        )
+    );
+    assert_eq!(all, [("2a2a2a".to_string(), "resumed".to_string())]);
+    assert_eq!(h.status().await[0].status.name(), "error");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn other_downloads_on_the_same_disk_count_against_free_space() {
     let h = Harness::new();
     h.disk.set_free(90 * GIB);

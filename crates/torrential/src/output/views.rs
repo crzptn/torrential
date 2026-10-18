@@ -6,7 +6,8 @@ use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
 use torrential_core::units::{format_limit, format_size, size_text};
 use torrential_core::{
-    Category, Job, JobStatus, Preferences, Release, ReleaseId, SearchResult, Selection, SourceOutcome, TorrentId,
+    Category, ErrorCode, Job, JobStatus, Preferences, Release, ReleaseId, SearchResult, Selection, SourceOutcome,
+    TorrentId,
 };
 
 use super::format::{self, NONE};
@@ -316,8 +317,10 @@ pub fn state_cell(status: &JobStatus) -> Cell {
     Cell::styled(status.name(), token)
 }
 
+/// `resume` refuses a download over its cap, and its error's hint names the `get` that raises it.
 fn next_for_stopped(status: &JobStatus, id: &str) -> Option<String> {
     match status {
+        JobStatus::Error { error } if error.code == ErrorCode::TooLarge => None,
         JobStatus::Paused | JobStatus::Interrupted | JobStatus::Error { .. } => Some(format!("torrential resume {id}")),
         _ => None,
     }
@@ -547,7 +550,8 @@ pub fn wait_end(end: &WaitEnd, elapsed: Duration, watched: &[Watched]) -> (Vec<S
         }
         WaitEnd::Failed { id } => {
             let mut lines = Vec::new();
-            if let Some(JobStatus::Error { error }) = find(id).map(|j| &j.status) {
+            let status = find(id).map(|j| &j.status);
+            if let Some(JobStatus::Error { error }) = status {
                 lines.push(format!(
                     "{id} stopped after {after} with error[{}]: {}",
                     error.code,
@@ -557,7 +561,7 @@ pub fn wait_end(end: &WaitEnd, elapsed: Duration, watched: &[Watched]) -> (Vec<S
                     lines.push(format!("hint: {hint}"));
                 }
             }
-            (lines, Some(format!("torrential resume {id}")))
+            (lines, status.and_then(|s| next_for_stopped(s, id)))
         }
         WaitEnd::Stopped { id } => {
             let state = find(id).map_or("stopped", |j| j.status.name());

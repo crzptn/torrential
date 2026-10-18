@@ -679,17 +679,22 @@ impl Owner {
     }
 
     fn resume(&mut self, refs: &[String], all: bool) -> Result<Vec<Change>, Error> {
+        let resumable = |j: &JobEntry| {
+            matches!(j.record.intent, Intent::Paused | Intent::Failed { .. })
+                || (j.record.intent == Intent::Running && j.observed == Observed::Parked)
+        };
+        // A download over its cap stays stopped until `get` raises the cap or picks fewer files.
+        let fits = |j: &JobEntry| {
+            j.selected_size().map_or(Ok(()), |size| admission::check_size(size, j.record.cap, Some(j.id())))
+        };
         let ids = if all {
-            self.jobs
-                .values()
-                .filter(|j| {
-                    matches!(j.record.intent, Intent::Paused | Intent::Failed { .. })
-                        || (j.record.intent == Intent::Running && j.observed == Observed::Parked)
-                })
-                .map(JobEntry::id)
-                .collect()
+            self.jobs.values().filter(|j| resumable(j) && fits(j).is_ok()).map(JobEntry::id).collect()
         } else {
-            self.resolve_jobs(refs, "resume")?
+            let ids = self.resolve_jobs(refs, "resume")?;
+            for job in ids.iter().map(|id| &self.jobs[id]).filter(|j| resumable(j)) {
+                fits(job)?;
+            }
+            ids
         };
         let mut changes = Vec::new();
         for id in ids {
