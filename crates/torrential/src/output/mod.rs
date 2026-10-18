@@ -49,21 +49,19 @@ pub struct Cell {
     pub token: Token,
 }
 
+/// A cell's text is sanitized when it is made, so no cell can add a column, a line, or a terminal
+/// escape, wherever its text came from: an indexer, a torrent, or a path.
 impl Cell {
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into(), token: Token::Text }
-    }
-
-    /// Text that came from an indexer or a torrent. It never reaches the terminal raw.
-    pub fn untrusted(text: &str) -> Self {
-        Self::new(sanitize(text))
+        Self::styled(text, Token::Text)
     }
 
     pub fn styled(text: impl Into<String>, token: Token) -> Self {
-        Self { text: text.into(), token }
+        Self { text: sanitize(&text.into()), token }
     }
 }
 
+/// Summary lines and the next command are sanitized here, as cells are when they are made.
 impl Doc {
     pub fn plain(&self) -> String {
         let mut out = String::new();
@@ -77,7 +75,7 @@ impl Doc {
                     push_line(&mut out, &cells.join("\t"));
                 }
                 self.push_summary(&mut out, |s| format!("# {s}"));
-                if let Some(next) = &self.next {
+                if let Some(next) = self.next() {
                     push_line(&mut out, &format!("next: {next}"));
                 }
             }
@@ -91,7 +89,7 @@ impl Doc {
                     push_line(&mut out, &format!("{:width$}{}", format!("{key}:"), value.text));
                 }
                 self.push_summary(&mut out, |s| format!("# {s}"));
-                if let Some(next) = &self.next {
+                if let Some(next) = self.next() {
                     push_line(&mut out, &format!("{:width$}{next}", "next:"));
                 }
             }
@@ -128,7 +126,7 @@ impl Doc {
             }
         }
         self.push_summary(&mut out, |s| paint(Token::Muted, s));
-        if let Some(next) = &self.next {
+        if let Some(next) = self.next() {
             push_line(&mut out, &paint(Token::Muted, &format!("next: {next}")));
         }
         out
@@ -136,8 +134,12 @@ impl Doc {
 
     fn push_summary(&self, out: &mut String, line: impl Fn(&str) -> String) {
         for s in &self.summary {
-            push_line(out, &line(s));
+            push_line(out, &line(&sanitize(s)));
         }
+    }
+
+    fn next(&self) -> Option<String> {
+        self.next.as_deref().map(sanitize)
     }
 }
 
@@ -235,7 +237,7 @@ fn error_text(error: &Error, color: bool) -> String {
         push_line(&mut out, &format!("  {line}"));
     }
     if let Some(hint) = &error.hint {
-        push_line(&mut out, &paint(Token::Muted, &format!("hint: {hint}")));
+        push_line(&mut out, &paint(Token::Muted, &format!("hint: {}", sanitize(hint))));
     }
     out
 }
@@ -297,5 +299,16 @@ mod tests {
         let out = error(Mode::Plain, &e);
         assert_eq!(out.stdout, "");
         assert_eq!(out.stderr, "error[not_found]: no download matches 9b52\nhint: torrential status\n");
+    }
+
+    #[test]
+    fn a_path_in_a_hint_stays_on_the_hint_line() {
+        let e = Error::new(ErrorCode::StorageError, "cannot write SKILL.md")
+            .with_hint("run it in a terminal: cd '/src/my\nrepo' && torrential skill install");
+        assert_eq!(
+            error(Mode::Plain, &e).stderr,
+            "error[storage_error]: cannot write SKILL.md\nhint: run it in a terminal: cd '/src/my repo' && torrential \
+             skill install\n"
+        );
     }
 }

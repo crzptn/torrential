@@ -779,3 +779,42 @@ fn skill_status_suggests_install_only_when_it_loses_no_edits() {
     );
     assert_eq!(skill_check(&edited), (check(CheckStatus::Warn, "agents modified, claude foreign"), None));
 }
+
+#[test]
+fn a_tab_in_a_path_stays_inside_its_column() {
+    use crate::skill::{self, AgentArg, Change as SkillChange, Installed, Scope, State, Target, TargetArgs};
+    let project = Path::new("/src/my\trepo");
+    let path = project.join(".agents/skills/torrential");
+    let install =
+        skill::command("install", &TargetArgs { agent: AgentArg::All, scope: Scope::Project }, false, project);
+    let installed = [Installed { target: Target::Agents, path: path.clone(), state: State::Missing, version: None }];
+    let changes = [SkillChange { target: Target::Agents, path, result: "installed" }];
+    let report = DaemonReport {
+        engine: "stopped",
+        pid: None,
+        version: None,
+        socket: "/run/my\ttorrential/engine.sock".into(),
+        log: "/state/my\ntorrential/engine.log".into(),
+        downloads: None,
+    };
+    let named = job("9b5212", Some("arch\tlinux.iso"), JobStatus::Paused, Progress::default());
+
+    assert_eq!(
+        skill_status(&installed, "0.1.0", &install).plain(),
+        "TARGET\tSTATE\tVERSION\tPATH\n\
+         agents\tmissing\t-\t/src/my repo/.agents/skills/torrential\n\
+         # this binary carries the skill from torrential 0.1.0\n\
+         next: cd '/src/my repo' && torrential skill install --scope project\n"
+    );
+    assert_eq!(
+        skill_changes(&changes).plain(),
+        "TARGET\tRESULT\tPATH\nagents\tinstalled\t/src/my repo/.agents/skills/torrential\n"
+    );
+    assert_eq!(
+        daemon_status(&report).plain(),
+        "engine: stopped\nsocket: /run/my torrential/engine.sock\nlog:    /state/my torrential/engine.log\n"
+    );
+    // `wait` prints its rows without a doc.
+    let row: Vec<String> = wait_row(Duration::from_secs(3), "9b5212", &named).into_iter().map(|c| c.text).collect();
+    assert_eq!(row.join("\t"), "3s\t9b5212\tpaused\t-\t-\t-\t-\t-\tarch linux.iso");
+}

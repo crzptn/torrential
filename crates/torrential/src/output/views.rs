@@ -100,7 +100,7 @@ pub fn search(result: &SearchResult, now: i64) -> Doc {
                 } else {
                     Cell::styled(flags.join(","), Token::Mint)
                 },
-                Cell::untrusted(&r.name),
+                Cell::new(&r.name),
             ]);
             row
         })
@@ -183,7 +183,7 @@ pub fn files(reply: &FilesReply) -> Doc {
                     ..Default::default()
                 }),
             };
-            let mut row = vec![Cell::new(format_size(f.size)), Cell::new(done), Cell::untrusted(&f.path)];
+            let mut row = vec![Cell::new(format_size(f.size)), Cell::new(done), Cell::new(&f.path)];
             if risky {
                 row.push(match f.risk {
                     Some(_) => Cell::styled("executable", Token::Error),
@@ -249,7 +249,7 @@ pub fn get(reply: &GetReply, dir: Option<&Path>) -> Doc {
     };
     let mut title = vec![Cell::styled(word, token), Cell::styled(id.clone(), Token::Accent)];
     if let Some(name) = &job.name {
-        title.push(Cell::untrusted(name));
+        title.push(Cell::new(name));
     }
     let mut fields = Vec::new();
     if reply.outcome != GetOutcome::Planned {
@@ -271,7 +271,7 @@ pub fn get(reply: &GetReply, dir: Option<&Path>) -> Doc {
         fields.push(("was", Cell::new(selection(previous))));
     }
     let path = job.path.as_deref().unwrap_or(&job.dir);
-    fields.push(("path", Cell::untrusted(&path.display().to_string())));
+    fields.push(("path", Cell::new(path.display().to_string())));
     let mut summary = Vec::new();
     if reply.outcome == GetOutcome::Planned
         && let Some(plan) = &reply.plan
@@ -343,7 +343,7 @@ pub fn job_row(id: &str, job: &Job) -> Vec<Cell> {
         Cell::new(if active { format::rate(job.progress.down_rate) } else { NONE.to_string() }),
         Cell::new(if active { job.progress.peers.to_string() } else { NONE.to_string() }),
         Cell::new(if active { format::eta(job.progress.eta) } else { NONE.to_string() }),
-        job.name.as_deref().map_or_else(|| Cell::styled(format::UNKNOWN, Token::Muted), Cell::untrusted),
+        job.name.as_deref().map_or_else(|| Cell::styled(format::UNKNOWN, Token::Muted), Cell::new),
     ]
 }
 
@@ -393,7 +393,7 @@ pub fn job(job: &Job) -> Doc {
     let p = &job.progress;
     let mut fields = vec![
         ("id", Cell::styled(job.id.to_hex(), Token::Accent)),
-        ("name", job.name.as_deref().map_or_else(|| Cell::styled(format::UNKNOWN, Token::Muted), Cell::untrusted)),
+        ("name", job.name.as_deref().map_or_else(|| Cell::styled(format::UNKNOWN, Token::Muted), Cell::new)),
         ("state", state_cell(&job.status)),
     ];
     let progress = match p.size {
@@ -410,7 +410,7 @@ pub fn job(job: &Job) -> Doc {
     }
     fields.push(("files", Cell::new(selection(&job.selection))));
     let path = job.path.as_deref().unwrap_or(&job.dir);
-    fields.push(("path", Cell::untrusted(&path.display().to_string())));
+    fields.push(("path", Cell::new(path.display().to_string())));
     fields.push(("added", Cell::new(format::timestamp(job.added_at))));
     let mut summary = Vec::new();
     match &job.status {
@@ -451,9 +451,9 @@ pub fn changes(command: ChangeCommand, changes: &[Change]) -> Doc {
             let last = match command {
                 ChangeCommand::Remove => c.path.as_ref().map_or_else(
                     || Cell::styled(format::UNKNOWN, Token::Muted),
-                    |p| Cell::untrusted(&p.display().to_string()),
+                    |p| Cell::new(p.display().to_string()),
                 ),
-                _ => c.name.as_deref().map_or_else(|| Cell::styled(format::UNKNOWN, Token::Muted), Cell::untrusted),
+                _ => c.name.as_deref().map_or_else(|| Cell::styled(format::UNKNOWN, Token::Muted), Cell::new),
             };
             vec![Cell::styled(id.clone(), Token::Accent), Cell::styled(c.result.clone(), Token::Mint), last]
         })
