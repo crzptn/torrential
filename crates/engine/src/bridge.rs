@@ -243,7 +243,10 @@ pub(crate) fn info_hash(h: &ffi::Hashes) -> Result<InfoHash, EngineError> {
             v1: InfoHashV1::from_bytes(h.v1),
             v2: InfoHashV2::from_bytes(h.v2),
         }),
-        (false, false) => Err(EngineError::new(ErrorKind::Native, "record has no info hash")),
+        (false, false) => Err(EngineError::new(
+            ErrorKind::Native,
+            "record has no info hash",
+        )),
     }
 }
 
@@ -363,8 +366,16 @@ fn rate_limit(value: u32) -> i32 {
 pub(crate) fn add_params(add: &AddTorrent) -> Result<ffi::AddParams, EngineError> {
     let (source, magnet, bytes) = match &add.source {
         TorrentSource::Magnet(m) => (ffi::SourceKind::Magnet, m.as_str().to_owned(), Vec::new()),
-        TorrentSource::Metainfo(m) => (ffi::SourceKind::Metainfo, String::new(), m.as_bytes().to_vec()),
-        TorrentSource::Resume(r) => (ffi::SourceKind::Resume, String::new(), r.as_bytes().to_vec()),
+        TorrentSource::Metainfo(m) => (
+            ffi::SourceKind::Metainfo,
+            String::new(),
+            m.as_bytes().to_vec(),
+        ),
+        TorrentSource::Resume(r) => (
+            ffi::SourceKind::Resume,
+            String::new(),
+            r.as_bytes().to_vec(),
+        ),
     };
     let (all_files, selected) = match &add.files {
         FileSelection::All => (true, Vec::new()),
@@ -443,15 +454,25 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
     use ffi::AlertKind as K;
     let torrent = || info_hash(&r.hashes);
     Ok(match r.kind {
-        K::MetadataReceived => Alert::MetadataReceived { torrent: torrent()? },
+        K::MetadataReceived => Alert::MetadataReceived {
+            torrent: torrent()?,
+        },
         K::MetadataFailed => Alert::MetadataFailed {
             torrent: torrent()?,
             error: required_error(r.error),
         },
-        K::TorrentFinished => Alert::TorrentFinished { torrent: torrent()? },
-        K::TorrentPaused => Alert::TorrentPaused { torrent: torrent()? },
-        K::TorrentResumed => Alert::TorrentResumed { torrent: torrent()? },
-        K::TorrentChecked => Alert::TorrentChecked { torrent: torrent()? },
+        K::TorrentFinished => Alert::TorrentFinished {
+            torrent: torrent()?,
+        },
+        K::TorrentPaused => Alert::TorrentPaused {
+            torrent: torrent()?,
+        },
+        K::TorrentResumed => Alert::TorrentResumed {
+            torrent: torrent()?,
+        },
+        K::TorrentChecked => Alert::TorrentChecked {
+            torrent: torrent()?,
+        },
         K::StateChanged => Alert::StateChanged {
             torrent: torrent()?,
             from: state(r.from)?,
@@ -484,9 +505,13 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
             piece: u32::try_from(r.piece)
                 .map_err(|_| EngineError::new(ErrorKind::Native, "negative piece index"))?,
         },
-        K::TorrentRemoved => Alert::TorrentRemoved { torrent: torrent()? },
+        K::TorrentRemoved => Alert::TorrentRemoved {
+            torrent: torrent()?,
+        },
         K::FilePriorities => match native_error(r.error) {
-            None => Alert::FilePrioritiesApplied { torrent: torrent()? },
+            None => Alert::FilePrioritiesApplied {
+                torrent: torrent()?,
+            },
             Some(error) => Alert::FilePrioritiesFailed {
                 torrent: torrent()?,
                 error,
@@ -520,7 +545,15 @@ fn ip(address: &str) -> Result<IpAddr, EngineError> {
 
 /// The order matches `stats_metrics` in the shim.
 fn session_stats(values: &[i64]) -> Result<SessionStats, EngineError> {
-    let &[sent_payload, received_payload, sent, received, dht_nodes, peers] = values else {
+    let &[
+        sent_payload,
+        received_payload,
+        sent,
+        received,
+        dht_nodes,
+        peers,
+    ] = values
+    else {
         return Err(EngineError::new(
             ErrorKind::Native,
             format!("expected 6 session counters, got {}", values.len()),

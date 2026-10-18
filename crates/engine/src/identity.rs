@@ -117,7 +117,10 @@ mod tests {
         v2_bytes[20..].copy_from_slice(&[0x22; 12]);
         let v2 = InfoHashV2::from_bytes(v2_bytes);
 
-        assert_eq!(InfoHash::Hybrid { v1, v2 }.id(), TorrentId::from_bytes([0xab; 20]));
+        assert_eq!(
+            InfoHash::Hybrid { v1, v2 }.id(),
+            TorrentId::from_bytes([0xab; 20])
+        );
         assert_eq!(InfoHash::V2(v2).id(), TorrentId::from_bytes([0x11; 20]));
         assert_eq!(
             InfoHash::V1(v1).id().to_string(),

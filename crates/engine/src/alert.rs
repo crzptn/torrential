@@ -10,27 +10,72 @@ use crate::torrent::{ResumeData, TorrentState};
 /// magnet's metadata arrives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Alert {
-    MetadataReceived { torrent: InfoHash },
-    MetadataFailed { torrent: InfoHash, error: NativeError },
+    MetadataReceived {
+        torrent: InfoHash,
+    },
+    MetadataFailed {
+        torrent: InfoHash,
+        error: NativeError,
+    },
     /// Every selected piece passed its hash check.
-    TorrentFinished { torrent: InfoHash },
+    TorrentFinished {
+        torrent: InfoHash,
+    },
     /// Outstanding disk writes completed and the torrent's files are closed.
-    TorrentPaused { torrent: InfoHash },
-    TorrentResumed { torrent: InfoHash },
+    TorrentPaused {
+        torrent: InfoHash,
+    },
+    TorrentResumed {
+        torrent: InfoHash,
+    },
     /// A file check, from adding the torrent or `force_recheck`, completed.
-    TorrentChecked { torrent: InfoHash },
-    StateChanged { torrent: InfoHash, from: TorrentState, to: TorrentState },
-    ResumeDataSaved { torrent: InfoHash, data: ResumeData },
-    ResumeDataFailed { torrent: InfoHash, error: NativeError },
+    TorrentChecked {
+        torrent: InfoHash,
+    },
+    StateChanged {
+        torrent: InfoHash,
+        from: TorrentState,
+        to: TorrentState,
+    },
+    ResumeDataSaved {
+        torrent: InfoHash,
+        data: ResumeData,
+    },
+    ResumeDataFailed {
+        torrent: InfoHash,
+        error: NativeError,
+    },
     /// The torrent stopped with an error. libtorrent pauses it.
-    TorrentError { torrent: InfoHash, file: Option<PathBuf>, error: NativeError },
-    FileError { torrent: InfoHash, file: PathBuf, operation: String, error: NativeError },
+    TorrentError {
+        torrent: InfoHash,
+        file: Option<PathBuf>,
+        error: NativeError,
+    },
+    FileError {
+        torrent: InfoHash,
+        file: PathBuf,
+        operation: String,
+        error: NativeError,
+    },
     /// A downloaded piece failed its hash check and will be downloaded again.
-    HashFailed { torrent: InfoHash, piece: u32 },
-    TorrentRemoved { torrent: InfoHash },
-    FilePrioritiesApplied { torrent: InfoHash },
-    FilePrioritiesFailed { torrent: InfoHash, error: NativeError },
-    ListenSucceeded { address: SocketAddr, transport: Transport },
+    HashFailed {
+        torrent: InfoHash,
+        piece: u32,
+    },
+    TorrentRemoved {
+        torrent: InfoHash,
+    },
+    FilePrioritiesApplied {
+        torrent: InfoHash,
+    },
+    FilePrioritiesFailed {
+        torrent: InfoHash,
+        error: NativeError,
+    },
+    ListenSucceeded {
+        address: SocketAddr,
+        transport: Transport,
+    },
     ListenFailed {
         /// The interface as written in `Config::listen`.
         interface: String,
