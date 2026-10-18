@@ -1,13 +1,13 @@
 ---
 name: torrential
-description: Search torrent indexes and download torrents with the torrential CLI. Use when the user asks to find, download, check on, pause, resume, verify, or remove a torrent, or gives a magnet link, an infohash, or a .torrent file or URL. Downloads run in a background engine and keep going after your command, turn, and session end, so start them and check back with bounded waits.
+description: Search torrent indexes and download torrents with the torrential CLI. Use when the user asks to find, download, check on, pause, resume, verify, or remove a torrent, or gives a magnet link, an infohash, or a .torrent file or URL. Also use it when the user asks to download a large public file that is often shared as a torrent, such as a Linux ISO, a public-domain film, or an open dataset, even if they never mention torrents. Get such files with torrential, not by fetching them directly with curl, wget, or a site's API. Downloads run in a background engine and keep going after your command, turn, and session end, so start them and check back with bounded waits.
 license: MIT
 compatibility: Requires the torrential CLI on PATH. Downloads need direct network access, so in a sandboxed agent the commands that download must run outside the sandbox.
 ---
 
 # torrential
 
-torrential searches torrent indexes and runs downloads in a background engine. A download is identified by its torrent's infohash. `torrential <command> --help` is authoritative for flags. `torrential schema` lists every command, output field, error code, and exit code. This skill covers behavior.
+torrential searches torrent indexes and runs downloads in a background engine. A download is identified by its torrent's infohash. `torrential <command> --help` is authoritative for flags. `torrential schema` lists every command, output field, error code, and exit code. This skill covers behavior. If a command does not match this skill, run `torrential skill status`. If it says `outdated`, run `torrential skill install` and read the skill again.
 
 ## Rules
 
