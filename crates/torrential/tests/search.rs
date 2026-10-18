@@ -495,3 +495,61 @@ fn files_on_an_archive_org_result_reads_its_torrent_url_not_the_bare_magnet() {
     );
     assert!(took < Duration::from_secs(15), "took {took:?}");
 }
+
+#[test]
+fn setup_answers_rank_a_film_search_and_say_so() {
+    let server = Server::start(|_| {
+        vec![(
+            "/archive.org/advancedsearch.php",
+            vec![ok(fixture("archive.org/advancedsearch.php-night-of-the-living-dead-1968.json"))],
+        )]
+    });
+    let home = Home::new(&server, &["archive.org"], "");
+    let search = ["search", "night", "of", "the", "living", "dead", "1968", "--category", "video", "--limit", "6"];
+    // The SIZE, QUALITY when shown, and NAME columns, then the summary lines after the first.
+    let shown = |run: &Run| -> Vec<String> {
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let lines: Vec<&str> = run.stdout.lines().collect();
+        let header: Vec<&str> = lines[0].split('\t').collect();
+        let columns: Vec<usize> =
+            ["SIZE", "QUALITY", "NAME"].iter().filter_map(|c| header.iter().position(|h| h == c)).collect();
+        let rows = lines.iter().take_while(|l| !l.starts_with('#')).map(|l| {
+            let cells: Vec<&str> = l.split('\t').collect();
+            columns.iter().map(|i| cells[*i]).collect::<Vec<_>>().join(" | ")
+        });
+        let summary = lines.iter().filter(|l| l.starts_with('#')).skip(1).map(|l| l.to_string());
+        rows.chain(summary).collect()
+    };
+
+    let before = home.run(&search);
+    assert_eq!(home.run(&["setup", "--screen", "laptop", "--max-size", "2GB", "--playback", "h264"]).code, 0);
+    let after = home.run(&search);
+
+    assert_eq!(
+        shown(&before),
+        [
+            "SIZE | NAME",
+            "1.1 GiB | Night of the Living Dead (1968)",
+            "1.1 GiB | Night of the Living Dead (1968)",
+            "528.0 MiB | Night of the Living Dead (1968)",
+            "1.8 GiB | Night of the Living Dead (1968)",
+            "3.5 GiB | Night Of The Living Dead ( 1968)",
+            "742.1 MiB | Night Of The Living Dead ( 1968)",
+            "# preferences: not set · torrential setup",
+        ]
+    );
+    // Trailers tagged 1080p and 720p stay below the film.
+    assert_eq!(
+        shown(&after),
+        [
+            "SIZE | QUALITY | NAME",
+            "8.3 MiB | 1080p | Night of the Living Dead |1968| WebRip US (HD 1080p)",
+            "1.0 GiB | 720p | Night Of The Living Dead 720p 1968",
+            "1.1 GiB | - | Night of the Living Dead (1968)",
+            "1.1 GiB | - | Night of the Living Dead (1968)",
+            "528.0 MiB | - | Night of the Living Dead (1968)",
+            "1.8 GiB | - | Night of the Living Dead (1968)",
+            "# ranked for a laptop or monitor, up to 2 GB, avoids HEVC and HDR",
+        ]
+    );
+}

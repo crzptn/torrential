@@ -433,6 +433,21 @@ fn every_answer_together_ranks_fit_then_lawful_then_screen() {
 }
 
 #[test]
+fn a_tagged_trailer_ranks_after_the_film_on_a_screen() {
+    let film = with(row(&h(0x20), "Night of the Living Dead 1968"), Some(40), Some(GB), None);
+    let trailer = with(row(&h(0x21), "Night of the Living Dead 1968 Trailer HD 1080p"), Some(40), Some(GB / 10), None);
+    let runs = [fresh(&knaben(), vec![trailer, film])];
+    let laptop = Preferences { screen: Some(Screen::Laptop), ..Preferences::default() };
+    let ranked = |preferences| {
+        let q = SearchQuery { preferences, ..SearchQuery::new("night of the living dead 1968") };
+        names(&search(&q, &runs)).iter().map(|n| n.to_string()).collect::<Vec<_>>()
+    };
+    let film_first = ["Night of the Living Dead 1968", "Night of the Living Dead 1968 Trailer HD 1080p"];
+    assert_eq!(ranked(None), film_first);
+    assert_eq!(ranked(Some(laptop)), film_first);
+}
+
+#[test]
 fn alternate_sorts_keep_the_same_tie_breaks() {
     let sorted = |sort| {
         let mut q = SearchQuery::new("night of the living dead 1968");

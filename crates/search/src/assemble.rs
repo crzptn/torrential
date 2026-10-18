@@ -116,6 +116,8 @@ pub(crate) struct Candidate {
     lawful: bool,
     /// Read from the shown name, so ranking and output agree.
     quality: Quality,
+    /// A trailer or sample, whose resolution ranks as unknown.
+    extra: bool,
 }
 
 impl Candidate {
@@ -204,6 +206,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     let relevance = group.iter().map(|(_, o)| terms.relevance(o.name())).max().unwrap_or(terms.relevance(""));
     let extra_words = terms.extra_words(&name);
     let quality = Quality::parse(&name);
+    let extra = classify::is_extra(&name, terms);
     Candidate {
         hash,
         private_url: link.is_some_and(|(_, private, _)| private),
@@ -227,6 +230,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
         downloads: group.iter().filter_map(|(_, o)| o.downloads).max(),
         lawful: group.iter().any(|(s, _)| s.lawful),
         quality,
+        extra,
     }
 }
 
@@ -268,14 +272,14 @@ fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) 
 
 /// One total order. `relevance` sorts by query relevance, then releases that fit the
 /// user's preferences, then official and lawful sources, then resolution closest to
-/// the user's screen, then seeders, then names with fewer words beyond the query, then
+/// the user's screen, with a trailer's resolution unknown, then seeders, then names with fewer words beyond the query, then
 /// downloads, then newer names, then ID. Without preferences every release fits and
 /// every resolution is as close. A bigger file is no closer a match, so size never
 /// breaks a tie. The other sorts put their key first and fall back to that order.
 /// Unknown values sort last.
 fn rank(candidates: &mut [Candidate], sort: Sort, preferences: Preferences) {
     let fits = |c: &Candidate| preferences.fits(c.release.size, c.quality);
-    let closeness = |c: &Candidate| preferences.closeness(c.quality.resolution);
+    let closeness = |c: &Candidate| preferences.closeness(c.quality.resolution.filter(|_| !c.extra));
     candidates.sort_by(|a, b| {
         let (ra, rb) = (&a.release, &b.release);
         let primary = match sort {

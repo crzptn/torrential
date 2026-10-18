@@ -1,5 +1,7 @@
 use torrential_core::Category;
 
+use crate::terms::Terms;
+
 /// No ordinary title contains these, so any case counts.
 const CAM_ANY_CASE: &[&str] = &["hdcam", "camrip", "hdcamrip", "telesync", "telecine", "hdts", "hdtc"];
 /// Short tokens that collide with ordinary words ("Cam Newton", "TS Eliot") and file
@@ -50,6 +52,15 @@ pub(crate) fn is_cam(name: &str, category: Option<Category>) -> bool {
     false
 }
 
+/// A trailer, teaser, or sample that the query does not ask for, so its resolution says
+/// nothing about a copy of the film.
+pub(crate) fn is_extra(name: &str, terms: &Terms) -> bool {
+    const EXTRAS: [&str; 4] = ["trailer", "trailers", "teaser", "sample"];
+    name.split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .any(|t| EXTRAS.contains(&t.as_str()) && !terms.words().contains(&t))
+}
+
 pub(crate) fn is_adult(name: &str) -> bool {
     name.split(|c: char| !c.is_alphanumeric()).any(|t| ADULT.contains(&t.to_lowercase().as_str()))
 }
@@ -75,6 +86,15 @@ mod tests {
         assert!(!is_cam("Learn TS 2024 Edition", Some(Category::Book)));
         assert!(!is_cam("Webcam Recorder 2024 ts", None));
         assert!(!is_cam("ubuntu-24.04.5.1-desktop-amd64.iso", Some(Category::Software)));
+    }
+
+    #[test]
+    fn spots_trailers_the_query_does_not_ask_for() {
+        let film = Terms::parse("night of the living dead 1968");
+        assert!(is_extra("Night Of The Living Dead (1968) Trailer HD 1080p", &film));
+        assert!(is_extra("Night.of.the.Living.Dead.1968.1080p.BluRay.x264-GRP.sample", &film));
+        assert!(!is_extra("Night Of The Living Dead 720p 1968", &film));
+        assert!(!is_extra("Trailer Park Boys S01 1080p", &Terms::parse("trailer park boys")));
     }
 
     #[test]
