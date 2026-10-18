@@ -1,0 +1,570 @@
+//! The SQLite store. Only the owner task holds it, so it is the only writer. Rows decode
+//! into domain types here and nowhere else.
+
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
+
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use torrential_core::{Error, ErrorCode, InfoHash, Release, Selection, TorrentId};
+
+use super::book::{Intent, JobRecord};
+
+/// Each entry upgrades the schema by one version. Never edit a shipped entry.
+const MIGRATIONS: &[&str] = &[r#"
+CREATE TABLE jobs (
+    id TEXT PRIMARY KEY,
+    info_hash TEXT NOT NULL,
+    name TEXT,
+    dir BLOB NOT NULL,
+    selection TEXT NOT NULL,
+    max_size INTEGER NOT NULL,
+    magnet TEXT,
+    intent TEXT NOT NULL CHECK (intent IN ('running', 'paused', 'done', 'failed')),
+    finished_at INTEGER,
+    error TEXT,
+    added_at INTEGER NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0,
+    CHECK ((intent = 'done') = (finished_at IS NOT NULL)),
+    CHECK ((intent = 'failed') = (error IS NOT NULL))
+) STRICT;
+CREATE TABLE aliases (
+    hash TEXT PRIMARY KEY,
+    job TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE metainfo (
+    id TEXT PRIMARY KEY,
+    bytes BLOB NOT NULL,
+    saved_at INTEGER NOT NULL
+) STRICT;
+CREATE TABLE resume (
+    job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+    bytes BLOB NOT NULL,
+    saved_at INTEGER NOT NULL
+) STRICT;
+CREATE TABLE tombstones (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    path BLOB,
+    removed_at INTEGER NOT NULL
+) STRICT;
+CREATE TABLE results (
+    id TEXT PRIMARY KEY,
+    release TEXT NOT NULL,
+    seen_at INTEGER NOT NULL
+) STRICT;
+"#];
+
+/// A removed download, remembered briefly so a repeated `rm` reports `already_removed`.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Tombstone {
+    pub id: TorrentId,
+    pub name: Option<String>,
+    pub path: Option<PathBuf>,
+    pub removed_at: i64,
+}
+
+pub const TOMBSTONE_SECS: i64 = 86_400;
+pub const RESULTS_SECS: i64 = 7 * 86_400;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct StoredJob {
+    pub record: JobRecord,
+    pub metainfo: Option<Vec<u8>>,
+}
+
+pub struct Store {
+    conn: Connection,
+    path: PathBuf,
+}
+
+impl Store {
+    pub fn open(path: &Path) -> Result<Self, Error> {
+        let existed = path.exists();
+        let conn = Connection::open(path).map_err(|e| corrupt(path, &e.to_string()))?;
+        let store = Self { conn, path: path.to_path_buf() };
+        store.configure()?;
+        if existed {
+            let check: String =
+                store.conn.query_row("PRAGMA quick_check", [], |r| r.get(0)).map_err(|e| store.fail(e))?;
+            if check != "ok" {
+                return Err(corrupt(path, &check));
+            }
+        }
+        store.migrate(MIGRATIONS)?;
+        Ok(store)
+    }
+
+    fn configure(&self) -> Result<(), Error> {
+        let mode: String =
+            self.conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0)).map_err(|e| self.fail(e))?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            return Err(corrupt(&self.path, &format!("SQLite refused WAL mode and stayed in {mode}")));
+        }
+        self.conn.execute_batch("PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;").map_err(|e| self.fail(e))?;
+        self.conn.busy_timeout(std::time::Duration::from_secs(1)).map_err(|e| self.fail(e))
+    }
+
+    fn migrate(&self, migrations: &[&str]) -> Result<(), Error> {
+        let version: i64 = self.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(|e| self.fail(e))?;
+        let version =
+            usize::try_from(version).map_err(|_| corrupt(&self.path, &format!("it has schema version {version}")))?;
+        if version > migrations.len() {
+            return Err(corrupt(
+                &self.path,
+                &format!("it has schema version {version}, written by a newer torrential"),
+            ));
+        }
+        if version == migrations.len() {
+            return Ok(());
+        }
+        if version > 0 {
+            let backup = self.path.with_extension(format!("v{version}.bak"));
+            let _ = std::fs::remove_file(&backup);
+            self.conn
+                .execute("VACUUM INTO ?1", [backup.to_string_lossy()])
+                .map_err(|e| corrupt(&self.path, &format!("backup before migrating failed: {e}")))?;
+        }
+        let tx = self.conn.unchecked_transaction().map_err(|e| self.fail(e))?;
+        for migration in &migrations[version..] {
+            tx.execute_batch(migration).map_err(|e| corrupt(&self.path, &format!("migration failed: {e}")))?;
+        }
+        tx.pragma_update(None, "user_version", migrations.len() as i64).map_err(|e| self.fail(e))?;
+        tx.commit().map_err(|e| self.fail(e))
+    }
+
+    fn fail(&self, e: rusqlite::Error) -> Error {
+        sql_error(&self.path, e)
+    }
+
+    fn write<T>(&mut self, f: impl FnOnce(&Transaction) -> rusqlite::Result<T>) -> Result<T, Error> {
+        let Self { conn, path } = self;
+        let tx = conn.transaction().map_err(|e| sql_error(path, e))?;
+        let value = f(&tx).map_err(|e| sql_error(path, e))?;
+        tx.commit().map_err(|e| sql_error(path, e))?;
+        Ok(value)
+    }
+
+    pub fn jobs(&self) -> Result<Vec<StoredJob>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT j.id, j.info_hash, j.name, j.dir, j.selection, j.max_size, j.magnet, j.intent, j.finished_at, \
+                 j.error, j.added_at, j.verified, m.bytes FROM jobs j LEFT JOIN metainfo m ON m.id = j.id ORDER BY j.added_at",
+            )
+            .map_err(|e| self.fail(e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, Option<i64>>(8)?,
+                    r.get::<_, Option<String>>(9)?,
+                    r.get::<_, i64>(10)?,
+                    r.get::<_, i64>(11)?,
+                    r.get::<_, Option<Vec<u8>>>(12)?,
+                ))
+            })
+            .map_err(|e| self.fail(e))?;
+        let mut jobs = Vec::new();
+        for row in rows {
+            let (
+                id,
+                hash,
+                name,
+                dir,
+                selection,
+                max_size,
+                magnet,
+                intent,
+                finished_at,
+                error,
+                added_at,
+                verified,
+                bytes,
+            ) = row.map_err(|e| self.fail(e))?;
+            let bad = |what: &str| corrupt(&self.path, &format!("job {id} has an unreadable {what}"));
+            let intent = match (intent.as_str(), finished_at, error) {
+                ("running", None, None) => Intent::Running,
+                ("paused", None, None) => Intent::Paused,
+                ("done", Some(finished_at), None) => Intent::Done { finished_at },
+                ("failed", None, Some(error)) => {
+                    Intent::Failed { error: serde_json::from_str(&error).map_err(|_| bad("error"))? }
+                }
+                _ => return Err(bad("intent")),
+            };
+            let record = JobRecord {
+                id: id.parse().map_err(|_| bad("id"))?,
+                info_hash: serde_json::from_str(&hash).map_err(|_| bad("info hash"))?,
+                name,
+                dir: PathBuf::from(std::ffi::OsString::from_vec(dir)),
+                selection: serde_json::from_str::<Selection>(&selection).map_err(|_| bad("selection"))?,
+                max_size: max_size as u64,
+                magnet,
+                added_at,
+                intent,
+                verified: verified as u64,
+            };
+            jobs.push(StoredJob { record, metainfo: bytes });
+        }
+        Ok(jobs)
+    }
+
+    pub fn insert(&mut self, record: &JobRecord, metainfo: Option<&[u8]>, now: i64) -> Result<(), Error> {
+        let (intent, finished_at, error) = intent_columns(&record.intent);
+        self.write(|tx| {
+            tx.execute(
+                "INSERT INTO jobs (id, info_hash, name, dir, selection, max_size, magnet, intent, finished_at, error, added_at, verified) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    record.id.to_hex(),
+                    json(&record.info_hash),
+                    record.name,
+                    record.dir.as_os_str().as_bytes(),
+                    json(&record.selection),
+                    record.max_size as i64,
+                    record.magnet,
+                    intent,
+                    finished_at,
+                    error,
+                    record.added_at,
+                    record.verified as i64,
+                ],
+            )?;
+            insert_aliases(tx, record.id, &record.info_hash)?;
+            if let Some(bytes) = metainfo {
+                upsert_metainfo(tx, record.id, bytes, now)?;
+            }
+            tx.execute("DELETE FROM tombstones WHERE id = ?1", [record.id.to_hex()])?;
+            Ok(())
+        })
+    }
+
+    pub fn set_intent(&mut self, id: TorrentId, intent: &Intent) -> Result<(), Error> {
+        let (intent, finished_at, error) = intent_columns(intent);
+        self.write(|tx| {
+            tx.execute(
+                "UPDATE jobs SET intent = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
+                params![id.to_hex(), intent, finished_at, error],
+            )
+            .map(drop)
+        })
+    }
+
+    pub fn set_selection(&mut self, id: TorrentId, selection: &Selection) -> Result<(), Error> {
+        self.write(|tx| {
+            tx.execute("UPDATE jobs SET selection = ?2 WHERE id = ?1", params![id.to_hex(), json(selection)]).map(drop)
+        })
+    }
+
+    /// Records what a magnet's metadata revealed: the name, every hash, and the `.torrent` bytes.
+    pub fn learn(
+        &mut self,
+        id: TorrentId,
+        name: &str,
+        info_hash: &InfoHash,
+        bytes: &[u8],
+        now: i64,
+    ) -> Result<(), Error> {
+        self.write(|tx| {
+            tx.execute(
+                "UPDATE jobs SET name = ?2, info_hash = ?3 WHERE id = ?1",
+                params![id.to_hex(), name, json(info_hash)],
+            )?;
+            insert_aliases(tx, id, info_hash)?;
+            upsert_metainfo(tx, id, bytes, now)
+        })
+    }
+
+    pub fn cache_metainfo(&mut self, id: TorrentId, bytes: &[u8], now: i64) -> Result<(), Error> {
+        self.write(|tx| upsert_metainfo(tx, id, bytes, now))
+    }
+
+    pub fn metainfo(&self, id: TorrentId) -> Result<Option<Vec<u8>>, Error> {
+        self.conn
+            .query_row("SELECT bytes FROM metainfo WHERE id = ?1", [id.to_hex()], |r| r.get(0))
+            .optional()
+            .map_err(|e| self.fail(e))
+    }
+
+    pub fn resume(&self, id: TorrentId) -> Result<Option<Vec<u8>>, Error> {
+        self.conn
+            .query_row("SELECT bytes FROM resume WHERE job = ?1", [id.to_hex()], |r| r.get(0))
+            .optional()
+            .map_err(|e| self.fail(e))
+    }
+
+    pub fn save_resume(&mut self, id: TorrentId, bytes: &[u8], verified: u64, now: i64) -> Result<(), Error> {
+        self.write(|tx| save_resume(tx, id, bytes, verified, now))
+    }
+
+    /// Done and its final resume data commit together, so a crash between them cannot happen.
+    pub fn finish(&mut self, id: TorrentId, finished_at: i64, bytes: &[u8], verified: u64) -> Result<(), Error> {
+        self.write(|tx| {
+            save_resume(tx, id, bytes, verified, finished_at)?;
+            tx.execute(
+                "UPDATE jobs SET intent = 'done', finished_at = ?2, error = NULL WHERE id = ?1",
+                params![id.to_hex(), finished_at],
+            )
+            .map(drop)
+        })
+    }
+
+    pub fn remove(&mut self, tombstone: &Tombstone) -> Result<(), Error> {
+        self.write(|tx| {
+            let id = tombstone.id.to_hex();
+            tx.execute("DELETE FROM jobs WHERE id = ?1", [&id])?;
+            tx.execute(
+                "INSERT OR REPLACE INTO tombstones (id, name, path, removed_at) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    id,
+                    tombstone.name,
+                    tombstone.path.as_ref().map(|p| p.as_os_str().as_bytes().to_vec()),
+                    tombstone.removed_at
+                ],
+            )?;
+            tx.execute("DELETE FROM tombstones WHERE removed_at < ?1", [tombstone.removed_at - TOMBSTONE_SECS])
+                .map(drop)
+        })
+    }
+
+    /// Drops a duplicate job without a tombstone, when metadata shows it is another job's torrent.
+    pub fn forget(&mut self, id: TorrentId) -> Result<(), Error> {
+        self.write(|tx| tx.execute("DELETE FROM jobs WHERE id = ?1", [id.to_hex()]).map(drop))
+    }
+
+    pub fn tombstones(&self, now: i64) -> Result<Vec<Tombstone>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, path, removed_at FROM tombstones WHERE removed_at >= ?1")
+            .map_err(|e| self.fail(e))?;
+        let rows = stmt
+            .query_map([now - TOMBSTONE_SECS], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<Vec<u8>>>(2)?, r.get(3)?))
+            })
+            .map_err(|e| self.fail(e))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, name, path, removed_at) = row.map_err(|e| self.fail(e))?;
+            out.push(Tombstone {
+                id: id.parse().map_err(|_| corrupt(&self.path, "a tombstone has an unreadable id"))?,
+                name,
+                path: path.map(|p| PathBuf::from(std::ffi::OsString::from_vec(p))),
+                removed_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The job that owns a v1 or v2 hash, given as hex.
+    pub fn alias_owner(&self, hash: &str) -> Result<Option<TorrentId>, Error> {
+        let id: Option<String> = self
+            .conn
+            .query_row("SELECT job FROM aliases WHERE hash = ?1", [hash], |r| r.get(0))
+            .optional()
+            .map_err(|e| self.fail(e))?;
+        id.map(|id| id.parse().map_err(|_| corrupt(&self.path, "an alias names an unreadable job id"))).transpose()
+    }
+
+    pub fn record_results(&mut self, releases: &[Release], now: i64) -> Result<(), Error> {
+        self.write(|tx| {
+            for release in releases {
+                tx.execute(
+                    "INSERT OR REPLACE INTO results (id, release, seen_at) VALUES (?1, ?2, ?3)",
+                    params![release.id.to_ref(), json(release), now],
+                )?;
+            }
+            tx.execute("DELETE FROM results WHERE seen_at < ?1", [now - RESULTS_SECS]).map(drop)
+        })
+    }
+
+    pub fn results(&self, now: i64) -> Result<Vec<Release>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT release FROM results WHERE seen_at >= ?1 ORDER BY seen_at DESC")
+            .map_err(|e| self.fail(e))?;
+        let rows = stmt.query_map([now - RESULTS_SECS], |r| r.get::<_, String>(0)).map_err(|e| self.fail(e))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let text = row.map_err(|e| self.fail(e))?;
+            out.push(serde_json::from_str(&text).map_err(|_| corrupt(&self.path, "a search result is unreadable"))?);
+        }
+        Ok(out)
+    }
+}
+
+fn sql_error(path: &Path, e: rusqlite::Error) -> Error {
+    use rusqlite::ErrorCode as Sql;
+    match e.sqlite_error_code() {
+        Some(Sql::DatabaseCorrupt | Sql::NotADatabase) => corrupt(path, &e.to_string()),
+        Some(Sql::DiskFull) => {
+            Error::new(ErrorCode::StorageError, format!("the disk holding {} is full", path.display()))
+                .with_hint("free some space on that disk")
+        }
+        _ => Error::new(ErrorCode::StateCorrupt, format!("{}: {e}", path.display()))
+            .with_hint(format!("see {}", path.with_file_name("engine.log").display())),
+    }
+}
+
+fn corrupt(path: &Path, reason: &str) -> Error {
+    Error::new(ErrorCode::StateCorrupt, format!("the state database {} is damaged: {reason}", path.display()))
+        .with_hint(format!(
+            "torrential never resets state on its own; move {} aside to start fresh, or restore a backup",
+            path.display()
+        ))
+}
+
+fn json(value: &impl serde::Serialize) -> String {
+    serde_json::to_string(value).expect("stored values serialize")
+}
+
+fn intent_columns(intent: &Intent) -> (&'static str, Option<i64>, Option<String>) {
+    match intent {
+        Intent::Running => ("running", None, None),
+        Intent::Paused => ("paused", None, None),
+        Intent::Done { finished_at } => ("done", Some(*finished_at), None),
+        Intent::Failed { error } => ("failed", None, Some(json(error))),
+    }
+}
+
+/// The keys a torrent is known by: its full v1 and v2 hashes, in hex.
+pub fn alias_keys(info_hash: &InfoHash) -> Vec<String> {
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    [info_hash.v1().map(|h| hex(&h)), info_hash.v2().map(|h| hex(&h))].into_iter().flatten().collect()
+}
+
+fn insert_aliases(tx: &Transaction, id: TorrentId, info_hash: &InfoHash) -> rusqlite::Result<()> {
+    for hash in alias_keys(info_hash) {
+        tx.execute("INSERT OR IGNORE INTO aliases (hash, job) VALUES (?1, ?2)", [hash, id.to_hex()])?;
+    }
+    Ok(())
+}
+
+fn upsert_metainfo(tx: &Transaction, id: TorrentId, bytes: &[u8], now: i64) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO metainfo (id, bytes, saved_at) VALUES (?1, ?2, ?3)",
+        params![id.to_hex(), bytes, now],
+    )
+    .map(drop)
+}
+
+fn save_resume(tx: &Transaction, id: TorrentId, bytes: &[u8], verified: u64, now: i64) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO resume (job, bytes, saved_at) VALUES (?1, ?2, ?3)",
+        params![id.to_hex(), bytes, now],
+    )?;
+    tx.execute("UPDATE jobs SET verified = ?2 WHERE id = ?1", params![id.to_hex(), verified as i64]).map(drop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(n: u8) -> JobRecord {
+        JobRecord {
+            id: TorrentId::from_bytes([n; 20]),
+            info_hash: InfoHash::Hybrid { v1: [n; 20], v2: [n + 1; 32] },
+            name: Some(format!("job {n}")),
+            dir: PathBuf::from("/dl"),
+            selection: Selection::Patterns(vec!["*.mkv".into()]),
+            max_size: 7,
+            magnet: Some("magnet:?xt=urn:btih:x".into()),
+            added_at: 100,
+            intent: Intent::Running,
+            verified: 0,
+        }
+    }
+
+    #[test]
+    fn jobs_round_trip_through_every_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let mut store = Store::open(&path).unwrap();
+        store.insert(&record(1), Some(b"torrent"), 100).unwrap();
+        store
+            .set_intent(
+                TorrentId::from_bytes([1; 20]),
+                &Intent::Failed { error: Error::new(ErrorCode::DiskFull, "full") },
+            )
+            .unwrap();
+        store.insert(&record(3), None, 100).unwrap();
+        store.finish(TorrentId::from_bytes([3; 20]), 200, b"resume", 42).unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        let jobs = store.jobs().unwrap();
+        assert_eq!(jobs[0].record.intent, Intent::Failed { error: Error::new(ErrorCode::DiskFull, "full") });
+        assert_eq!(jobs[0].metainfo.as_deref(), Some(&b"torrent"[..]));
+        assert_eq!(jobs[1].record, JobRecord { intent: Intent::Done { finished_at: 200 }, verified: 42, ..record(3) });
+        assert_eq!(store.resume(TorrentId::from_bytes([3; 20])).unwrap().as_deref(), Some(&b"resume"[..]));
+    }
+
+    #[test]
+    fn both_hashes_of_a_hybrid_resolve_to_one_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("state.db")).unwrap();
+        store.insert(&record(1), None, 100).unwrap();
+        let id = Some(TorrentId::from_bytes([1; 20]));
+        assert_eq!(store.alias_owner(&"01".repeat(20)).unwrap(), id);
+        assert_eq!(store.alias_owner(&"02".repeat(32)).unwrap(), id);
+        assert_eq!(store.alias_owner(&"03".repeat(20)).unwrap(), None);
+    }
+
+    #[test]
+    fn removal_leaves_a_short_tombstone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("state.db")).unwrap();
+        store.insert(&record(1), None, 100).unwrap();
+        let tomb = Tombstone {
+            id: TorrentId::from_bytes([1; 20]),
+            name: Some("job 1".into()),
+            path: Some("/dl/job 1".into()),
+            removed_at: 1_000,
+        };
+        store.remove(&tomb).unwrap();
+        assert!(store.jobs().unwrap().is_empty());
+        assert_eq!(store.tombstones(1_000 + 60).unwrap(), [tomb]);
+        assert!(store.tombstones(1_000 + TOMBSTONE_SECS + 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn damaged_state_is_reported_never_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        std::fs::write(&path, b"this is not a database, but it is somebody's data").unwrap();
+        let err = Store::open(&path).err().unwrap();
+        assert_eq!(err.code, ErrorCode::StateCorrupt);
+        assert_eq!(std::fs::read(&path).unwrap(), b"this is not a database, but it is somebody's data");
+    }
+
+    #[test]
+    fn migrating_backs_up_the_old_database_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let mut store = Store::open(&path).unwrap();
+        store.insert(&record(1), None, 100).unwrap();
+        store.migrate(&[MIGRATIONS[0], "ALTER TABLE jobs ADD COLUMN note TEXT"]).unwrap();
+        let version: i64 = store.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 2);
+        let backup = Connection::open(dir.path().join("state.v1.bak")).unwrap();
+        let rows: i64 = backup.query_row("SELECT count(*) FROM jobs", [], |r| r.get(0)).unwrap();
+        let backup_version: i64 = backup.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!((rows, backup_version), (1, 1));
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        drop(Store::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "user_version", 99).unwrap();
+        drop(conn);
+        let err = Store::open(&path).err().unwrap();
+        assert!(err.message.ends_with("it has schema version 99, written by a newer torrential"), "{}", err.message);
+    }
+}

@@ -1,0 +1,32 @@
+[package]
+name = "torrential"
+description = "Search torrent indexes and download torrents from a terminal or a coding agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "torrential"
+path = "src/main.rs"
+
+[dependencies]
+torrential-core = { path = "../core" }
+anstream = "1"
+anstyle = "1"
+clap = { version = "4.6", features = ["derive", "wrap_help"] }
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
+ctrlc = "3.5"
+dirs = "7"
+globset = "0.4"
+indicatif = "0.18"
+libc = "0.2"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "net", "sync", "time", "signal", "macros", "io-util", "fs"] }
+url = "2.5"
+
+[dev-dependencies]
+assert_cmd = "2.2"
+insta = { version = "1.49", features = ["json"] }
+tempfile = "3.27"
