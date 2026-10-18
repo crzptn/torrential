@@ -1,6 +1,7 @@
 mod cli;
 mod client;
 mod completions;
+mod config;
 mod daemon;
 mod env;
 mod output;

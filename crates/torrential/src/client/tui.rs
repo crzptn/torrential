@@ -1,6 +1,7 @@
 //! The TUI's view of the engine. Each call opens its own connection, starting the engine if
 //! needed, so a slow search never holds up a pause.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -8,6 +9,7 @@ use torrential_core::protocol::{Change, Event, FilesReply, GetReply, GetRequest,
 use torrential_core::{Error, ErrorCode, SearchQuery, SearchResult, Target};
 
 use super::connect::{self, Conn, DEFAULT_REPLY_WITHIN};
+use crate::config::Config;
 use crate::daemon::admission::{Disk, RealDisk};
 use crate::daemon::server::METADATA_WAIT;
 use crate::env::Env;
@@ -16,13 +18,17 @@ use crate::wire;
 
 /// Runs the TUI. It never stops the engine, so downloads keep going after it quits.
 pub fn run(env: &Env) -> Result<u8, Error> {
-    let backend = EngineBackend { paths: Paths::from_process(env)?, env: env.clone() };
+    let paths = Paths::from_process(env)?;
+    // A config error reaches the screen from the engine, which refuses to start.
+    let downloads = Config::load(&paths, env).map_or_else(|_| paths.downloads.clone(), |c| c.downloads_dir(&paths));
+    let backend = EngineBackend { paths, downloads, env: env.clone() };
     torrential_tui::run(backend).map_err(|e| Error::internal(format!("the terminal UI stopped: {e}")))?;
     Ok(0)
 }
 
 struct EngineBackend {
     paths: Paths,
+    downloads: PathBuf,
     env: Env,
 }
 
@@ -126,6 +132,6 @@ impl torrential_tui::Backend for EngineBackend {
     }
 
     fn free_space(&self) -> Option<u64> {
-        RealDisk.space(&self.paths.downloads).ok().map(|space| space.free)
+        RealDisk.space(&self.downloads).ok().map(|space| space.free)
     }
 }

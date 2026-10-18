@@ -25,6 +25,7 @@ use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 use torrential_core::{Error, ErrorCode};
 
+use crate::config::Config;
 use crate::env::Env;
 use crate::paths::{self, Paths};
 use admission::Disk;
@@ -52,7 +53,7 @@ impl Ports {
     /// keeps libtorrent on 127.0.0.1 with discovery off, for tests that run their own peers and list
     /// them in `TORRENTIAL_TEST_PEERS`, and `TORRENTIAL_TEST_DISK=roomy` lets them download on a
     /// disk below the free-space reserve.
-    fn from_env(env: &Env, paths: &Paths) -> Result<Self, Error> {
+    fn from_env(env: &Env, paths: &Paths, settings: &Config) -> Result<Self, Error> {
         if fake(env) {
             let rate =
                 env.var("TORRENTIAL_TEST_FAKE_RATE").and_then(torrential_core::units::parse_size).unwrap_or(10 << 20);
@@ -72,7 +73,7 @@ impl Ports {
             _ => Box::new(admission::RealDisk),
         };
         let search =
-            torrential_search::SearchConfig { cache_dir: Some(paths.cache.join("search")), ..Default::default() };
+            torrential_search::SearchConfig { cache_dir: Some(paths.cache.join("search")), ..settings.search.clone() };
         Ok(Self {
             search: Arc::new(search_port::Live::new(&search)?),
             engine: Box::new(Libtorrent::start(&paths.state, network)?),
@@ -163,6 +164,7 @@ fn fail_start(paths: Option<&Paths>, error: &Error) -> u8 {
 }
 
 fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
+    let settings = Config::load(paths, env)?;
     let io = |what: &str, e: std::io::Error| Error::new(ErrorCode::StateCorrupt, format!("cannot {what}: {e}"));
     std::fs::create_dir_all(&paths.state).map_err(|e| io(&format!("create {}", paths.state.display()), e))?;
     paths::check_state_filesystem(&paths.state)?;
@@ -174,15 +176,16 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
     prepare_runtime_dir(&paths.runtime)?;
     let seed = fake(env) && !paths.database().exists();
     let mut store = Store::open(&paths.database())?;
+    let default_dir = settings.downloads_dir(paths);
     if seed {
-        fixture::seed(&mut store, &paths.downloads, owner::now())?;
+        fixture::seed(&mut store, &default_dir, owner::now())?;
     }
     let idle_timeout = env
         .var("TORRENTIAL_TEST_IDLE_TIMEOUT")
         .and_then(torrential_core::units::parse_duration)
         .unwrap_or(DEFAULT_IDLE);
     let config = OwnerConfig {
-        default_dir: paths.downloads.clone(),
+        default_dir,
         probe_dir: paths.cache.join("probes"),
         max_active: MAX_ACTIVE,
         idle_timeout: (!service).then_some(idle_timeout),
@@ -194,7 +197,7 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         .build()
         .map_err(|e| Error::internal(format!("cannot start the async runtime: {e}")))?;
     let version = env.version();
-    let ports = Ports::from_env(env, paths)?;
+    let ports = Ports::from_env(env, paths, &settings)?;
     let engine = runtime.block_on(async {
         let socket = paths.socket();
         let _ = std::fs::remove_file(&socket);
