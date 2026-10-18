@@ -213,10 +213,6 @@ impl Tree {
         self.files.iter().zip(&self.picked).filter(|(_, p)| **p).map(|(f, _)| f.size).sum()
     }
 
-    pub fn total_size(&self) -> u64 {
-        self.files.iter().map(|f| f.size).sum()
-    }
-
     pub fn risky_left_out(&self) -> usize {
         (0..self.files.len()).filter(|&i| self.is_risky(i) && !self.picked[i]).count()
     }

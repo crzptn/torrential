@@ -1,5 +1,5 @@
-//! Text as the screen shows it: widths in cells, truncation, and the short number forms of
-//! DESIGN-BRIEF 3.8.
+//! Text as the screen shows it: widths in cells, truncation, and short number forms that line
+//! up in columns.
 
 use std::path::Path;
 
@@ -79,6 +79,27 @@ pub fn age(published: i64, now: i64) -> String {
     }
 }
 
+/// Three figures at most, so sizes fit an 8-cell column: `512 B`, `51.4 KiB`, `734 MiB`,
+/// `1.3 GiB`. A value that would print as 1000 or more moves up a unit.
+pub fn size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value.round() >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    match (unit, value) {
+        (0, v) => format!("{v} B"),
+        (_, v) if v < 99.95 => format!("{v:.1} {}", UNITS[unit]),
+        (_, v) => format!("{v:.0} {}", UNITS[unit]),
+    }
+}
+
+pub fn rate(bytes_per_sec: u64) -> String {
+    format!("{}/s", size(bytes_per_sec))
+}
+
 /// `0` to `9,999` with a comma, then `10k` to `999k`, and `–` when unknown.
 pub fn seeds(n: Option<u32>) -> String {
     match n {
@@ -131,6 +152,16 @@ mod tests {
             [ago(30), ago(45 * 60), ago(5 * 3_600), ago(17 * 86_400), ago(70 * 86_400), ago(9 * 365 * 86_400)],
             ["now", "45m", "5h", "17d", "2mo", "9y"]
         );
+    }
+
+    #[test]
+    fn sizes_keep_three_figures() {
+        let mib = 1 << 20;
+        assert_eq!(
+            [size(512), size(52_633), size(734 * mib), size(1022 * mib + mib / 2), size(1366 * mib), size(21_812 * mib)],
+            ["512 B", "51.4 KiB", "734 MiB", "1.0 GiB", "1.3 GiB", "21.3 GiB"]
+        );
+        assert_eq!(rate(10 * mib), "10.0 MiB/s");
     }
 
     #[test]

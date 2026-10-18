@@ -207,7 +207,7 @@ fn typing_filters_loaded_results_and_enter_searches() {
 
 #[test]
 fn streaming_results_follow_the_top_until_the_user_moves() {
-    let mut state = with_downloads((80, 24));
+    let mut state = with_downloads((80, 18));
     press(&mut state, "/");
     press(&mut state, "night of the living dead");
     let search = match &state.update(key(KeyCode::Enter))[..] {

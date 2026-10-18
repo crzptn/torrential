@@ -1,63 +1,64 @@
-//! Where things go: the screen's regions, and the list as blocks of known height. Drawing and
-//! scrolling both read this, so they always agree.
+//! Where things go: the page's columns and rows, and the list as blocks of known height. Drawing
+//! and scrolling both read this, so they always agree.
 
 use ratatui::layout::Rect;
-use torrential_core::{Job, ReleaseId, TorrentId};
+use torrential_core::{Job, JobStatus, ReleaseId, TorrentId};
 
-use crate::state::{Files, Focus, Item, State};
+use crate::state::{Engine, Files, Focus, Item, SearchPhase, State, label};
 
 pub const MIN_SIZE: (u16, u16) = (60, 16);
-const MAX_COLUMN: u16 = 110;
-const HELP_ROWS: u16 = 10;
-/// Rows kept visible above and below the selection when scrolling (DESIGN-BRIEF 3.7).
+/// Margin labels are right-aligned in cells 1 to 10. `torrential` is the longest.
+pub const MARGIN: u16 = 10;
+/// The column between the margin and the entries, where the selection mark sits.
+pub const MARK: u16 = MARGIN + 2;
+/// Where entries start.
+pub const CONTENT: u16 = MARK + 2;
+/// Where an entry's details start: indented under it, the way a ledger sets off a sub-entry.
+pub const DETAIL: u16 = CONTENT + 2;
+/// Entries never run wider than this, so a name and its numbers stay within one glance.
+const MAX_CONTENT: u16 = 100;
+/// Rows kept visible above and below the selection when scrolling.
 const CONTEXT: u16 = 2;
 
-pub struct Screen {
-    /// The centered content column, full height.
-    pub column: Rect,
-    pub list: Rect,
-    pub help: Option<Rect>,
-    pub status: u16,
-    pub hints: u16,
-}
-
-pub const HEADER: u16 = 0;
-pub const QUERY: u16 = 1;
-pub const SOURCES: u16 = 2;
+pub const MASTHEAD: u16 = 0;
+pub const SEARCH: u16 = 2;
 const LIST_TOP: u16 = 4;
 
+pub struct Screen {
+    /// The last column entries may use.
+    pub right: u16,
+    /// Rows between the search line and the footer. Help draws here too.
+    pub list: Rect,
+    pub footer: u16,
+}
+
 /// `None` when the terminal is too small to draw.
-pub fn screen(size: (u16, u16), help: bool) -> Option<Screen> {
+pub fn screen(size: (u16, u16)) -> Option<Screen> {
     let (w, h) = size;
     if w < MIN_SIZE.0 || h < MIN_SIZE.1 {
         return None;
     }
-    let width = (w - 4).min(MAX_COLUMN);
-    let column = Rect::new((w - width) / 2, 0, width, h);
-    let status = h - 2;
-    let room = status - LIST_TOP;
-    let help_rows = if help { HELP_ROWS.min(room.saturating_sub(4)) } else { 0 };
-    let list = Rect::new(column.x, LIST_TOP, width, room - help_rows);
-    let help = help.then(|| Rect::new(column.x, LIST_TOP + list.height, width, help_rows));
-    Some(Screen { column, list, help, status, hints: h - 1 })
+    let right = (w - 2).min(CONTENT + MAX_CONTENT);
+    let list = Rect::new(0, LIST_TOP, right, h - LIST_TOP - 2);
+    Some(Screen { right, list, footer: h - 1 })
 }
 
 pub fn list_height(state: &State) -> u16 {
-    screen(state.size, state.help).map_or(0, |s| s.list.height)
+    screen(state.size).map_or(0, |s| s.list.height)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Block {
-    DownloadsLabel,
     Download(TorrentId),
     DownloadDetail(TorrentId),
-    /// The summary line for folded downloads.
-    Folded,
+    /// Paused or done downloads counted on one line, under the margin label they share.
+    Folded(&'static str),
     Gap,
-    ResultsLabel,
+    /// The results' margin label, the order they are in, and the column heads.
+    Heads,
     Result(ReleaseId),
     ResultDetail(ReleaseId),
-    /// What the results section says when it has nothing to list.
+    /// What the results say when there are none to list.
     Empty,
 }
 
@@ -82,25 +83,31 @@ pub fn blocks(state: &State, viewport: u16) -> Vec<Placed> {
         top += height;
     };
     if !state.downloads.is_empty() {
-        push(Block::DownloadsLabel, 1);
         for job in state.download_rows() {
             push(Block::Download(job.id), 1);
-            if expanded(state, Item::Download(job.id)) {
+            if expanded(state, Item::Download(job.id)) || state.confirm == Some(job.id) {
                 push(Block::DownloadDetail(job.id), download_detail_height(state, job, viewport));
             }
         }
         if state.folded().is_some() {
-            push(Block::Folded, 1);
+            for fold in ["paused", "done"] {
+                if state.downloads.iter().any(|j| label(&j.status) == fold) {
+                    push(Block::Folded(fold), 1);
+                }
+            }
         }
         push(Block::Gap, 1);
     }
-    push(Block::ResultsLabel, 1);
     let results = state.results();
     if results.is_empty() {
-        push(Block::Empty, 3);
+        if empty_message(state) {
+            push(Block::Empty, 2);
+        }
+        return out;
     }
+    push(Block::Heads, 1);
     for release in results {
-        push(Block::Result(release.id), 2);
+        push(Block::Result(release.id), 1);
         if expanded(state, Item::Result(release.id)) {
             push(Block::ResultDetail(release.id), result_detail_height(state, release.id, viewport));
         }
@@ -108,11 +115,20 @@ pub fn blocks(state: &State, viewport: u16) -> Vec<Placed> {
     out
 }
 
+/// Whether the empty results have something to say: the engine is down, nothing matched, or
+/// the search failed. A search still running says so on the search line instead.
+fn empty_message(state: &State) -> bool {
+    match &state.search {
+        None => matches!(state.engine, Engine::Unreachable(_)),
+        Some(search) => state.filtering() || !matches!(search.phase, SearchPhase::Running { .. }),
+    }
+}
+
 /// How many of a download's files its details list, and whether a `+N more` line follows.
 pub fn download_file_rows(state: &State, job: &Job, viewport: u16) -> (usize, bool) {
     let cap = match viewport {
-        30.. => 8,
-        20.. => 5,
+        24.. => 8,
+        16.. => 5,
         _ => 3,
     };
     let picked = state.download_files.get(&job.id).map(|f| f.files.iter().filter(|f| f.selected).count());
@@ -124,16 +140,17 @@ pub fn download_file_rows(state: &State, job: &Job, viewport: u16) -> (usize, bo
 
 fn download_detail_height(state: &State, job: &Job, viewport: u16) -> u16 {
     let error = match &job.status {
-        torrential_core::JobStatus::Error { error } => 1 + u16::from(error.hint.is_some()),
+        JobStatus::Error { error } => 1 + u16::from(error.hint.is_some()),
         _ => 0,
     };
+    let confirm = u16::from(state.confirm == Some(job.id));
     let (files, more) = download_file_rows(state, job, viewport);
-    2 + error + files as u16 + u16::from(more)
+    2 + error + confirm + files as u16 + u16::from(more)
 }
 
-/// File rows shown in an open tree: as many as fit beside the result and the tree's own two lines.
+/// File rows shown in an open tree: as many as fit beside the result row and the total.
 pub fn tree_rows(nodes: usize, viewport: u16) -> usize {
-    nodes.min(usize::from(viewport.saturating_sub(4).max(1)))
+    nodes.min(usize::from(viewport.saturating_sub(5).max(1)))
 }
 
 fn result_detail_height(state: &State, id: ReleaseId, viewport: u16) -> u16 {
@@ -141,7 +158,7 @@ fn result_detail_height(state: &State, id: ReleaseId, viewport: u16) -> u16 {
         return 1;
     }
     match state.files.get(&id) {
-        Some(Files::Ready(tree)) => 2 + tree_rows(tree.visible().len(), viewport) as u16,
+        Some(Files::Ready(tree)) => tree_rows(tree.visible().len(), viewport) as u16 + 2,
         _ => 2,
     }
 }

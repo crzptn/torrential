@@ -1,23 +1,21 @@
 //! Drawing. Everything here reads [`State`] and writes a buffer; nothing changes state.
+//!
+//! The page is a ledger. A margin on the left holds short labels, a mark beside the margin
+//! shows where keys go, and every entry is one line on a fixed grid of right-aligned numbers.
 
 use std::time::Duration;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use torrential_core::units::{format_duration, format_rate, format_size};
+use torrential_core::units::format_duration;
 use torrential_core::{Flag, Job, JobStatus, Release, ReleaseId, SourceOutcome};
 
-use crate::format::{age, ellipsize, home_path, middle, percent, seeds, width};
-use crate::layout::{self, Block, HEADER, QUERY, SOURCES, Screen};
-use crate::state::{Engine, Files, Focus, Item, SearchPhase, State, Tone};
+use crate::format::{age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
+use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
+use crate::state::{Engine, Files, Focus, Item, SearchPhase, Sort, State, Tone, label};
 use crate::theme::*;
 use crate::tree::{Check, NodeKind, Tree};
-
-/// Where right-aligned content ends: one blank column, then the scrollbar's column.
-fn edge(column: Rect) -> u16 {
-    column.right() - 2
-}
 
 fn fg(c: Color) -> Style {
     Style::new().fg(c)
@@ -59,743 +57,706 @@ fn spans_width(parts: &[(&str, Style)]) -> u16 {
     parts.iter().map(|(t, _)| width(t) as u16).sum()
 }
 
-fn fill(buf: &mut Buffer, rect: Rect, bg: Color) {
-    let rect = rect.intersection(buf.area);
-    for y in rect.top()..rect.bottom() {
-        for x in rect.left()..rect.right() {
-            buf[(x, y)].set_symbol(" ").set_bg(bg);
-        }
+/// Writes styled pieces so they end just before `right`, and returns where they start.
+fn spans_right(buf: &mut Buffer, right: u16, y: u16, parts: &[(&str, Style)]) -> u16 {
+    let w = spans_width(parts);
+    spans(buf, right.saturating_sub(w), y, w, parts);
+    right.saturating_sub(w)
+}
+
+fn paint(buf: &mut Buffer) {
+    for cell in &mut buf.content {
+        cell.set_symbol(" ").set_bg(PAPER).set_fg(TEXT);
     }
 }
 
-/// A progress bar in eighths (DESIGN-BRIEF 6.2). `None` draws an empty bar.
-fn bar(buf: &mut Buffer, x: u16, y: u16, cells: u16, fraction: Option<f64>, color: Color) {
-    const EIGHTHS: [&str; 9] = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
-    let eighths = (fraction.unwrap_or(0.0).clamp(0.0, 1.0) * f64::from(cells) * 8.0).floor() as u16;
+/// A margin label, right-aligned against the margin's edge.
+fn margin(buf: &mut Buffer, y: u16, text: &str, style: Style) {
+    put_right(buf, MARGIN + 1, y, text, style);
+}
+
+/// The one mark on the page: where keys go.
+fn mark(buf: &mut Buffer, y: u16) {
+    put(buf, MARK, y, 1, "●", fg(ACTION));
+}
+
+/// The rule between the margin and the entries, on the rows from `top` up to `bottom`.
+fn rule(buf: &mut Buffer, top: u16, bottom: u16) {
+    for y in top..bottom {
+        put(buf, MARK, y, 1, "│", fg(RULE));
+    }
+}
+
+/// A rule that fills with ink as the bytes arrive, in half cells. `None` draws it empty.
+fn progress(buf: &mut Buffer, x: u16, y: u16, cells: u16, fraction: Option<f64>, ink: Color) {
+    let halves = (fraction.unwrap_or(0.0).clamp(0.0, 1.0) * f64::from(cells) * 2.0).floor() as u16;
     for i in 0..cells {
-        let n = eighths.saturating_sub(i * 8).min(8);
-        if x + i < buf.area.right() && y < buf.area.bottom() {
-            buf[(x + i, y)].set_symbol(EIGHTHS[n as usize]).set_fg(color).set_bg(TRACK);
-        }
+        let (glyph, color) = match halves.saturating_sub(i * 2) {
+            0 => ("─", RULE),
+            1 => ("╸", ink),
+            _ => ("━", ink),
+        };
+        put(buf, x + i, y, 1, glyph, fg(color));
     }
 }
 
-/// Key hints: bold keys, muted labels, three spaces apart. Pairs drop from the end, but the
-/// last one stays.
-fn hints(buf: &mut Buffer, x: u16, y: u16, max: u16, pairs: &[(&str, &str)]) {
-    let mut pairs = pairs.to_vec();
-    let length = |p: &[(&str, &str)]| {
-        p.iter().map(|(k, l)| width(k) + width(l) + 1).sum::<usize>() + p.len().saturating_sub(1) * 3
+/// Key hints as `key verb` pairs, right-aligned before `right` within `room` cells. Pairs drop
+/// from the front, so the last one stays.
+fn hints(buf: &mut Buffer, right: u16, y: u16, room: u16, pairs: &[(&str, &str)]) {
+    let length = |p: &[(&str, &str)]| -> usize {
+        p.iter().map(|(k, v)| width(k) + 1 + width(v)).sum::<usize>() + p.len().saturating_sub(1) * 3
     };
-    while pairs.len() > 1 && length(&pairs) > max as usize {
-        pairs.remove(pairs.len() - 2);
+    let mut pairs = pairs.to_vec();
+    while pairs.len() > 1 && length(&pairs) > usize::from(room) {
+        pairs.remove(0);
     }
-    let mut at = x;
-    for (i, (key, label)) in pairs.iter().enumerate() {
+    let mut x = right.saturating_sub(length(&pairs) as u16);
+    for (i, (key, verb)) in pairs.iter().enumerate() {
         if i > 0 {
-            at += 3;
+            x += 3;
         }
-        let end = x + max;
-        at += put(buf, at, y, end.saturating_sub(at), key, bold(TEXT));
-        at += put(buf, at, y, end.saturating_sub(at), &format!(" {label}"), fg(MUTED));
+        x += put(buf, x, y, right.saturating_sub(x), key, fg(TEXT));
+        x += put(buf, x, y, right.saturating_sub(x), &format!(" {verb}"), fg(PENCIL));
     }
 }
 
 pub fn render(buf: &mut Buffer, state: &State, mode: ColorMode) -> Option<Position> {
-    let area = buf.area;
-    fill(buf, area, BG);
-    buf.set_style(area, fg(TEXT));
-    let size = (area.width, area.height);
-    let Some(screen) = layout::screen(size, state.help) else {
-        too_small(buf, size);
+    paint(buf);
+    let size = (buf.area.width, buf.area.height);
+    let Some(screen) = layout::screen(size) else {
+        let (w, h) = layout::MIN_SIZE;
+        put(buf, 1, 0, size.0.saturating_sub(2), &format!("Make the window at least {w}×{h}."), fg(INK));
         degrade(buf, mode);
         return None;
     };
-    header(buf, state, screen.column);
-    let cursor = query(buf, state, screen.column);
-    sources(buf, state, screen.column);
-    list(buf, state, screen.list);
-    if let Some(rect) = screen.help {
-        help(buf, rect);
+    masthead(buf, state, &screen);
+    let caret = search(buf, state, &screen);
+    rule(buf, SEARCH + 1, screen.list.y);
+    if state.help {
+        help(buf, &screen);
+    } else {
+        list(buf, state, &screen);
     }
     footer(buf, state, &screen);
-    if let Some(id) = state.confirm {
-        if mode.paints_backgrounds() {
-            dim(buf);
-        }
-        confirm(buf, state, id);
-        degrade(buf, mode);
-        return None;
-    }
     degrade(buf, mode);
-    cursor
+    caret
 }
 
-fn too_small(buf: &mut Buffer, (w, h): (u16, u16)) {
-    put(buf, 2, 1, w.saturating_sub(4), "Make the window larger.", bold(TEXT));
-    let (min_w, min_h) = layout::MIN_SIZE;
-    let text = format!("torrential needs {min_w}×{min_h}. This one is {w}×{h}.");
-    put(buf, 2, 3, w.saturating_sub(4), &text, fg(MUTED));
-}
-
-fn header(buf: &mut Buffer, state: &State, col: Rect) {
-    put(buf, col.x, HEADER, 10, "torrential", bold(TEXT));
-    fill(buf, Rect::new(col.x + 10, HEADER, 1, 1), ACCENT);
-    let right = edge(col);
-    let sep = (" · ", fg(DIM));
-    let rate = format_rate(state.rate());
-    let active = format!("{} active", state.active());
-    let free = state.free_space.map(|f| format!("{} free", format_size(f)));
-    let engine: Vec<(&str, Style)> = match &state.engine {
-        Engine::Starting => vec![(state.spinner(), fg(ACCENT)), (" starting engine", fg(MUTED))],
-        Engine::Ready => vec![("●", fg(SUCCESS)), (" engine ready", fg(MUTED))],
-        Engine::Unreachable(_) => vec![("●", fg(ERROR)), (" engine unreachable", fg(ERROR))],
-    };
-    let ready = state.engine == Engine::Ready;
-    let mut full: Vec<(&str, Style)> = Vec::new();
-    if ready {
-        full.extend([("↓ ", fg(ACCENT)), (rate.as_str(), fg(TEXT)), sep, (active.as_str(), fg(MUTED))]);
-        if let Some(free) = &free {
-            full.extend([sep, (free.as_str(), fg(MUTED))]);
+/// The title in the margin, and on the right only what needs saying: bytes arriving, a disk
+/// running out, or an engine that is not there.
+fn masthead(buf: &mut Buffer, state: &State, screen: &Screen) {
+    margin(buf, MASTHEAD, "torrential", bold(INK));
+    let total = rate(state.rate());
+    let free = state.free_space.map(|f| format!("{} free", size(f)));
+    let mut parts: Vec<(&str, Style)> = Vec::new();
+    match &state.engine {
+        Engine::Starting => parts.extend([("starting the engine", fg(PENCIL)), (state.spinner(), fg(PENCIL))]),
+        Engine::Unreachable(_) => parts.push(("engine unreachable", fg(ERROR))),
+        Engine::Ready => {
+            if state.rate() > 0 {
+                parts.extend([("↓ ", fg(ACTION)), (total.as_str(), fg(TEXT))]);
+            }
+            if let Some(free) = free.as_deref().filter(|_| short_of_space(state)) {
+                if !parts.is_empty() {
+                    parts.push(("   ", fg(PENCIL)));
+                }
+                parts.push((free, fg(ERROR)));
+            }
         }
-        full.push(sep);
     }
-    full.extend(engine.iter().copied());
-    let mut short: Vec<(&str, Style)> = Vec::new();
-    if ready {
-        short.extend([("↓ ", fg(ACCENT)), (rate.as_str(), fg(TEXT)), sep]);
-    }
-    short.extend(engine.iter().copied());
-    let room = col.width.saturating_sub(13);
-    let parts = if spans_width(&full) <= room { full } else { short };
-    let w = spans_width(&parts);
-    spans(buf, right.saturating_sub(w), HEADER, w, &parts);
+    spans_right(buf, screen.right, MASTHEAD, &parts);
 }
 
-/// The query band. Returns where the terminal's cursor goes while typing.
-fn query(buf: &mut Buffer, state: &State, col: Rect) -> Option<Position> {
+/// Whether the disk has less room than the running downloads still need, or under 1 GiB.
+fn short_of_space(state: &State) -> bool {
+    let needed: u64 = state
+        .downloads
+        .iter()
+        .filter(|j| crate::state::group(&j.status) == 0)
+        .filter_map(|j| j.progress.size.map(|s| s.saturating_sub(j.progress.verified)))
+        .sum();
+    state.free_space.is_some_and(|free| free < needed.max(1 << 30))
+}
+
+/// The search line. Returns where the terminal's cursor goes while typing.
+fn search(buf: &mut Buffer, state: &State, screen: &Screen) -> Option<Position> {
     let focused = state.focus == Focus::Query;
-    fill(buf, Rect::new(col.x, QUERY, col.width, 1), ELEMENT);
-    put(buf, col.x, QUERY, 1, "┃", fg(if focused { ACCENT } else { BORDER }));
-    let x = col.x + 2;
-    let room = col.width.saturating_sub(4);
+    margin(buf, SEARCH, "search", fg(PENCIL));
+    if focused {
+        mark(buf, SEARCH);
+    } else {
+        rule(buf, SEARCH, SEARCH + 1);
+    }
+    let (x, room) = (CONTENT, screen.right - CONTENT);
     let text = &state.query.text;
     if text.is_empty() {
-        put(buf, x, QUERY, room, "Search… \"night of the living dead\"", fg(MUTED));
-        if !focused {
-            put_right(buf, edge(col), QUERY, "/ search", fg(DIM));
-        }
-    } else {
-        let before: String = text.chars().take(state.query.caret).collect();
-        let skip = (width(&before) as u16).saturating_sub(room.saturating_sub(1));
-        let shown: String = {
-            let mut cells = 0;
-            text.chars()
-                .skip_while(|c| {
-                    let skipping = cells < skip;
-                    cells += width(c.encode_utf8(&mut [0; 4])) as u16;
-                    skipping
-                })
-                .collect()
-        };
-        put(buf, x, QUERY, room, &shown, fg(TEXT));
-        if focused {
-            return Some(Position::new(x + width(&before) as u16 - skip, QUERY));
+        let hint = if focused { "type a name, then press enter" } else { "press / to search" };
+        put(buf, x, SEARCH, room, hint, fg(PENCIL));
+    }
+    let typed = (width(text) as u16).min(room);
+    for short in [false, true] {
+        let status = search_status(state, short);
+        let parts: Vec<(&str, Style)> = status.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        if typed + 3 + spans_width(&parts) <= room {
+            spans_right(buf, screen.right, SEARCH, &parts);
+            break;
         }
     }
-    focused.then_some(Position::new(x, QUERY))
+    if text.is_empty() {
+        return focused.then_some(Position::new(x, SEARCH));
+    }
+    let before: String = text.chars().take(state.query.caret).collect();
+    let skip = (width(&before) as u16).saturating_sub(room.saturating_sub(1));
+    let shown: String = {
+        let mut cells = 0;
+        text.chars()
+            .skip_while(|c| {
+                let skipping = cells < skip;
+                cells += width(c.encode_utf8(&mut [0; 4])) as u16;
+                skipping
+            })
+            .collect()
+    };
+    put(buf, x, SEARCH, room, &shown, fg(INK));
+    focused.then(|| Position::new(x + width(&before) as u16 - skip, SEARCH))
 }
 
 fn reason(outcome: &SourceOutcome) -> String {
     match outcome {
         SourceOutcome::Ok { .. } | SourceOutcome::Cached { .. } => "ok".into(),
-        SourceOutcome::Timeout => "timeout".into(),
-        SourceOutcome::Http { status } => format!("http {status}"),
-        SourceOutcome::Connect { .. } => "connect".into(),
-        SourceOutcome::BadResponse { .. } => "bad response".into(),
-        SourceOutcome::Irrelevant => "irrelevant".into(),
+        SourceOutcome::Timeout => "timed out".into(),
+        SourceOutcome::Http { status } => format!("answered {status}"),
+        SourceOutcome::Connect { .. } => "did not connect".into(),
+        SourceOutcome::BadResponse { .. } => "sent a bad answer".into(),
+        SourceOutcome::Irrelevant => "had nothing relevant".into(),
     }
 }
 
-/// The line under the query: source status while and after a search.
-fn sources(buf: &mut Buffer, state: &State, col: Rect) {
-    let (x, y, room) = (col.x + 2, SOURCES, edge(col) - col.x - 2);
-    let Some(search) = &state.search else {
-        put(buf, x, y, room, "Downloads stop at 100% and never seed.", fg(DIM));
-        return;
-    };
-    if state.filtering() {
-        let text = format!("{} of {} results match · enter searches", state.results().len(), search.releases.len());
-        put(buf, x, y, room, &text, fg(DIM));
-        return;
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
-    let answered = search.sources.len();
+}
+
+/// The right end of the search line. `short` drops what can go when the query is long.
+fn search_status(state: &State, short: bool) -> Vec<(String, Style)> {
+    let Some(search) = &state.search else { return Vec::new() };
+    if state.filtering() {
+        let (shown, all) = (state.results().len(), search.releases.len());
+        let text = if short { format!("{shown} of {all}") } else { format!("{shown} of {all} match · enter searches") };
+        return vec![(text, fg(PENCIL))];
+    }
     match &search.phase {
         SearchPhase::Running { pending } => {
-            let mut text = " searching".to_string();
-            if answered + pending.len() > 0 {
-                text += &format!(" · {answered} of {} sources", answered + pending.len());
+            let mut out = vec![("searching".into(), fg(PENCIL)), (state.spinner().into(), fg(PENCIL))];
+            let (answered, asked) = (search.sources.len(), search.sources.len() + pending.len());
+            if !short && asked > 0 {
+                out.push((format!(" {answered} of {asked} sources"), fg(PENCIL)));
             }
-            spans(buf, x, y, room, &[(state.spinner(), fg(ACCENT)), (&text, fg(DIM))]);
+            out
         }
         SearchPhase::Done => {
-            let ok = search.sources.iter().filter(|s| s.outcome.is_ok()).count();
-            let summary = format!("{ok} of {answered} sources ok");
-            let failures: Vec<String> = search
-                .sources
-                .iter()
-                .filter(|s| !s.outcome.is_ok())
-                .map(|s| format!("{}: {}", s.source, reason(&s.outcome)))
-                .collect();
-            let failures = failures.join(" · ");
-            let elapsed = format!("{:.1}s", f64::from(search.elapsed_ms) / 1000.0);
-            let mut parts = vec![(summary.as_str(), fg(MUTED))];
-            if !failures.is_empty() {
-                parts.extend([(" · ", fg(DIM)), (failures.as_str(), fg(ERROR))]);
+            let found = search.releases.len();
+            let secs = f64::from(search.elapsed_ms) / 1000.0;
+            let count = if short { format!("{found} found") } else { format!("{found} found in {secs:.1}s") };
+            let mut out = vec![(count, fg(PENCIL))];
+            let failed: Vec<&str> =
+                search.sources.iter().filter(|s| !s.outcome.is_ok()).map(|s| s.source.as_str()).collect();
+            if !failed.is_empty() {
+                let text = if short { format!("{} failed", failed.len()) } else { format!("{} failed", and_list(&failed)) };
+                out.extend([(" · ".into(), fg(PENCIL)), (text, fg(ERROR))]);
             }
-            let used = spans(buf, x, y, room.saturating_sub(width(&elapsed) as u16 + 2), &parts);
-            if used + width(&elapsed) as u16 + 2 <= room {
-                put_right(buf, edge(col), y, &elapsed, fg(DIM));
-            }
+            out
         }
-        SearchPhase::Failed(error) => {
-            spans(buf, x, y, room, &[("✗ ", fg(ERROR)), (&error.message, fg(ERROR))]);
-        }
+        SearchPhase::Failed(_) => vec![("search failed".into(), fg(ERROR))],
     }
 }
 
-/// Column positions shared by download rows and their per-file rows.
-struct Columns {
-    name: u16,
-    bar: u16,
-    bar_cells: u16,
+/// The download grid: name, a progress rule, the percent, then time left or a size.
+struct Grid {
+    rule: u16,
+    rule_cells: u16,
+    percent: u16,
     tail: u16,
     right: u16,
-    wide: bool,
 }
 
-fn columns(x: u16, right: u16) -> Columns {
-    let w = right - x;
-    let (bar_cells, tail_cells, wide) = match w {
-        96.. => (16, 18, true),
-        74.. => (10, 18, true),
-        _ => (8, 12, false),
+fn download_grid(right: u16) -> Grid {
+    let rule_cells = match right - CONTENT {
+        80.. => 16,
+        70.. => 12,
+        _ => 8,
     };
-    let tail = right - tail_cells;
-    let bar = tail - 7 - bar_cells;
-    Columns { name: x + 10, bar, bar_cells, tail, right, wide }
+    let tail = right - 10;
+    let percent = tail - 2;
+    Grid { rule: percent - 6 - rule_cells, rule_cells, percent, tail, right }
 }
 
-struct Look {
-    /// `None` shows the spinner.
-    glyph: Option<&'static str>,
-    color: Color,
-    bar: Color,
+/// The result grid: name, one flag, then size, seeds, and age, each right-aligned. The fields
+/// hold where each column starts (`flag`) or ends (the rest).
+struct Columns {
+    flag: u16,
+    size: u16,
+    seeds: u16,
+    age: u16,
 }
 
-fn look(status: &JobStatus) -> Look {
-    let l = |glyph, color, bar| Look { glyph, color, bar };
-    match status {
-        JobStatus::Queued => l(Some("·"), DIM, DIM),
-        JobStatus::Metadata | JobStatus::Checking => l(None, MUTED, MUTED),
-        JobStatus::Downloading => l(Some("↓"), ACCENT, ACCENT),
-        JobStatus::Paused => l(Some("‖"), DIM, DIM),
-        JobStatus::Done { .. } => l(Some("✓"), SUCCESS, SUCCESS),
-        JobStatus::Interrupted => l(Some("!"), WARNING, DIM),
-        JobStatus::Error { .. } => l(Some("✗"), ERROR, DIM),
-    }
+fn result_columns(right: u16) -> Columns {
+    let seeds = right - 6;
+    let size = seeds - 7;
+    Columns { flag: size - 18, size, seeds, age: right }
 }
 
-fn list(buf: &mut Buffer, state: &State, area: Rect) {
+/// Where a file row's name must end: two cells before the size column.
+fn before_size(c: &Columns) -> u16 {
+    c.size - 10
+}
+
+fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
+    let area = screen.list;
     let placed = layout::blocks(state, area.height);
-    let total = layout::total(&placed).max(area.height);
-    let sheet_area = Rect::new(area.x, 0, area.width, total);
-    let mut sheet = Buffer::empty(sheet_area);
-    fill(&mut sheet, sheet_area, BG);
-    let right = edge(area);
+    let content = layout::total(&placed);
+    let total = content.max(area.height);
+    let mut sheet = Buffer::empty(Rect::new(0, 0, area.width, total));
+    paint(&mut sheet);
+    rule(&mut sheet, 0, total);
+    // The label in force on each sheet row, so a group scrolled past still shows its name.
+    let mut group: Vec<Option<&'static str>> = vec![None; usize::from(total)];
+    let mut last: Option<&'static str> = None;
+    let right = screen.right;
     for p in &placed {
-        let (x, y) = (area.x, p.top);
+        let y = p.top;
         match p.block {
-            Block::DownloadsLabel => {
-                put(
-                    &mut sheet,
-                    x + 2,
-                    y,
-                    right - x - 2,
-                    &format!("downloads · {}", state.downloads.len()),
-                    bold(MUTED),
-                );
-            }
             Block::Download(id) => {
-                if let Some(job) = state.job(id) {
-                    download_row(&mut sheet, state, job, x, right, y);
+                let Some(job) = state.job(id) else { continue };
+                let word = if state.confirm == Some(id) { "remove?" } else { label(&job.status) };
+                if last != Some(word) {
+                    let style = if matches!(word, "remove?" | "failed") { fg(ERROR) } else { fg(PENCIL) };
+                    margin(&mut sheet, y, word, style);
                 }
+                last = Some(word);
+                download_row(&mut sheet, state, job, &download_grid(right), y);
             }
             Block::DownloadDetail(id) => {
                 if let Some(job) = state.job(id) {
-                    download_detail(&mut sheet, state, job, x, right, (y, p.height, area.height));
+                    download_detail(&mut sheet, state, job, &download_grid(right), (y, area.height));
                 }
             }
-            Block::Folded => {
-                if let Some((paused, done)) = state.folded() {
-                    let mut parts = Vec::new();
-                    if paused > 0 {
-                        parts.push(format!("{paused} paused"));
-                    }
-                    if done > 0 {
-                        parts.push(format!("{done} done"));
-                    }
-                    put(&mut sheet, x + 2, y, right - x - 2, &parts.join(" · "), fg(DIM));
-                }
+            Block::Folded(word) => {
+                margin(&mut sheet, y, word, fg(PENCIL));
+                last = Some(word);
+                let n = state.downloads.iter().filter(|j| label(&j.status) == word).count();
+                let text = if n == 1 { "1 download".to_string() } else { format!("{n} downloads") };
+                put(&mut sheet, CONTENT, y, right - CONTENT, &text, fg(PENCIL));
             }
-            Block::Gap => {}
-            Block::ResultsLabel => results_label(&mut sheet, state, x, right, y),
+            Block::Gap => last = None,
+            Block::Heads => {
+                last = Some("found");
+                heads(&mut sheet, state, &result_columns(right), y);
+            }
             Block::Result(id) => {
                 if let Some(release) = state.release(id) {
-                    result_row(&mut sheet, state, release, x, right, y);
+                    result_row(&mut sheet, state, release, &result_columns(right), y);
                 }
             }
-            Block::ResultDetail(id) => result_detail(&mut sheet, state, id, x, right, y, p.height),
-            Block::Empty => empty(&mut sheet, state, x, right, y),
+            Block::ResultDetail(id) => {
+                if state.focus == Focus::Files {
+                    last = Some("files");
+                }
+                result_detail(&mut sheet, state, id, &result_columns(right), y, p.height);
+            }
+            Block::Empty => empty(&mut sheet, state, right, y),
+        }
+        for row in y..y + p.height {
+            group[usize::from(row)] = last;
         }
     }
+    let scroll = state.scroll.min(total - area.height);
     for row in 0..area.height {
-        let from = state.scroll + row;
-        if from >= sheet.area.height {
-            break;
-        }
-        for col in area.x..area.right() {
-            buf[(col, area.y + row)] = sheet[(col, from)].clone();
+        for x in 0..area.width {
+            buf[(x, area.y + row)] = sheet[(x, scroll + row)].clone();
         }
     }
-    let content = layout::total(&placed);
-    if content > area.height {
-        let h = area.height;
-        let thumb = (u32::from(h) * u32::from(h) / u32::from(content)).max(1) as u16;
-        let travel = u32::from(h - thumb);
-        let at = (u32::from(state.scroll) * travel / u32::from(content - h)) as u16;
-        let color = if state.focus == Focus::Query { FAINT } else { DIM };
-        for row in at..(at + thumb).min(h) {
-            put(buf, area.right() - 1, area.y + row, 1, "▐", fg(color));
+    let blank_margin = (0..=MARGIN).all(|x| buf[(x, area.y)].symbol() == " ");
+    if scroll > 0
+        && blank_margin
+        && let Some(word) = group[usize::from(scroll)]
+    {
+        margin(buf, area.y, word, fg(PENCIL));
+    }
+    let mut arrow = |y: u16, glyph: &str| {
+        if buf[(MARK, y)].symbol() == "│" {
+            put(buf, MARK, y, 1, glyph, fg(PENCIL));
         }
-    }
-}
-
-/// The selected row: a full-width selection background and the gutter bar.
-fn selected(buf: &mut Buffer, state: &State, x: u16, right: u16, y: u16, rows: u16) {
-    fill(buf, Rect::new(x, y, right - x, rows), SELECTION);
-    let bar = if state.focus == Focus::Query { FAINT } else { ACCENT };
-    for row in y..y + rows {
-        put(buf, x, row, 1, "┃", fg(bar));
-    }
-}
-
-fn short(id: &str) -> &str {
-    &id[..6.min(id.len())]
-}
-
-fn download_row(buf: &mut Buffer, state: &State, job: &Job, x: u16, right: u16, y: u16) {
-    let is_selected = state.cursor == Some(Item::Download(job.id));
-    if is_selected {
-        selected(buf, state, x, right, y, 1);
-    }
-    let c = columns(x, right);
-    put(buf, x + 2, y, 6, short(&job.id.to_hex()), fg(MINT));
-    let name = job.name.clone().unwrap_or_else(|| job.id.to_hex());
-    let style = if is_selected && state.focus != Focus::Query { bold(ACCENT) } else { fg(TEXT) };
-    put(buf, c.name, y, c.bar.saturating_sub(c.name + 2), &name, style);
-    let look = look(&job.status);
-    bar(buf, c.bar, y, c.bar_cells, job.progress.fraction(), look.bar);
-    let pct = job.progress.size.map_or("–".to_string(), |size| percent(job.progress.verified, size));
-    put_right(buf, c.tail - 2, y, &pct, fg(if job.status == JobStatus::Downloading { TEXT } else { MUTED }));
-    tail(buf, state, job, &c, y);
-}
-
-/// The right end of a download row: rate and time left while downloading, else the state.
-fn tail(buf: &mut Buffer, state: &State, job: &Job, c: &Columns, y: u16) {
-    if let Some(action) = state.pending.get(&job.id) {
-        spans_right(buf, c.right, y, &[(state.spinner(), fg(ACCENT)), (" ", fg(DIM)), (action.progressive(), fg(DIM))]);
-        return;
-    }
-    if job.status == JobStatus::Downloading {
-        let rate = format_rate(job.progress.down_rate);
-        if c.wide {
-            let eta = match job.progress.eta {
-                Some(secs) if job.progress.down_rate >= 1024 => format_duration(Duration::from_secs(secs)),
-                _ => "–".into(),
-            };
-            put_right(buf, c.right - 6, y, &rate, fg(TEXT));
-            put_right(buf, c.right, y, &eta, fg(MUTED));
-        } else {
-            put_right(buf, c.right, y, &rate, fg(TEXT));
-        }
-        return;
-    }
-    let look = look(&job.status);
-    let (glyph, glyph_color) = match look.glyph {
-        Some(glyph) => (glyph, look.color),
-        None => (state.spinner(), ACCENT),
     };
-    spans_right(buf, c.right, y, &[(glyph, fg(glyph_color)), (" ", fg(DIM)), (job.status.name(), fg(look.color))]);
+    if scroll > 0 {
+        arrow(area.y, "↑");
+    }
+    if scroll + area.height < content {
+        arrow(area.bottom() - 1, "↓");
+    }
 }
 
-fn spans_right(buf: &mut Buffer, right: u16, y: u16, parts: &[(&str, Style)]) {
-    let w = spans_width(parts);
-    spans(buf, right.saturating_sub(w), y, w, parts);
+fn selected(state: &State, item: Item) -> bool {
+    state.cursor == Some(item) && state.focus != Focus::Query
 }
 
-/// `height` is the block's own; `viewport` is the list's, which caps the files shown.
-fn download_detail(
-    buf: &mut Buffer,
-    state: &State,
-    job: &Job,
-    x: u16,
-    right: u16,
-    (y, height, viewport): (u16, u16, u16),
-) {
-    fill(buf, Rect::new(x + 2, y, right - x - 2, height), PANEL);
-    let c = columns(x, right);
-    let room = right.saturating_sub(c.name + 1);
+fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
+    let is_selected = selected(state, Item::Download(job.id));
+    if is_selected {
+        mark(buf, y);
+    }
+    let done = matches!(job.status, JobStatus::Done { .. });
+    let ink = match (is_selected, done) {
+        (true, _) => bold(INK),
+        (false, true) => fg(PENCIL),
+        (false, false) => fg(TEXT),
+    };
+    let name = job.name.clone().unwrap_or_else(|| job.id.to_hex());
+    let p = &job.progress;
+    if done {
+        put(buf, CONTENT, y, g.tail - 2 - CONTENT, &name, ink);
+        put_right(buf, g.right, y, &p.size.map_or("–".into(), size), ink);
+        return;
+    }
+    put(buf, CONTENT, y, g.rule - 2 - CONTENT, &name, ink);
+    let moving = job.status == JobStatus::Downloading;
+    progress(buf, g.rule, y, g.rule_cells, p.fraction(), if moving { ACTION } else { PENCIL });
+    let pct = p.size.map_or("–".to_string(), |size| percent(p.verified, size));
+    put_right(buf, g.percent, y, &pct, ink);
+    if let Some(action) = state.pending.get(&job.id) {
+        spans(buf, g.tail, y, g.right - g.tail, &[(action.progressive(), fg(PENCIL)), (state.spinner(), fg(PENCIL))]);
+        return;
+    }
+    let tail = match &job.status {
+        JobStatus::Downloading => match p.eta {
+            Some(secs) if p.down_rate >= 1024 => format!("{} left", format_duration(Duration::from_secs(secs))),
+            _ => "stalled".into(),
+        },
+        JobStatus::Metadata => format!("{} peers", p.peers),
+        _ => String::new(),
+    };
+    put_right(buf, g.right, y, &tail, if is_selected { ink } else { fg(PENCIL) });
+}
+
+/// What opens under a selected download. `viewport` is the list's height, which caps the files.
+fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, viewport): (u16, u16)) {
+    let room = g.right - DETAIL;
     let home = state.home.as_deref();
+    let mut row = y;
+    if state.confirm == Some(job.id) {
+        let text = format!("Its files stay in {}.", home_path(&job.dir, home));
+        let keys = [("enter", fg(INK)), (" removes it   ", fg(PENCIL)), ("esc", fg(INK)), (" keeps it", fg(PENCIL))];
+        let keys_x = spans_right(buf, g.right, row, &keys);
+        put(buf, DETAIL, row, keys_x.saturating_sub(DETAIL + 2), &text, fg(TEXT));
+        row += 1;
+    }
     let path = job.path.as_ref().unwrap_or(&job.dir);
-    put(buf, c.name, y, room, &middle(&home_path(path, home), room as usize), fg(DIM));
+    put(buf, DETAIL, row, room, &middle(&home_path(path, home), room as usize), fg(PENCIL));
     let p = &job.progress;
     let mut facts = Vec::new();
     match (&job.status, p.size) {
-        (JobStatus::Metadata, _) | (_, None) => facts.push("Fetching the file list from peers".to_string()),
-        (JobStatus::Done { finished_at }, Some(size)) => {
-            facts.push(format_size(size));
+        (JobStatus::Metadata, _) | (_, None) => facts.push("fetching the file list from peers".to_string()),
+        (JobStatus::Done { finished_at }, Some(total)) => {
+            facts.push(size(total));
             facts.push(format!("finished {} ago", age(*finished_at, state.clock)));
         }
-        (_, Some(size)) => facts.push(format!("{} of {}", format_size(p.verified), format_size(size))),
+        (_, Some(total)) => facts.push(format!("{} of {}", size(p.verified), size(total))),
+    }
+    if job.status == JobStatus::Downloading {
+        facts.push(rate(p.down_rate));
     }
     if matches!(job.status, JobStatus::Downloading | JobStatus::Metadata) {
         facts.push(format!("{} peers", p.peers));
     }
-    if let (JobStatus::Downloading, Some(eta)) = (&job.status, p.eta) {
-        facts.push(format!("{} left", format_duration(Duration::from_secs(eta))));
-    }
-    if let Some(files) = state.download_files.get(&job.id).filter(|f| !f.files.is_empty()) {
-        let (picked, n) = (files.files.iter().filter(|f| f.selected).count(), files.files.len());
-        facts.push(match (picked, n) {
-            (1, 1) => "1 file".into(),
-            (p, n) if p == n => format!("{n} files"),
-            (p, n) => format!("{p} of {n} files"),
-        });
-    }
-    put(buf, c.name, y + 1, room, &facts.join(" · "), fg(MUTED));
-    let mut row = y + 2;
+    put(buf, DETAIL, row + 1, room, &facts.join(" · "), fg(PENCIL));
+    row += 2;
     if let JobStatus::Error { error } = &job.status {
-        put(buf, c.name, row, room, &format!("✗ {}", error.message), fg(ERROR));
+        put(buf, DETAIL, row, room, &error.message, fg(ERROR));
         row += 1;
         if let Some(hint) = &error.hint {
-            put(buf, c.name, row, room, hint, fg(DIM));
+            put(buf, DETAIL, row, room, hint, fg(PENCIL));
             row += 1;
         }
     }
     let (shown, more) = layout::download_file_rows(state, job, viewport);
     let Some(files) = state.download_files.get(&job.id) else { return };
     let picked: Vec<_> = files.files.iter().filter(|f| f.selected).collect();
-    let any_progress = picked.iter().any(|f| f.verified > 0) || job.progress.verified == 0;
+    let ink = if job.status == JobStatus::Downloading { ACTION } else { PENCIL };
     for file in picked.iter().take(shown) {
         let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-        let room = c.bar.saturating_sub(c.name + 2);
-        put(buf, c.name, row, room, &middle(name, room as usize), fg(TEXT));
-        if any_progress {
-            let fraction = if file.size == 0 { 1.0 } else { file.verified as f64 / file.size as f64 };
-            bar(buf, c.bar, row, c.bar_cells, Some(fraction), look(&job.status).bar);
-            put_right(buf, c.tail - 2, row, &percent(file.verified, file.size), fg(MUTED));
-            put_right(buf, c.right, row, &format_size(file.size), fg(DIM));
-        } else {
-            put_right(buf, c.right, row, &format_size(file.size), fg(DIM));
-        }
+        let room = g.rule - 2 - DETAIL;
+        put(buf, DETAIL, row, room, &middle(name, room as usize), fg(TEXT));
+        let fraction = if file.size == 0 { 1.0 } else { file.verified as f64 / file.size as f64 };
+        progress(buf, g.rule, row, g.rule_cells, Some(fraction), ink);
+        put_right(buf, g.percent, row, &percent(file.verified, file.size), fg(PENCIL));
+        put_right(buf, g.right, row, &size(file.size), fg(PENCIL));
         row += 1;
     }
     if more {
-        let text = format!("+{} more files", picked.len() - shown);
-        put(buf, c.name, row, room, &text, fg(DIM));
+        put(buf, DETAIL, row, room, &format!("and {} more files", picked.len() - shown), fg(PENCIL));
     }
 }
 
-fn results_label(buf: &mut Buffer, state: &State, x: u16, right: u16, y: u16) {
-    let label = match &state.search {
-        Some(_) => format!("results · {}", state.results().len()),
-        None => "results".into(),
+fn heads(buf: &mut Buffer, state: &State, c: &Columns, y: u16) {
+    margin(buf, y, "found", fg(PENCIL));
+    let order = match state.sort {
+        Sort::BestMatch => "best match first",
+        Sort::Seeds => "most seeds first",
+        Sort::Size => "largest first",
+        Sort::Age => "newest first",
     };
-    put(buf, x + 2, y, right - x - 2, &label, bold(MUTED));
-    if state.search.is_some() {
-        put_right(buf, right, y, state.sort.label(), fg(DIM));
-    }
+    put(buf, CONTENT, y, c.flag.saturating_sub(CONTENT + 2), order, fg(PENCIL));
+    put_right(buf, c.size, y, "size", fg(PENCIL));
+    put_right(buf, c.seeds, y, "seeds", fg(PENCIL));
+    put_right(buf, c.age, y, "age", fg(PENCIL));
 }
 
-fn flag_color(flag: Flag) -> Color {
+/// The flag a row has room for: the warning first, then provenance.
+fn first_flag(release: &Release) -> Option<Flag> {
+    let rank = [Flag::Cam, Flag::Official, Flag::PublicDomain, Flag::CreativeCommons, Flag::Trusted, Flag::Adult];
+    rank.into_iter().find(|f| release.flags.contains(f))
+}
+
+fn flag_words(flag: Flag) -> &'static str {
     match flag {
-        Flag::Official | Flag::PublicDomain | Flag::CreativeCommons => MINT,
-        Flag::Trusted => MUTED,
-        Flag::Cam => WARNING,
-        Flag::Adult => DIM,
+        Flag::Official => "official release",
+        Flag::Trusted => "trusted uploader",
+        Flag::PublicDomain => "public domain",
+        Flag::CreativeCommons => "creative commons",
+        Flag::Cam => "recorded in a cinema",
+        Flag::Adult => "adult",
     }
 }
 
-fn seeds_color(n: Option<u32>) -> Color {
-    match n {
-        None => FAINT,
-        Some(0) => ERROR,
-        Some(1..=9) => DIM,
-        Some(_) => TEXT,
+fn result_row(buf: &mut Buffer, state: &State, release: &Release, c: &Columns, y: u16) {
+    let is_selected = selected(state, Item::Result(release.id));
+    if is_selected && state.focus == Focus::List {
+        mark(buf, y);
     }
+    let pick = |plain: Color| if is_selected { bold(INK) } else { fg(plain) };
+    put(buf, CONTENT, y, c.flag - 2 - CONTENT, &release.name, pick(TEXT));
+    if let Some(flag) = first_flag(release) {
+        let style = match flag {
+            Flag::Cam => fg(ERROR),
+            Flag::Trusted | Flag::Adult => pick(PENCIL),
+            _ => pick(TEXT),
+        };
+        put(buf, c.flag, y, 8, flag.as_str(), style);
+    }
+    put_right(buf, c.size, y, &release.size.map_or("–".into(), size), pick(TEXT));
+    let seeds_style = match release.seeders {
+        Some(0) => fg(ERROR),
+        None | Some(1..=9) => pick(PENCIL),
+        Some(_) => pick(TEXT),
+    };
+    put_right(buf, c.seeds, y, &seeds(release.seeders), seeds_style);
+    let published = release.published.map_or("–".into(), |p| age(p, state.clock));
+    put_right(buf, c.age, y, &published, pick(PENCIL));
 }
 
-fn result_row(buf: &mut Buffer, state: &State, release: &Release, x: u16, right: u16, y: u16) {
-    let is_selected = state.cursor == Some(Item::Result(release.id));
-    if is_selected {
-        selected(buf, state, x, right, y, 2);
-    }
-    let name_x = x + 10;
-    put(buf, x + 2, y, 6, short(&release.id.to_ref()), fg(MINT));
-    let size = release.size.map_or("–".to_string(), format_size);
-    let size_x = put_right(buf, right, y, &size, fg(TEXT));
-    let style = if is_selected && state.focus != Focus::Query { bold(ACCENT) } else { fg(TEXT) };
-    put(buf, name_x, y, size_x.saturating_sub(name_x + 2), &release.name, style);
-    let seeds_text = format!("{} seeds", seeds(release.seeders));
-    let seeds_x = put_right(buf, right, y + 1, &seeds_text, fg(seeds_color(release.seeders)));
-    let room = seeds_x.saturating_sub(name_x + 2);
-    let mut at = name_x;
-    for flag in &release.flags {
-        let w = put(buf, at, y + 1, (name_x + room).saturating_sub(at), flag.as_str(), fg(flag_color(*flag)));
-        at += w + 1;
-    }
-    if !release.flags.is_empty() {
-        at += 1;
-    }
-    let mut facts: Vec<String> = release.sources.first().cloned().into_iter().collect();
-    if let Some(published) = release.published {
-        facts.push(age(published, state.clock));
-    }
-    put(buf, at, y + 1, (name_x + room).saturating_sub(at), &facts.join(" · "), fg(DIM));
-}
-
-fn result_detail(buf: &mut Buffer, state: &State, id: ReleaseId, x: u16, right: u16, y: u16, height: u16) {
-    fill(buf, Rect::new(x + 2, y, right - x - 2, height), PANEL);
-    let (name_x, room) = (x + 10, right.saturating_sub(x + 11));
+fn result_detail(buf: &mut Buffer, state: &State, id: ReleaseId, c: &Columns, y: u16, height: u16) {
+    let room = c.age - DETAIL;
     let files = state.files.get(&id);
     if state.focus == Focus::Files {
         match files {
-            Some(Files::Ready(tree)) => file_tree(buf, state, tree, x, right, y, height),
+            Some(Files::Ready(tree)) => file_tree(buf, state, tree, c, y, height),
             Some(Files::Loading { since, .. }) => {
+                margin(buf, y, "files", fg(PENCIL));
                 let secs = state.now.duration_since(*since).as_secs();
-                let text = format!(" Fetching the file list from peers · {secs}s");
-                spans(buf, x + 4, y, room, &[(state.spinner(), fg(ACCENT)), (&text, fg(MUTED))]);
-                let note = "Magnet links need a peer to send the file list before you can pick files.";
-                put(buf, x + 4, y + 1, right - x - 5, note, fg(DIM));
+                let parts = [("fetching the file list", fg(TEXT)), (state.spinner(), fg(TEXT))];
+                let used = spans(buf, DETAIL, y, room, &parts);
+                put(buf, DETAIL + used, y, room.saturating_sub(used), &format!(" {secs}s"), fg(PENCIL));
+                let note = "A magnet link has no file list until a peer sends one.";
+                put(buf, DETAIL, y + 1, room, note, fg(PENCIL));
             }
             Some(Files::Failed(error)) => {
-                put(buf, x + 4, y, right - x - 5, &format!("✗ {}", error.message), fg(ERROR));
-                put(
-                    buf,
-                    x + 4,
-                    y + 1,
-                    right - x - 5,
-                    error.hint.as_deref().unwrap_or("Press enter to try again."),
-                    fg(DIM),
-                );
+                margin(buf, y, "files", fg(ERROR));
+                put(buf, DETAIL, y, room, &error.message, fg(ERROR));
+                put(buf, DETAIL, y + 1, room, error.hint.as_deref().unwrap_or("Press enter to try again."), fg(PENCIL));
             }
             None => {}
         }
         return;
     }
-    let downloaded = matches!(id, ReleaseId::Torrent(t) if state.job(t).is_some());
-    if downloaded {
-        put(buf, name_x, y, room, "In downloads. Press d to see it.", fg(MUTED));
+    if matches!(id, ReleaseId::Torrent(t) if state.job(t).is_some()) {
+        put(buf, DETAIL, y, room, "in downloads · press d to see it", fg(PENCIL));
         return;
     }
+    let Some(release) = state.release(id) else { return };
+    let mut facts: Vec<String> = release.sources.clone();
+    facts.extend(release.flags.iter().map(|f| flag_words(*f).to_string()));
     match files {
         Some(Files::Ready(tree)) => {
             let n = tree.files.len();
-            let facts = format!(
-                "{n} {} · {} picked · {}   ",
-                if n == 1 { "file" } else { "files" },
-                tree.picked_count(),
-                format_size(tree.picked_size())
-            );
-            let used = put(buf, name_x, y, room, &facts, fg(DIM));
-            hints(buf, name_x + used, y, room.saturating_sub(used), &[("enter", "choose files"), ("D", "download")]);
+            facts.push(if n == 1 { "1 file".into() } else { format!("{n} files") });
         }
-        Some(Files::Loading { .. }) => {
-            spans(buf, name_x, y, room, &[(state.spinner(), fg(ACCENT)), (" Fetching the file list", fg(DIM))]);
-        }
-        Some(Files::Failed(error)) => {
-            put(buf, name_x, y, room, &format!("✗ {}", error.message), fg(ERROR));
-        }
-        None => hints(buf, name_x, y, room, &[("enter", "choose files"), ("D", "download")]),
+        Some(Files::Loading { .. }) => facts.push(format!("counting files{}", state.spinner())),
+        Some(Files::Failed(_)) | None => {}
+    }
+    let used = put(buf, DETAIL, y, room, &facts.join(" · "), fg(PENCIL));
+    if let Some(Files::Failed(error)) = files {
+        put(buf, CONTENT + used + 3, y, room.saturating_sub(used + 3), &error.message, fg(ERROR));
     }
 }
 
-fn file_tree(buf: &mut Buffer, state: &State, tree: &Tree, x: u16, right: u16, y: u16, height: u16) {
-    let visible = tree.visible();
-    let rows = usize::from(height.saturating_sub(2));
-    let inner = x + 4;
-    let end = right - 1;
-    let first = tree.scroll + 1;
-    let last = (tree.scroll + rows).min(visible.len());
-    let range = if visible.len() > rows {
-        format!("files · {first}–{last} of {}", visible.len())
-    } else {
-        format!("files · {}", tree.files.len())
-    };
-    put(buf, inner, y, end - inner, &range, fg(MUTED));
-    let left_out = tree.risky_left_out();
-    if left_out > 0 {
-        let text = format!("{left_out} executable{} excluded", if left_out == 1 { "" } else { "s" });
-        put_right(buf, end, y, &text, fg(WARNING));
-    }
-    for (k, &n) in visible.iter().skip(tree.scroll).take(rows).enumerate() {
-        let row = y + 1 + k as u16;
+/// The file picker under a result: tick marks, sizes under the result's size column, and a
+/// total ruled off below them.
+fn file_tree(buf: &mut Buffer, state: &State, tree: &Tree, c: &Columns, y: u16, height: u16) {
+    let rows = usize::from(height - 2);
+    for (k, &n) in tree.visible().iter().skip(tree.scroll).take(rows).enumerate() {
+        let row = y + k as u16;
+        if k == 0 {
+            margin(buf, row, "files", fg(PENCIL));
+        }
         let node = &tree.nodes[n];
         let here = n == tree.cursor;
         if here {
-            fill(buf, Rect::new(x + 2, row, right - x - 2, 1), SELECTION);
-            put(buf, x + 2, row, 1, "┃", fg(ACCENT));
+            mark(buf, row);
         }
-        let at = inner + node.depth * 2;
-        let (glyph, color) = match tree.check(n) {
-            Check::All => ("●", ACCENT),
-            Check::Some => ("◐", ACCENT),
-            Check::None => ("○", FAINT),
+        let at = DETAIL + node.depth * 2;
+        let check = tree.check(n);
+        let (tick, tick_color) = match check {
+            Check::All => ("✓", ACTION),
+            Check::Some => ("–", ACTION),
+            Check::None => ("·", PENCIL),
         };
-        put(buf, at, row, 1, glyph, fg(color));
-        let (fold, size, risky) = match node.kind {
-            NodeKind::Folder { .. } => (if tree.folded.contains(&n) { "▸" } else { "▾" }, None, false),
-            NodeKind::File(i) => ("", Some(tree.files[i].size), tree.is_risky(i)),
+        put(buf, at, row, 1, tick, fg(tick_color));
+        let mut end = before_size(c);
+        let name_x = match node.kind {
+            NodeKind::Folder { .. } => {
+                put(buf, at + 2, row, 1, if tree.folded.contains(&n) { "▸" } else { "▾" }, fg(PENCIL));
+                at + 4
+            }
+            NodeKind::File(i) => {
+                put_right(buf, c.size, row, &size(tree.files[i].size), fg(PENCIL));
+                if tree.is_risky(i) {
+                    end = put_right(buf, end, row, "executable", fg(ERROR)).saturating_sub(2);
+                }
+                at + 2
+            }
         };
-        put(buf, at + 2, row, 1, fold, fg(DIM));
-        let mut tail_x = end;
-        if let Some(size) = size {
-            tail_x = put_right(buf, end, row, &format_size(size), fg(DIM));
-        }
-        if risky {
-            tail_x = put_right(buf, tail_x - 2, row, "! executable", fg(WARNING));
-        }
-        let style = match (here, &node.kind) {
-            (true, _) => fg(ACCENT),
-            (false, NodeKind::Folder { .. }) => fg(MUTED),
-            (false, NodeKind::File(_)) => fg(TEXT),
+        let style = match (here, check) {
+            (true, _) => bold(INK),
+            (false, Check::None) => fg(PENCIL),
+            (false, _) => fg(TEXT),
         };
-        let name_x = at + 4;
-        let room = tail_x.saturating_sub(name_x + 2);
+        let room = end.saturating_sub(name_x);
         put(buf, name_x, row, room, &middle(&node.name, room as usize), style);
     }
-    let action = y + height - 1;
+    let ruled = y + rows as u16;
+    let left_out = tree.risky_left_out();
+    if left_out > 0 {
+        let text = format!("{left_out} executable{} left out", if left_out == 1 { "" } else { "s" });
+        put(buf, DETAIL, ruled, before_size(c) - DETAIL, &text, fg(ERROR));
+    }
+    put_right(buf, c.size, ruled, "────────", fg(PENCIL));
+    let total = ruled + 1;
     let picked = tree.picked_count();
-    let mut summary = format!(
-        "{picked} of {} files · {} of {}",
-        tree.files.len(),
-        format_size(tree.picked_size()),
-        format_size(tree.total_size())
-    );
-    let button = if picked == 0 {
-        " nothing picked ".to_string()
-    } else {
-        format!(" download {} ", format_size(tree.picked_size()))
-    };
-    let key_x = put_right(buf, end, action, " enter", fg(MUTED));
-    let button_x = key_x.saturating_sub(width(&button) as u16);
-    if picked == 0 {
-        put(buf, button_x, action, key_x - button_x, &button, fg(BG).bg(FAINT));
-    } else {
-        put(buf, button_x, action, key_x - button_x, &button, bold(ON_ACCENT).bg(ACCENT));
+    let summary = if picked == 0 { "nothing picked".to_string() } else { format!("{picked} of {} files", tree.files.len()) };
+    let used = put(buf, DETAIL, total, before_size(c) - DETAIL, &summary, fg(TEXT));
+    if let Some(free) = state.free_space {
+        let text = format!(" · {} free", size(free));
+        let style = if free < tree.picked_size() { fg(ERROR) } else { fg(PENCIL) };
+        put(buf, DETAIL + used, total, before_size(c).saturating_sub(DETAIL + used), &text, style);
     }
-    let room = button_x.saturating_sub(inner + 2);
-    if let Some(free) = state.free_space.map(|f| format!(" · {} free", format_size(f)))
-        && width(&summary) + width(&free) <= room as usize
-    {
-        summary += &free;
-    }
-    put(buf, inner, action, room, &summary, fg(MUTED));
+    put_right(buf, c.size, total, &size(tree.picked_size()), bold(INK));
 }
 
-fn empty(buf: &mut Buffer, state: &State, x: u16, right: u16, y: u16) {
-    let (tx, room) = (x + 10, right.saturating_sub(x + 11));
-    if let (Engine::Unreachable(error), None) = (&state.engine, &state.search) {
-        put(buf, tx, y + 1, room, "✗ Cannot reach the engine.", fg(ERROR));
-        let why = error.hint.as_deref().unwrap_or("Downloads run in the engine, so this screen needs it.");
-        put(buf, tx, y + 2, room, why, fg(DIM));
-        return;
-    }
-    let Some(search) = &state.search else {
-        put(buf, tx, y + 1, room, "Search catalogs and indexes without leaving this list.", fg(MUTED));
-        hints(buf, tx, y + 2, room, &[("/", "search"), ("?", "help")]);
-        return;
+fn empty(buf: &mut Buffer, state: &State, right: u16, y: u16) {
+    let room = right - CONTENT;
+    let mut lines = |word: &str, first: &str, alarm: bool, second: &str, second_color: Color| {
+        margin(buf, y, word, fg(if alarm { ERROR } else { PENCIL }));
+        put(buf, CONTENT, y, room, first, fg(if alarm { ERROR } else { TEXT }));
+        put(buf, CONTENT, y + 1, room, second, fg(second_color));
     };
-    if state.filtering() {
-        put(buf, tx, y + 1, room, &format!("Nothing loaded matches \"{}\".", state.query.text.trim()), fg(TEXT));
-        put(buf, tx, y + 2, room, "Press enter to search for it.", fg(DIM));
+    if let (Engine::Unreachable(error), None) = (&state.engine, &state.search) {
+        let why = error.hint.as_deref().unwrap_or("Downloads run in the engine, so this screen needs it.");
+        lines("engine", "Cannot reach the engine.", true, why, PENCIL);
         return;
     }
+    let Some(search) = &state.search else { return };
+    if state.filtering() {
+        let first = format!("Nothing loaded matches \"{}\".", state.query.text.trim());
+        lines("found", &first, false, "Press enter to search for it.", PENCIL);
+        return;
+    }
+    let failures: Vec<String> = search
+        .sources
+        .iter()
+        .filter(|s| !s.outcome.is_ok())
+        .map(|s| format!("{} {}", s.source, reason(&s.outcome)))
+        .collect();
+    let nothing = format!("Nothing found for \"{}\".", search.text);
     match &search.phase {
         SearchPhase::Running { .. } => {}
-        SearchPhase::Done => {
-            put(buf, tx, y + 1, room, &format!("No results for \"{}\".", search.text), fg(TEXT));
-            put(buf, tx, y + 2, room, "Try fewer or different words, or check the spelling.", fg(DIM));
-        }
+        SearchPhase::Done if failures.is_empty() => lines("found", &nothing, false, "Try fewer or different words.", PENCIL),
+        SearchPhase::Done => lines("found", &nothing, false, &failures.join(" · "), ERROR),
         SearchPhase::Failed(error) => {
-            put(buf, tx, y + 1, room, "✗ No source answered.", fg(ERROR));
-            let hint = error.hint.as_deref().unwrap_or("Check your connection, then press enter to search again.");
-            put(buf, tx, y + 2, room, hint, fg(DIM));
+            let hint = error.hint.as_deref().unwrap_or("Check the connection, then press enter to search again.");
+            lines("found", "No source answered.", true, hint, PENCIL);
         }
     }
 }
 
-const HELP: [(&str, &str, &str, &str); 8] = [
-    ("j k ↑ ↓", "move", "/", "search"),
-    ("enter l →", "open · choose files", "tab", "next section"),
-    ("h ←", "collapse · fold", "d  r", "downloads · results"),
-    ("space", "pick a file · pause or resume", "a", "pick all or none"),
-    ("D", "download", "s", "sort results"),
-    ("v  x", "verify · remove", "o  y", "open folder · copy path"),
-    ("g G", "first · last", "pgup pgdn", "page"),
-    ("esc", "back", "q", "quit · downloads keep running"),
+const HELP: [(&str, &[(&str, &str)]); 6] = [
+    ("move", &[("j k", "up, down"), ("g G", "first, last"), ("pgup pgdn", "a page"), ("d r", "downloads, results")]),
+    ("typing", &[("/", "search"), ("enter", "search again"), ("ctrl+u", "clear"), ("tab", "into the list")]),
+    ("results", &[("enter", "files"), ("D", "download"), ("s", "sort"), ("h l", "close, open")]),
+    ("files", &[("space", "pick"), ("a", "all or none"), ("h l", "fold folders"), ("enter", "download")]),
+    ("download", &[("space", "pause, resume"), ("v", "verify"), ("x", "remove"), ("o", "open"), ("y", "copy path")]),
+    ("always", &[("?", "keys"), ("esc", "back"), ("q", "quit"), ("ctrl+c", "quit")]),
 ];
 
-fn help(buf: &mut Buffer, area: Rect) {
-    fill(buf, area, PANEL);
-    let (x, right) = (area.x + 2, edge(area));
-    put(buf, x, area.y, 4, "Help", bold(ACCENT));
-    put_right(buf, right, area.y, "esc close", fg(DIM));
-    let w = right - x;
-    let split = if w >= 90 { w / 2 } else { w * 3 / 5 };
-    for (i, (k1, l1, k2, l2)) in HELP.iter().enumerate() {
-        let y = area.y + 1 + i as u16;
+const NOTES: [&str; 4] = [
+    "Typing filters the results already loaded.",
+    "Quitting leaves downloads running.",
+    "Downloads stop at 100% and never seed.",
+    "Removing a download keeps its files.",
+];
+
+/// The keys, in place of the list, as a ledger of their own.
+fn help(buf: &mut Buffer, screen: &Screen) {
+    let area = screen.list;
+    rule(buf, area.y, area.bottom());
+    let room = screen.right - CONTENT;
+    let mut y = area.y;
+    for (word, pairs) in HELP {
         if y >= area.bottom() {
             return;
         }
-        put(buf, x, y, 11, k1, bold(TEXT));
-        put(buf, x + 12, y, split.saturating_sub(13), l1, fg(MUTED));
-        put(buf, x + split, y, 8, k2, bold(TEXT));
-        put(buf, x + split + 9, y, w.saturating_sub(split + 9), l2, fg(MUTED));
+        margin(buf, y, word, fg(PENCIL));
+        let mut x = CONTENT;
+        for (key, verb) in pairs {
+            let w = (width(key) + 1 + width(verb)) as u16;
+            if x > CONTENT && x + w > CONTENT + room {
+                y += 1;
+                x = CONTENT;
+            }
+            x += put(buf, x, y, room, key, fg(INK));
+            x += put(buf, x, y, room, &format!(" {verb}"), fg(PENCIL)) + 3;
+        }
+        y += 1;
     }
-    let note = area.y + 1 + HELP.len() as u16;
-    if note < area.bottom() {
-        put(buf, x, note, w, "Downloads stop at 100% and never seed.", fg(DIM));
+    for (k, note) in NOTES.iter().enumerate() {
+        put(buf, CONTENT, y + 1 + k as u16, room, note, fg(PENCIL));
     }
 }
 
 fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
-    let col = screen.column;
-    let (x, room) = (col.x + 2, edge(col) - col.x - 2);
-    match &state.toast {
-        Some(toast) => {
-            let color = match toast.tone {
-                Tone::Info => MUTED,
-                Tone::Success => SUCCESS,
-                Tone::Warning => WARNING,
-                Tone::Error => ERROR,
-            };
-            put(buf, x, screen.status, room, &toast.text, fg(color));
-        }
-        None => {
-            put(buf, x, screen.status, room, &status(state), fg(DIM));
-        }
+    let y = screen.footer;
+    let mut room = screen.right - CONTENT;
+    if let Some(toast) = &state.toast {
+        let color = match toast.tone {
+            Tone::Info => TEXT,
+            Tone::Success => ACTION,
+            Tone::Warning | Tone::Error => ERROR,
+        };
+        let used = put(buf, CONTENT, y, room, &toast.text, fg(color));
+        room = room.saturating_sub(used + 4);
     }
     let pause = match state.cursor.and_then(|item| match item {
         Item::Download(id) => state.job(id),
@@ -807,79 +768,16 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
         _ => "pause",
     };
     let pairs: Vec<(&str, &str)> = match (state.focus, state.cursor) {
-        (Focus::Query, _) => {
-            vec![("enter", "search"), ("↓", "list"), ("ctrl+u", "clear"), ("esc", "back")]
-        }
-        (Focus::Files, _) => {
-            vec![("space", "pick"), ("a", "all"), ("←→", "fold"), ("enter", "download"), ("esc", "back"), ("?", "help")]
-        }
-        (Focus::List, Some(Item::Download(_))) => vec![
-            ("↑↓", "move"),
-            ("space", pause),
-            ("v", "verify"),
-            ("x", "remove"),
-            ("o", "open"),
-            ("y", "copy path"),
-            ("?", "help"),
-        ],
-        (Focus::List, Some(Item::Result(_))) => {
-            vec![("↑↓", "move"), ("enter", "files"), ("D", "download"), ("s", "sort"), ("/", "search"), ("?", "help")]
-        }
-        (Focus::List, None) => vec![("/", "search"), ("?", "help"), ("q", "quit")],
+        _ if state.confirm.is_some() => vec![("enter", "remove"), ("esc", "keep")],
+        _ if state.help => vec![("esc", "close")],
+        (Focus::Query, _) if state.items().is_empty() => vec![("enter", "search")],
+        (Focus::Query, _) => vec![("enter", "search"), ("↓", "list")],
+        (Focus::Files, _) => vec![("space", "pick"), ("a", "all"), ("enter", "download"), ("esc", "back")],
+        (Focus::List, Some(Item::Download(_))) => vec![("space", pause), ("x", "remove"), ("o", "open"), ("?", "keys")],
+        (Focus::List, Some(Item::Result(_))) => vec![("enter", "files"), ("D", "download"), ("s", "sort"), ("?", "keys")],
+        (Focus::List, None) => vec![("/", "search"), ("?", "keys")],
     };
-    hints(buf, x, screen.hints, room, &pairs);
-}
-
-/// The footer's left status when no toast shows: where the cursor is.
-fn status(state: &State) -> String {
-    if state.focus == Focus::Files {
-        return "Executables stay excluded unless you pick them.".into();
+    if room > 0 {
+        hints(buf, screen.right, y, room, &pairs);
     }
-    let Some(cursor) = state.cursor.filter(|_| state.focus == Focus::List) else { return String::new() };
-    match cursor {
-        Item::Download(id) => {
-            let at = state.downloads.iter().position(|j| j.id == id).map_or(0, |i| i + 1);
-            format!("download {at} of {}", state.downloads.len())
-        }
-        Item::Result(id) => {
-            let results = state.results();
-            let at = results.iter().position(|r| r.id == id).map_or(0, |i| i + 1);
-            format!("result {at} of {}", results.len())
-        }
-    }
-}
-
-/// Draws the frame of a dialog `w` wide and `h` tall, and returns its rectangle.
-fn dialog(buf: &mut Buffer, w: u16, h: u16) -> Rect {
-    let area = buf.area;
-    let w = w.min(area.width.saturating_sub(2));
-    let h = h.min(area.height.saturating_sub(2));
-    let top = (area.height / 4).min(area.height.saturating_sub(h + 1)).max(1);
-    let rect = Rect::new(area.x + (area.width - w) / 2, top, w, h);
-    fill(buf, rect, PANEL);
-    let line = "─".repeat(usize::from(w - 2));
-    put(buf, rect.x, rect.y, w, &format!("╭{line}╮"), fg(BORDER));
-    put(buf, rect.x, rect.bottom() - 1, w, &format!("╰{line}╯"), fg(BORDER));
-    for y in rect.y + 1..rect.bottom() - 1 {
-        put(buf, rect.x, y, 1, "│", fg(BORDER));
-        put(buf, rect.right() - 1, y, 1, "│", fg(BORDER));
-    }
-    rect
-}
-
-fn confirm(buf: &mut Buffer, state: &State, id: torrential_core::TorrentId) {
-    let r = dialog(buf, 60, 9);
-    let (x, inner) = (r.x + 3, r.width - 6);
-    put(buf, x, r.y + 1, inner, "Remove from the list?", bold(TEXT));
-    put_right(buf, r.right() - 3, r.y + 1, "esc", fg(MUTED));
-    let job = state.job(id);
-    let name = job.and_then(|j| j.name.clone()).unwrap_or_else(|| id.to_hex());
-    put(buf, x, r.y + 3, inner, &name, fg(MUTED));
-    let dir = job.map_or("~".to_string(), |j| home_path(&j.dir, state.home.as_deref()));
-    put(buf, x, r.y + 4, inner, &format!("Its files stay in {dir}."), fg(DIM));
-    let y = r.y + 7;
-    spans(buf, x, y, inner, &[("cancel", fg(TEXT)), (" esc", fg(MUTED))]);
-    let key_x = put_right(buf, r.right() - 3, y, " enter", fg(MUTED));
-    let label = " remove ";
-    put(buf, key_x - width(label) as u16, y, width(label) as u16, label, bold(ON_ACCENT).bg(ACCENT));
 }

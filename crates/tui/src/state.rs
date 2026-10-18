@@ -146,6 +146,19 @@ pub fn group(status: &JobStatus) -> u8 {
     }
 }
 
+/// The margin's word for a download in each state.
+pub fn label(status: &JobStatus) -> &'static str {
+    match status {
+        JobStatus::Downloading | JobStatus::Metadata => "getting",
+        JobStatus::Checking => "checking",
+        JobStatus::Queued => "waiting",
+        JobStatus::Error { .. } => "failed",
+        JobStatus::Interrupted => "stopped",
+        JobStatus::Paused => "paused",
+        JobStatus::Done { .. } => "done",
+    }
+}
+
 /// Folded downloads stay in the list but share one summary line.
 pub fn folds(status: &JobStatus) -> bool {
     matches!(status, JobStatus::Paused | JobStatus::Done { .. })
