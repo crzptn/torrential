@@ -13,6 +13,7 @@ use super::files;
 pub const GIB: u64 = 1024 * 1024 * 1024;
 pub const DEFAULT_MAX_SIZE: u64 = 50 * GIB;
 const MIN_RESERVE: u64 = 2 * GIB;
+const MAX_RESERVE: u64 = 10 * GIB;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Space {
@@ -28,8 +29,9 @@ pub trait Disk: Send {
     fn exists(&self, path: &Path) -> bool;
 }
 
+/// 2%, at least 2 GiB so a small disk keeps room for the system, at most 10 GiB so a big disk stays usable.
 pub fn reserve(total: u64) -> u64 {
-    (total / 20).max(MIN_RESERVE)
+    (total / 50).clamp(MIN_RESERVE, MAX_RESERVE)
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -217,16 +219,18 @@ mod tests {
     }
 
     #[test]
-    fn reserve_is_five_percent_with_a_two_gib_floor() {
-        assert_eq!(reserve(100 * GIB), 5 * GIB);
+    fn reserve_is_two_percent_between_two_and_ten_gib() {
         assert_eq!(reserve(10 * GIB), 2 * GIB);
+        assert_eq!(reserve(256_000_000_000), 5_120_000_000);
+        assert_eq!(reserve(1_000_000_000_000), 10 * GIB);
+        assert_eq!(reserve(4_000_000_000_000), 10 * GIB);
     }
 
     #[test]
     fn admits_what_fits_above_the_reserve() {
         let disk = FakeDisk::new(DISK);
-        let plan = plan_for(14 * GIB, &disk);
-        assert_eq!(plan.selected_size, 15 * GIB);
+        let plan = plan_for(17 * GIB, &disk);
+        assert_eq!(plan.selected_size, 18 * GIB);
         assert_eq!(check_disk(plan.space, plan.selected_size, 0), Ok(()));
     }
 
@@ -234,11 +238,11 @@ mod tests {
     fn refuses_what_would_eat_the_reserve_counting_other_downloads() {
         let disk = FakeDisk::new(DISK);
         let plan = plan_for(13 * GIB, &disk);
-        let err = check_disk(plan.space, plan.selected_size, 2 * GIB).unwrap_err();
+        let err = check_disk(plan.space, plan.selected_size, 5 * GIB).unwrap_err();
         assert_eq!(err.code, ErrorCode::DiskFull);
         assert_eq!(
             err.message,
-            "needs 14.0 GiB more on this disk plus 2.0 GiB for other downloads, but only 20.0 GiB is free and 5.0 GiB stays in reserve"
+            "needs 14.0 GiB more on this disk plus 5.0 GiB for other downloads, but only 20.0 GiB is free and 2.0 GiB stays in reserve"
         );
         assert_eq!(err.details, Some(Details::Space { required: 21 * GIB, available: 20 * GIB }));
     }

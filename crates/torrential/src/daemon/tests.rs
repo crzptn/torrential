@@ -270,10 +270,10 @@ async fn disk_size_and_existing_files_refuse_a_download() {
         (ErrorCode::TooLarge, "the selection is 60.0 GiB, over the 50.0 GiB cap")
     );
     let raised = GetRequest { max_size: Some(60 * GIB), ..request(&h, h.torrent_file(&big)) };
-    h.disk.set_free(70 * GIB);
+    h.disk.set_free(69 * GIB);
     let err = h.get_with(raised.clone()).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::DiskFull);
-    assert_eq!(err.details, Some(torrential_core::error::Details::Space { required: 110 * GIB, available: 70 * GIB }));
+    assert_eq!(err.details, Some(torrential_core::error::Details::Space { required: 70 * GIB, available: 69 * GIB }));
     h.disk.set_free(500 * GIB);
     h.disk.create(h.downloads().join("big/b.bin"));
     let err = h.get_with(raised.clone()).await.unwrap_err();
@@ -294,7 +294,7 @@ fn request(h: &Harness, target: Target) -> GetRequest {
 #[tokio::test(flavor = "multi_thread")]
 async fn other_downloads_on_the_same_disk_count_against_free_space() {
     let h = Harness::new();
-    h.disk.set_free(100 * GIB);
+    h.disk.set_free(90 * GIB);
     let first = torrent(6, "first", &[("x", 45 * GIB)]);
     let second = torrent(7, "second", &[("y", 45 * GIB)]);
     h.get(h.torrent_file(&first), &[]).await.unwrap();

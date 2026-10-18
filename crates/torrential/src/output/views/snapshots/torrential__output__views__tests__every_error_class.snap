@@ -292,7 +292,7 @@ hint: torrential never resets state on its own; move /Users/ada/.local/state/tor
   "next": null
 }
 === disk_full, exit 7
-error[disk_full]: needs 70.0 GiB more on this disk, but only 3.0 GiB is free and 5.0 GiB stays in reserve
+error[disk_full]: needs 70.0 GiB more on this disk, but only 3.0 GiB is free and 2.0 GiB stays in reserve
 hint: free some space, or choose another disk with --dir
 --- json
 {
@@ -300,11 +300,11 @@ hint: free some space, or choose another disk with --dir
   "type": "error",
   "error": {
     "code": "disk_full",
-    "message": "needs 70.0 GiB more on this disk, but only 3.0 GiB is free and 5.0 GiB stays in reserve",
+    "message": "needs 70.0 GiB more on this disk, but only 3.0 GiB is free and 2.0 GiB stays in reserve",
     "hint": "free some space, or choose another disk with --dir",
     "details": {
       "space": {
-        "required": 80530636800,
+        "required": 77309411328,
         "available": 3221225472
       }
     }
