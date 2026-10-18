@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use tokio::time::Instant;
-use torrential_core::{Error, ErrorCode, SourceOutcome};
+use torrential_core::{Error, ErrorCode, SourceOutcome, text};
 use url::Url;
 
 use crate::http::{FetchError, Http};
@@ -119,12 +119,14 @@ pub(crate) enum Failure {
 }
 
 impl Failure {
+    /// Reasons quote the server, so they are sanitized here, where they leave the crate.
     pub fn outcome(&self) -> SourceOutcome {
+        let clean = |reason: &str| text::truncate(&text::sanitize(reason), 160);
         match self {
             Self::Timeout => SourceOutcome::Timeout,
             Self::Http(status) => SourceOutcome::Http { status: *status },
-            Self::Connect(reason) => SourceOutcome::Connect { reason: reason.clone() },
-            Self::BadResponse(reason) => SourceOutcome::BadResponse { reason: reason.clone() },
+            Self::Connect(reason) => SourceOutcome::Connect { reason: clean(reason) },
+            Self::BadResponse(reason) => SourceOutcome::BadResponse { reason: clean(reason) },
             Self::Irrelevant => SourceOutcome::Irrelevant,
         }
     }

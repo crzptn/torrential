@@ -122,6 +122,6 @@ fn classify(err: reqwest::Error) -> FetchError {
         }
         cause = e.source();
     }
-    let reason = torrential_core::text::truncate(&torrential_core::text::sanitize(&parts.join(": ")), 160);
+    let reason = parts.join(": ");
     if decode { FetchError::Decode(reason) } else { FetchError::Connect(reason) }
 }

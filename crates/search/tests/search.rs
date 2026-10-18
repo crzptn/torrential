@@ -172,6 +172,23 @@ async fn every_source_failing_is_providers_unavailable() {
 }
 
 #[tokio::test]
+async fn failure_reasons_never_carry_terminal_escapes() {
+    let hostile =
+        b"<?xml version=\"1.0\"?><error code=\"1\" description=\"\x1b]52;c;cm0gLXJm\x07\x1b[2Jgone\"/>".to_vec();
+    let server =
+        Server::start(vec![("/nyaa/", vec![ok(hostile)]), ("/apibay/", vec![ok(fixture("apibay/q.php-ubuntu.json"))])])
+            .await;
+    let search = Search::new(&server.config(&["nyaa", "apibay"]), ResultCache::new()).unwrap();
+
+    let result = search.search(&query("ubuntu", &["nyaa", "apibay"])).await.unwrap();
+
+    assert_eq!(
+        outcomes(&result)[1],
+        ("nyaa".into(), SourceOutcome::BadResponse { reason: "indexer error 1: gone".into() })
+    );
+}
+
+#[tokio::test]
 async fn retries_once_after_a_5xx_but_not_after_a_4xx() {
     let server = Server::start(vec![
         ("/apibay/", vec![status(502), ok(fixture("apibay/q.php-ubuntu.json"))]),
