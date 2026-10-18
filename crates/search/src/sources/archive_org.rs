@@ -111,14 +111,14 @@ fn parse(body: &[u8], base: &Url) -> Result<Vec<Observation>, String> {
 }
 
 /// Archive.org identifiers start with a letter or digit, then letters, digits, `-`, `_`, and `.`.
-fn identifier(id: &str) -> bool {
+fn is_identifier(id: &str) -> bool {
     id.starts_with(|c: char| c.is_ascii_alphanumeric())
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
 }
 
 fn observation(doc: Doc, base: &Url) -> Option<Observation> {
     let id = &doc.identifier;
-    if !identifier(id) {
+    if !is_identifier(id) {
         return None;
     }
     let hash = doc.btih.as_ref().and_then(Text::first).and_then(infohash)?;
@@ -156,7 +156,6 @@ fn category(doc: &Doc) -> Option<Category> {
     })
 }
 
-/// An archive.org item a torrent downloads from.
 #[derive(PartialEq, Eq, Debug)]
 pub(crate) struct Item {
     identifier: String,
@@ -165,15 +164,14 @@ pub(crate) struct Item {
     scheme: String,
 }
 
-/// The item behind a torrent one of whose web seeds is the download URL under `base`. libtorrent
-/// asks a multi-file torrent's web seed for `<seed><torrent name>/<path>`, so a torrent that
-/// works from the download URL is named after its item. Older torrents list it over http.
+/// libtorrent asks a multi-file torrent's web seed for `<seed><torrent name>/<path>`, so a torrent
+/// that works from the download URL is named after its item. Older torrents list it over http.
 pub(super) fn item(base: &Url, name: &str, web_seeds: &[String]) -> Option<Item> {
     let download = at(base, "download/");
     let listed = web_seeds.iter().filter_map(|seed| Url::parse(seed).ok()).any(|seed| {
         (seed.host_str(), seed.port(), seed.path()) == (download.host_str(), download.port(), download.path())
     });
-    (listed && identifier(name)).then(|| Item {
+    (listed && is_identifier(name)).then(|| Item {
         identifier: name.to_string(),
         metadata: at(base, &format!("metadata/{name}")),
         scheme: base.scheme().to_string(),
@@ -181,7 +179,6 @@ pub(super) fn item(base: &Url, name: &str, web_seeds: &[String]) -> Option<Item>
 }
 
 impl Item {
-    /// Web seeds on the servers the item's metadata names. Fails with `fetch_failed`.
     pub async fn mirrors(&self, http: &Http) -> Result<Vec<String>, Error> {
         const CAP: usize = 16 << 20;
         const WITHIN: Duration = Duration::from_secs(20);
@@ -216,7 +213,7 @@ fn mirrors(body: &[u8], item: &Item) -> Result<Vec<String>, String> {
     let dir = meta.dir.ok_or("its metadata has no directory")?;
     let parent = dir
         .strip_suffix(&format!("/{}", item.identifier))
-        .filter(|p| p.starts_with('/') && p[1..].split('/').all(identifier))
+        .filter(|p| p.starts_with('/') && p[1..].split('/').all(is_identifier))
         .ok_or_else(|| format!("its directory {dir:?} does not hold it by name"))?;
     let host = |h: &String| !h.is_empty() && h.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.:".contains(&b));
     let seeds: Vec<String> = [meta.d1, meta.d2]

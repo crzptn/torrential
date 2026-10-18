@@ -276,7 +276,6 @@ impl Inner {
     }
 }
 
-/// Why a fetch given `within` failed, safe to show: a reason can quote the server.
 fn fetch_reason(e: FetchError, within: Duration) -> String {
     match e {
         FetchError::Timeout => format!("no answer within {} seconds", within.as_secs()),

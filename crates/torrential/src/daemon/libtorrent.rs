@@ -282,8 +282,6 @@ impl Libtorrent {
         }
     }
 
-    /// Adds the web seeds a lookup found to a torrent still in the engine. Without them it keeps
-    /// the torrent's own, which can leave a piece that spans two redirected files without a source.
     fn mirrors_found(&mut self, id: TorrentId, found: Result<Vec<String>, Error>) {
         match found {
             Ok(seeds) if self.torrents.contains_key(&id) => {

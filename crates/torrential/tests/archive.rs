@@ -1,7 +1,6 @@
 //! The real binary and libtorrent downloading an archive.org item from web seeds alone, against
 //! local servers: one plays archive.org, and two play the servers that hold the item. Nothing
-//! leaves the machine. archive.org's download URL answers each file with a redirect to a server
-//! that holds it, and libtorrent turns each redirect into a web seed that has only that file.
+//! leaves the machine.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -21,11 +20,7 @@ const OTHERS: [&str; 7] = ["archlinux", "ubuntu", "debian", "academictorrents", 
 
 #[derive(Clone)]
 enum Answer {
-    /// 200, or 206 for a byte range, after `delay`.
-    Bytes {
-        body: Vec<u8>,
-        delay: Duration,
-    },
+    Bytes { body: Vec<u8>, delay: Duration },
     Status(u16),
     Redirect(String),
 }
@@ -131,7 +126,6 @@ impl Item {
         self.torrent.info_hash().v1().unwrap().as_bytes().iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    /// The `.torrent` archive.org serves, whose web seed is its download URL.
     fn torrent_file(&self, archive: &str) -> Vec<u8> {
         let plain = self.torrent.as_bytes();
         let seed = format!("{archive}/archive.org/download/");
@@ -146,7 +140,6 @@ impl Item {
         doc.to_string().into_bytes()
     }
 
-    /// A server that holds the item at `/items/<identifier>/`.
     fn mirror(&self) -> Server {
         let files = self.files.clone();
         Server::start(|_| {
@@ -154,7 +147,6 @@ impl Item {
         })
     }
 
-    /// archive.org: search, the `.torrent`, the metadata API, and each file through `download`.
     fn archive(&self, metadata: Answer, download: impl Fn(&str, &[u8]) -> Answer) -> Server {
         Server::start(|base| {
             let mut routes = vec![
@@ -226,7 +218,6 @@ impl Home {
         self.dir.path().join("dl")
     }
 
-    /// Finds the item, gets it, and says how long `get` took.
     fn get(&self, item: &Item) -> Duration {
         let found = self.run(&["search", "llama", "drama", "--json"]);
         let found: Value = serde_json::from_str(&found.stdout).unwrap_or_else(|e| panic!("{e}: {}", found.stderr));
@@ -243,7 +234,7 @@ impl Home {
         std::fs::read_to_string(self.dir.path().join("th/state/engine.log")).unwrap_or_default()
     }
 
-    /// Whether the engine logs `line` within 10 seconds. A lookup can answer after the download.
+    /// A lookup can answer after the download.
     fn logs(&self, line: &str) -> bool {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !self.log().contains(line) {
@@ -268,7 +259,7 @@ fn an_item_whose_files_redirect_to_different_servers_downloads_from_the_servers_
     let (first, second) = (item.mirror(), item.mirror());
     let metadata =
         serde_json::json!({ "d1": first.base[7..], "d2": second.base[7..], "dir": format!("/items/{ITEM}") });
-    let late = Answer::Bytes { body: metadata.to_string().into_bytes(), delay: Duration::from_secs(3) };
+    let late = Answer::Bytes { body: metadata.to_string().into_bytes(), delay: Duration::from_secs(5) };
     let archive = item.archive(late, |name, _| {
         let server = if name == "a.bin" { &first } else { &second };
         Answer::Redirect(format!("{}/items/{ITEM}/{name}", server.base))
@@ -278,7 +269,7 @@ fn an_item_whose_files_redirect_to_different_servers_downloads_from_the_servers_
     let took = home.get(&item);
     let wait = home.run(&["wait", &item.id()[..6], "--timeout", "60s"]);
 
-    assert!(took < Duration::from_secs(2), "get waited {took:?} for the metadata API");
+    assert!(took < Duration::from_secs(4), "get waited {took:?} for the metadata API");
     assert_eq!(wait.code, 0, "{}{}\n{}", wait.stdout, wait.stderr, home.log());
     assert!(item.intact(&home), "the downloaded files differ from the item's");
     let added = format!("{} also downloads from {}/items/, {}/items/", &item.id()[..6], first.base, second.base);

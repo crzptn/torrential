@@ -25,8 +25,7 @@ pub trait SearchPort: Send + Sync {
     ) -> BoxFuture<'_, Result<SearchResult, Error>>;
     /// The bytes of a `.torrent` file a search result links to.
     fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>>;
-    /// Web seeds on the servers that hold an archive.org torrent's files, to add to its own. `None`
-    /// for a torrent that does not download from archive.org. See [`Search::mirrors`].
+    /// `None` for a torrent that does not download from archive.org. See [`Search::mirrors`].
     fn mirrors(&self, name: &str, web_seeds: &[String]) -> Option<BoxFuture<'static, Result<Vec<String>, Error>>>;
     /// Releases from recent searches whose ID starts with `prefix`, newest first. They keep the
     /// links from private sources, which can carry an API key, so they are for downloading and
