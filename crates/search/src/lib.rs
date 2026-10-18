@@ -190,6 +190,7 @@ impl Search {
                 progress(Progress { result, pending });
             }
         }
+        self.inner.stores.save().await;
         let (result, linked) = assemble(query, &terms, &runs, millis(started.elapsed()))?;
         cache.remember(&linked);
         Ok(result)

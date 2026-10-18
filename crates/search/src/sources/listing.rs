@@ -8,6 +8,7 @@ use tokio::time::Instant;
 use torrential_core::{Category, Flag};
 use url::Url;
 
+use super::hashes::Key;
 use super::{Ctx, Failure};
 use crate::metainfo::Metainfo;
 use crate::observation::{Identity, Observation};
@@ -129,7 +130,8 @@ pub(super) async fn resolve(ctx: &Ctx<'_>, files: Vec<(Url, Entry)>) -> Vec<Obse
     stream::iter(files)
         .map(|(dir, entry)| async move {
             let url = super::at(&dir, &entry.file);
-            let meta = tokio::time::timeout_at(deadline, metainfo(ctx, &url, deadline)).await.ok().flatten();
+            let key = Key { url: url.to_string(), modified: entry.modified };
+            let meta = tokio::time::timeout_at(deadline, metainfo(ctx, &url, key, deadline)).await.ok().flatten();
             if meta.is_none() {
                 ctx.mark_partial();
             }
@@ -158,20 +160,14 @@ fn official(entry: Entry, dir: &Url, url: Url, meta: Option<Metainfo>) -> Option
     Some(obs)
 }
 
-async fn metainfo(ctx: &Ctx<'_>, url: &Url, deadline: Instant) -> Option<Metainfo> {
+async fn metainfo(ctx: &Ctx<'_>, url: &Url, key: Key, deadline: Instant) -> Option<Metainfo> {
     const CAP: usize = 2 << 20;
-    const KEEP: usize = 256;
-    let key = url.to_string();
-    if let Some(known) = ctx.stores.torrents.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return Some(known.clone());
+    if let Some(known) = ctx.stores.hashes.get(&key) {
+        return Some(known);
     }
     let body = ctx.http.get(url, CAP, deadline).await.ok()?;
     let meta = crate::metainfo::parse(&body).ok()?;
-    let mut torrents = ctx.stores.torrents.lock().unwrap_or_else(|e| e.into_inner());
-    if torrents.len() >= KEEP {
-        torrents.clear();
-    }
-    torrents.insert(key, meta.clone());
+    ctx.stores.hashes.insert(key, meta.clone());
     Some(meta)
 }
 

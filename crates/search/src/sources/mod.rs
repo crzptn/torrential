@@ -6,6 +6,7 @@ mod apibay;
 mod archive_org;
 mod archlinux;
 mod debian;
+mod hashes;
 mod knaben;
 mod listing;
 mod nyaa;
@@ -13,10 +14,9 @@ mod rss;
 mod torznab;
 mod ubuntu;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use tokio::time::Instant;
 use torrential_core::{Error, ErrorCode, SourceOutcome, text};
@@ -25,7 +25,6 @@ use url::Url;
 use sha1::{Digest, Sha1};
 
 use crate::http::{FetchError, Http};
-use crate::metainfo::Metainfo;
 use crate::observation::{Observation, hex};
 use crate::terms::Terms;
 use crate::{SearchConfig, TorznabConfig};
@@ -150,13 +149,18 @@ impl From<FetchError> for Failure {
 /// State that outlives one search: hashed `.torrent` files and the Academic
 /// Torrents catalog.
 pub(crate) struct Stores {
-    torrents: Mutex<HashMap<String, Metainfo>>,
+    hashes: hashes::Hashes,
     academic: academic::Catalog,
 }
 
 impl Stores {
     pub fn new(cache_dir: Option<PathBuf>) -> Stores {
-        Stores { torrents: Mutex::default(), academic: academic::Catalog::new(cache_dir) }
+        Stores { hashes: hashes::Hashes::new(cache_dir.clone()), academic: academic::Catalog::new(cache_dir) }
+    }
+
+    /// Writes what this search hashed, outside any source's deadline.
+    pub async fn save(&self) {
+        self.hashes.save().await;
     }
 }
 

@@ -600,6 +600,42 @@ async fn progress_shows_each_answer_and_the_final_ranking_is_unchanged() {
 }
 
 #[tokio::test]
+async fn a_hashed_torrent_is_not_fetched_again_by_a_later_process() {
+    let dir = scratch_dir("hashes");
+    let file = "/ubuntu/24.04/ubuntu-24.04.5-live-server-amd64.iso.torrent";
+    let mut routes = vec![(file, vec![ok(netinst())])];
+    for (path, page) in [
+        ("/ubuntu/26.10/", "ubuntu/26.10.html"),
+        ("/ubuntu/26.04/", "ubuntu/26.04.html"),
+        ("/ubuntu/25.10/", "ubuntu/25.10.html"),
+        ("/ubuntu/24.04/", "ubuntu/24.04.html"),
+        ("/ubuntu/22.04/", "ubuntu/22.04.html"),
+        ("/ubuntu/", "ubuntu/index.html"),
+    ] {
+        routes.push((path, vec![ok(fixture(page))]));
+    }
+    let server = Server::start(routes).await;
+    let config = SearchConfig { cache_dir: Some(dir.clone()), ..server.config(&["ubuntu"]) };
+    let q = query("ubuntu 24.04.5 live server", &["ubuntu"]);
+
+    let first = Search::new(&config, ResultCache::new()).unwrap().search(&q).await.unwrap();
+    let later = Search::new(&config, ResultCache::new()).unwrap().search(&q).await.unwrap();
+
+    let listed = |r: &torrential_core::SearchResult| -> Vec<(String, String, Option<u64>)> {
+        r.releases.iter().map(|r| (r.id.to_ref(), r.name.clone(), r.size)).collect()
+    };
+    let expected = [(
+        "bf7ed99351f7b08f0916b7b3e49cfa574d206879".to_string(),
+        "ubuntu-24.04.5-live-server-amd64.iso".to_string(),
+        Some(735_358_976),
+    )];
+    assert_eq!(listed(&first), expected);
+    assert_eq!(listed(&later), expected);
+    assert_eq!(server.hits(file), 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
 async fn a_disabled_source_is_neither_searched_nor_nameable() {
     let server = Server::start(vec![("/apibay/", vec![ok(fixture("apibay/q.php-ubuntu.json"))])]).await;
     let config = SearchConfig { disabled: vec!["knaben".into(), "nyaa".into()], ..server.config(&["apibay"]) };
