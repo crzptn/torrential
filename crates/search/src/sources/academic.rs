@@ -60,7 +60,11 @@ impl Catalog {
                 *loaded = Some(Loaded { fetched: now, items: items.clone() });
                 Ok(items)
             }
-            Err(failure) => loaded.as_ref().map(|l| l.items.clone()).ok_or(failure),
+            Err(failure) => {
+                let stale = loaded.as_ref().map(|l| l.items.clone()).ok_or(failure)?;
+                ctx.mark_partial();
+                Ok(stale)
+            }
         }
     }
 

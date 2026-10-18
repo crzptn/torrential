@@ -77,7 +77,8 @@ fn cells(row: &str) -> impl Iterator<Item = String> + '_ {
     })
 }
 
-/// Fetches every listing in `dirs` at once. Fails only when all of them fail.
+/// Fetches every listing in `dirs` at once. Fails only when all of them fail, and
+/// marks the answer partial when some do.
 pub(super) async fn fetch_all(ctx: &Ctx<'_>, dirs: Vec<Url>) -> Result<Vec<(Url, Vec<Entry>)>, Failure> {
     let pages = futures_util::future::join_all(dirs.into_iter().map(|dir| async move {
         let page = ctx.http.get(&dir, LISTING_CAP, ctx.deadline).await;
@@ -87,17 +88,31 @@ pub(super) async fn fetch_all(ctx: &Ctx<'_>, dirs: Vec<Url>) -> Result<Vec<(Url,
     let mut first_error = None;
     let mut listings = Vec::new();
     for (dir, page) in pages {
-        match page {
-            Ok(body) => listings.push((dir, torrents(&String::from_utf8_lossy(&body)))),
+        match page.map_err(Failure::from).and_then(|body| listing(&body)) {
+            Ok(entries) => listings.push((dir, entries)),
             Err(e) => {
                 first_error.get_or_insert(e);
             }
         }
     }
     match first_error {
-        Some(e) if listings.is_empty() => Err(e.into()),
-        _ => Ok(listings),
+        Some(e) if listings.is_empty() => Err(e),
+        Some(_) => {
+            ctx.mark_partial();
+            Ok(listings)
+        }
+        None => Ok(listings),
     }
+}
+
+/// A block page or an error page served with status 200 must not read as an
+/// empty directory. Apache's index always links its column sorts.
+pub(super) fn listing(body: &[u8]) -> Result<Vec<Entry>, Failure> {
+    let html = String::from_utf8_lossy(body);
+    if !html.contains("?C=N;O=") {
+        return Err(Failure::BadResponse("not a directory listing".into()));
+    }
+    Ok(torrents(&html))
 }
 
 /// Turns listed files into official releases. Each `.torrent` is fetched and hashed
@@ -111,6 +126,9 @@ pub(super) async fn resolve(ctx: &Ctx<'_>, files: Vec<(Url, Entry)>) -> Vec<Obse
         .map(|(dir, entry)| async move {
             let url = super::at(&dir, &entry.file);
             let meta = tokio::time::timeout_at(deadline, metainfo(ctx, &url, deadline)).await.ok().flatten();
+            if meta.is_none() {
+                ctx.mark_partial();
+            }
             official(entry, &dir, url, meta)
         })
         .buffer_unordered(CONCURRENT)

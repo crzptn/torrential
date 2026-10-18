@@ -20,6 +20,7 @@ use std::fmt;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::FutureExt;
@@ -128,12 +129,16 @@ impl Search {
                 if let Some(rows) = cached {
                     return Run { source: source.meta.clone(), answer: Answer::Cached(rows), elapsed_ms: 0 };
                 }
-                let answer = AssertUnwindSafe(self.inner.run(&source, terms, query.adult, deadline))
+                let (answer, complete) = AssertUnwindSafe(self.inner.run(&source, terms, query.adult, deadline))
                     .catch_unwind()
                     .await
                     // A parser bug on hostile input costs that source, not the search.
-                    .unwrap_or_else(|_| Answer::Failed(Failure::BadResponse("the source adapter crashed".into())));
-                if let Answer::Fresh(rows) = &answer {
+                    .unwrap_or_else(|_| {
+                        (Answer::Failed(Failure::BadResponse("the source adapter crashed".into())), false)
+                    });
+                if let Answer::Fresh(rows) = &answer
+                    && complete
+                {
                     cache.store(key, rows.clone(), std::time::Instant::now());
                 }
                 Run { source: source.meta.clone(), answer, elapsed_ms: millis(started.elapsed()) }
@@ -172,13 +177,16 @@ impl Inner {
         Ok(Inner { http, sources, stores: Stores::new(config.cache_dir.clone()), cache })
     }
 
-    async fn run(&self, source: &Source, terms: &Terms, adult: bool, deadline: Instant) -> Answer {
-        let ctx = Ctx { http: &self.http, stores: &self.stores, terms, adult, deadline };
+    /// Also says whether the answer is complete enough to cache.
+    async fn run(&self, source: &Source, terms: &Terms, adult: bool, deadline: Instant) -> (Answer, bool) {
+        let ctx =
+            Ctx { http: &self.http, stores: &self.stores, terms, adult, deadline, partial: AtomicBool::new(false) };
         let rows = timeout_at(deadline, source.search(&ctx)).await.unwrap_or(Err(Failure::Timeout));
-        match rows.and_then(|rows| vet(terms, rows)) {
+        let answer = match rows.and_then(|rows| vet(terms, rows)) {
             Ok(rows) => Answer::Fresh(Arc::new(rows)),
             Err(failure) => Answer::Failed(failure),
-        }
+        };
+        (answer, !ctx.partial.load(Ordering::Relaxed))
     }
 }
 
@@ -204,6 +212,7 @@ pub async fn record(config: &SearchConfig, source: &str, query: &str) -> Result<
         terms: &terms,
         adult: false,
         deadline: Instant::now() + Duration::from_secs(60),
+        partial: AtomicBool::new(false),
     };
     let outcome = match source.search(&ctx).await {
         Ok(rows) => format!("{} rows", rows.len()),

@@ -340,6 +340,41 @@ async fn official_torrents_get_their_hash_or_a_locator() {
 }
 
 #[tokio::test]
+async fn a_block_page_is_not_an_empty_listing() {
+    let block = ok(b"<html><title>Access denied</title><body>blocked by policy</body></html>".to_vec());
+    let server = Server::start(vec![("/debian/", vec![block])]).await;
+    let search = Search::new(&server.config(&["debian"]), ResultCache::new()).unwrap();
+
+    let err = search.search(&query("debian 13", &["debian"])).await.unwrap_err();
+
+    assert_eq!(err.code, ErrorCode::ProvidersUnavailable);
+    let Some(Details::Sources(reports)) = err.details else { panic!("no source reports") };
+    assert_eq!(reports[0].outcome, SourceOutcome::BadResponse { reason: "not a directory listing".into() });
+}
+
+#[tokio::test]
+async fn a_partial_answer_is_shown_but_asked_again() {
+    let dir = "/debian/debian-cd/current/arm64/bt-cd/";
+    let file = "/debian/debian-cd/current/arm64/bt-cd/debian-13.7.0-arm64-netinst.iso.torrent";
+    let torrent = fixture("debian/debian-cd-current-arm64-bt-cd-debian-13.7.0-arm64-netinst.iso.torrent");
+    let server = Server::start(vec![
+        (file, vec![status(500), status(500), ok(torrent)]),
+        (dir, vec![ok(fixture("debian/debian-cd-current-arm64-bt-cd.html"))]),
+        ("/debian/", vec![status(503)]),
+    ])
+    .await;
+    let search = Search::new(&server.config(&["debian"]), ResultCache::new()).unwrap();
+    let q = query("debian 13 arm64 netinst", &["debian"]);
+
+    let degraded = search.search(&q).await.unwrap();
+    let repaired = search.search(&q).await.unwrap();
+
+    assert!(degraded.releases[0].id.to_ref().starts_with('u'));
+    assert_eq!(outcomes(&repaired), [("debian".into(), SourceOutcome::Ok { results: 1 })]);
+    assert_eq!(repaired.releases[0].id.to_ref(), "bf7ed99351f7b08f0916b7b3e49cfa574d206879");
+}
+
+#[tokio::test]
 async fn the_academic_catalog_survives_a_restart() {
     let dir = scratch_dir("academic");
     let up =

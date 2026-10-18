@@ -15,6 +15,7 @@ mod ubuntu;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::time::Instant;
@@ -163,6 +164,14 @@ pub(crate) struct Ctx<'a> {
     pub terms: &'a Terms,
     pub adult: bool,
     pub deadline: Instant,
+    /// Set when part of an answer failed, so it is shown but not cached.
+    pub partial: AtomicBool,
+}
+
+impl Ctx<'_> {
+    pub fn mark_partial(&self) {
+        self.partial.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Source {
