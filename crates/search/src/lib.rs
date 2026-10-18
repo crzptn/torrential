@@ -123,7 +123,7 @@ impl Search {
         let lookups = self.select(&query.sources)?.into_iter().map(|source| {
             let key = AnswerKey {
                 source: source.meta.name.clone(),
-                endpoint: source.endpoint().to_string(),
+                scope: source.scope(),
                 text: terms.text().to_string(),
                 adult: query.adult,
             };

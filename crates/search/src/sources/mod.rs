@@ -22,9 +22,11 @@ use tokio::time::Instant;
 use torrential_core::{Error, ErrorCode, SourceOutcome, text};
 use url::Url;
 
+use sha1::{Digest, Sha1};
+
 use crate::http::{FetchError, Http};
 use crate::metainfo::Metainfo;
-use crate::observation::Observation;
+use crate::observation::{Observation, hex};
 use crate::terms::Terms;
 use crate::{SearchConfig, TorznabConfig};
 
@@ -175,8 +177,15 @@ impl Ctx<'_> {
 }
 
 impl Source {
-    pub fn endpoint(&self) -> &str {
-        self.base.as_str()
+    /// What a cached answer depends on besides the query: the endpoint, and for
+    /// Torznab the API key, because links issued under an old key stop working.
+    pub fn scope(&self) -> String {
+        match &self.adapter {
+            Adapter::Torznab { api_key: Some(key) } => {
+                format!("{} key:{}", self.base, hex(&Sha1::digest(key.as_bytes())[..8]))
+            }
+            _ => self.base.to_string(),
+        }
     }
 
     pub async fn search(&self, ctx: &Ctx<'_>) -> Result<Vec<Observation>, Failure> {

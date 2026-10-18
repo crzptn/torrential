@@ -383,6 +383,27 @@ async fn torznab_keys_stay_out_of_results_but_resolve_for_the_engine() {
 }
 
 #[tokio::test]
+async fn a_new_torznab_key_is_not_answered_from_the_old_one() {
+    let server = Server::start(vec![("/torznab/api", vec![ok(fixture("torznab/jackett-ubuntu.xml"))])]).await;
+    let config = |key: &str| SearchConfig {
+        torznab: vec![TorznabConfig {
+            name: "jackett".into(),
+            url: format!("{}/torznab/api", server.base),
+            api_key: Some(key.into()),
+        }],
+        ..SearchConfig::default()
+    };
+    let cache = ResultCache::new();
+    let q = query("ubuntu", &["jackett"]);
+
+    Search::new(&config("old"), cache.clone()).unwrap().search(&q).await.unwrap();
+    let rekeyed = Search::new(&config("new"), cache).unwrap().search(&q).await.unwrap();
+
+    assert_eq!(outcomes(&rekeyed), [("jackett".into(), SourceOutcome::Ok { results: 3 })]);
+    assert_eq!(server.hits("/torznab/api"), 2);
+}
+
+#[tokio::test]
 async fn returned_releases_resolve_by_id_prefix() {
     let server = Server::start(vec![("/apibay/", vec![ok(fixture("apibay/q.php-ubuntu.json"))])]).await;
     let cache = ResultCache::new();
