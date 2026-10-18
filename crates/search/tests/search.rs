@@ -652,39 +652,109 @@ async fn progress_shows_each_answer_and_the_final_ranking_is_unchanged() {
     assert_eq!(last.releases, updates[1].result.releases);
 }
 
+const UBUNTU_TORRENT: &str = "/ubuntu/24.04/ubuntu-24.04.5-live-server-amd64.iso.torrent";
+/// The index, then each series it lists.
+const UBUNTU_PAGES: [(&str, &str); 6] = [
+    ("/ubuntu/26.10/", "ubuntu/26.10.html"),
+    ("/ubuntu/26.04/", "ubuntu/26.04.html"),
+    ("/ubuntu/25.10/", "ubuntu/25.10.html"),
+    ("/ubuntu/24.04/", "ubuntu/24.04.html"),
+    ("/ubuntu/22.04/", "ubuntu/22.04.html"),
+    ("/ubuntu/", "ubuntu/index.html"),
+];
+
+async fn ubuntu_server() -> Server {
+    let mut routes = vec![(UBUNTU_TORRENT, vec![ok(netinst())])];
+    routes.extend(UBUNTU_PAGES.map(|(path, page)| (path, vec![ok(fixture(page))])));
+    Server::start(routes).await
+}
+
+fn ubuntu_page_hits(server: &Server) -> [usize; 6] {
+    UBUNTU_PAGES.map(|(path, _)| server.hits(path))
+}
+
+fn listed_with_size(r: &torrential_core::SearchResult) -> Vec<(String, String, Option<u64>)> {
+    r.releases.iter().map(|r| (r.id.to_ref(), r.name.clone(), r.size)).collect()
+}
+
+fn live_server_2404() -> Vec<(String, String, Option<u64>)> {
+    vec![(
+        "bf7ed99351f7b08f0916b7b3e49cfa574d206879".to_string(),
+        "ubuntu-24.04.5-live-server-amd64.iso".to_string(),
+        Some(735_358_976),
+    )]
+}
+
 #[tokio::test]
 async fn a_hashed_torrent_is_not_fetched_again_by_a_later_process() {
     let dir = scratch_dir("hashes");
-    let file = "/ubuntu/24.04/ubuntu-24.04.5-live-server-amd64.iso.torrent";
-    let mut routes = vec![(file, vec![ok(netinst())])];
-    for (path, page) in [
-        ("/ubuntu/26.10/", "ubuntu/26.10.html"),
-        ("/ubuntu/26.04/", "ubuntu/26.04.html"),
-        ("/ubuntu/25.10/", "ubuntu/25.10.html"),
-        ("/ubuntu/24.04/", "ubuntu/24.04.html"),
-        ("/ubuntu/22.04/", "ubuntu/22.04.html"),
-        ("/ubuntu/", "ubuntu/index.html"),
-    ] {
-        routes.push((path, vec![ok(fixture(page))]));
-    }
-    let server = Server::start(routes).await;
+    let server = ubuntu_server().await;
     let config = SearchConfig { cache_dir: Some(dir.clone()), ..server.config(&["ubuntu"]) };
     let q = query("ubuntu 24.04.5 live server", &["ubuntu"]);
 
     let first = Search::new(&config, ResultCache::new()).unwrap().search(&q).await.unwrap();
     let later = Search::new(&config, ResultCache::new()).unwrap().search(&q).await.unwrap();
 
-    let listed = |r: &torrential_core::SearchResult| -> Vec<(String, String, Option<u64>)> {
-        r.releases.iter().map(|r| (r.id.to_ref(), r.name.clone(), r.size)).collect()
-    };
-    let expected = [(
-        "bf7ed99351f7b08f0916b7b3e49cfa574d206879".to_string(),
-        "ubuntu-24.04.5-live-server-amd64.iso".to_string(),
-        Some(735_358_976),
-    )];
-    assert_eq!(listed(&first), expected);
-    assert_eq!(listed(&later), expected);
-    assert_eq!(server.hits(file), 1);
+    assert_eq!(listed_with_size(&first), live_server_2404());
+    assert_eq!(listed_with_size(&later), live_server_2404());
+    assert_eq!(server.hits(UBUNTU_TORRENT), 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_later_process_answers_from_the_listing_pages_on_disk_unless_fresh() {
+    let dir = scratch_dir("pages");
+    let server = ubuntu_server().await;
+    let config = SearchConfig { cache_dir: Some(dir.clone()), ..server.config(&["ubuntu"]) };
+    let q = query("ubuntu 24.04.5 live server", &["ubuntu"]);
+    Search::new(&config, ResultCache::new()).unwrap().search(&q).await.unwrap();
+
+    let later = Search::new(&config, ResultCache::new()).unwrap();
+    let from_disk = later.search(&q).await.unwrap();
+    let hits_from_disk = ubuntu_page_hits(&server);
+    let fresh = later.search(&SearchQuery { fresh: true, ..q.clone() }).await.unwrap();
+
+    assert_eq!(listed_with_size(&from_disk), live_server_2404());
+    assert_eq!(outcomes(&from_disk), [("ubuntu".into(), SourceOutcome::Ok { results: 1 })]);
+    assert_eq!(hits_from_disk, [1; 6], "only the first process asked for the pages");
+    assert_eq!(listed_with_size(&fresh), live_server_2404());
+    assert_eq!(ubuntu_page_hits(&server), [2; 6], "a fresh search asked for every page");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_stale_listing_page_answers_at_once_and_is_fetched_again_behind_the_search() {
+    let dir = scratch_dir("stale-pages");
+    let server = ubuntu_server().await;
+    let config = SearchConfig { cache_dir: Some(dir.clone()), ..server.config(&["ubuntu"]) };
+    let q = query("ubuntu 24.04.5 live server", &["ubuntu"]);
+    Search::new(&config, ResultCache::new()).unwrap().search(&q).await.unwrap();
+    let two_days_ago = std::time::SystemTime::now() - Duration::from_secs(48 * 3600);
+    let pages: Vec<PathBuf> = std::fs::read_dir(dir.join("pages")).unwrap().map(|e| e.unwrap().path()).collect();
+    for page in &pages {
+        std::fs::File::options().write(true).open(page).unwrap().set_modified(two_days_ago).unwrap();
+    }
+    let renewed = || pages.iter().all(|p| std::fs::metadata(p).unwrap().modified().unwrap() > two_days_ago);
+
+    let later = Search::new(&config, ResultCache::new()).unwrap();
+    let stale = later.search(&q).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !renewed() {
+        assert!(Instant::now() < deadline, "the stale pages were not fetched again");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let after_refresh = later.search(&q).await.unwrap();
+    let repeat = later.search(&q).await.unwrap();
+
+    assert_eq!(pages.len(), 6);
+    assert_eq!(listed_with_size(&stale), live_server_2404());
+    assert_eq!(ubuntu_page_hits(&server), [2; 6], "each stale page was fetched once more");
+    assert_eq!(
+        outcomes(&after_refresh),
+        [("ubuntu".into(), SourceOutcome::Ok { results: 1 })],
+        "the stale answer was not cached"
+    );
+    assert_eq!(outcomes(&repeat), [("ubuntu".into(), SourceOutcome::Cached { results: 1 })]);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -4,7 +4,7 @@ use serde::Deserialize;
 use torrential_core::{Category, Flag};
 use url::Url;
 
-use super::{Ctx, Failure, at};
+use super::{Ctx, Failure, at, pages};
 use crate::observation::{Identity, Observation, infohash, parse_magnet, web_url};
 
 #[derive(Deserialize)]
@@ -32,7 +32,8 @@ struct Torrent {
 }
 
 pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>, Failure> {
-    let body = ctx.http.get(&at(base, "releng/releases/json/"), 2 << 20, ctx.deadline).await?;
+    let is_feed: pages::Check = |body| serde_json::from_slice::<Feed>(body).is_ok();
+    let body = ctx.stores.pages.get(ctx, &at(base, "releng/releases/json/"), 2 << 20, is_feed).await?;
     let all = parse(&body, base).map_err(Failure::BadResponse)?;
     Ok(all.into_iter().filter(|o| ctx.terms.covers(o.name())).collect())
 }

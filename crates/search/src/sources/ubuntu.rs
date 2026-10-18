@@ -1,7 +1,7 @@
 use url::Url;
 
 use super::listing::{self, Entry};
-use super::{Ctx, Failure, at};
+use super::{Ctx, Failure, at, pages};
 use crate::observation::Observation;
 
 /// The newest release series kept on the site: every supported LTS and interim
@@ -9,7 +9,8 @@ use crate::observation::Observation;
 const SERIES: usize = 5;
 
 pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>, Failure> {
-    let index = ctx.http.get(base, listing::LISTING_CAP, ctx.deadline).await?;
+    let has_series: pages::Check = |index| !current_series(&String::from_utf8_lossy(index)).is_empty();
+    let index = ctx.stores.pages.get(ctx, base, listing::LISTING_CAP, has_series).await?;
     let series = current_series(&String::from_utf8_lossy(&index));
     if series.is_empty() {
         return Err(Failure::BadResponse("no release directories in the index".into()));

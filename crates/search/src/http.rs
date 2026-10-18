@@ -45,6 +45,11 @@ impl Http {
         Ok(Http { client, recorded: record.then(Mutex::default) })
     }
 
+    /// The same client, for a request that outlives the search that started it. Never records.
+    pub fn detached(&self) -> Http {
+        Http { client: self.client.clone(), recorded: None }
+    }
+
     pub async fn get(&self, url: &Url, cap: usize, deadline: Instant) -> Result<Vec<u8>, FetchError> {
         self.fetch(url, cap, deadline, Retry::Once).await
     }

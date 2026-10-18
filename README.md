@@ -113,6 +113,8 @@ torrential searches these sources by default:
 
 The first five are lawful sources. Among equally relevant results, official torrents rank first, then the other lawful sources, then the general indexes. Torznab feeds that you add in the config rank with the general indexes.
 
+torrential keeps the official listings and the Academic Torrents catalog on disk for a day, so a search does not wait on those servers. `--fresh` asks the general indexes and the official listings again.
+
 `official` means the publisher's own torrent. `pd` and `cc` mean the source lists a public-domain or Creative Commons license. `trusted` means the index vouches for the uploader. `cam` marks a name that looks like a camera recording, from any source. Search hides adult results unless you pass `--adult`.
 
 torrential does not check whether you may download something. Download only what you have the right to, such as Linux ISOs, public-domain films, open datasets, and Creative Commons works.

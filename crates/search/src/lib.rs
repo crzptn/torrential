@@ -41,8 +41,8 @@ use crate::terms::Terms;
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SearchConfig {
-    /// Where the Academic Torrents catalog is kept between processes. `None` keeps
-    /// it in memory only.
+    /// Where the Academic Torrents catalog, the official listing pages, and hashed
+    /// `.torrent` files are kept between processes. `None` writes nothing to disk.
     pub cache_dir: Option<PathBuf>,
     /// Searched after the built-in sources, in this order.
     pub torznab: Vec<TorznabConfig>,
@@ -162,7 +162,7 @@ impl Search {
                 if let Some(rows) = cached {
                     return Run { source: source.meta.clone(), answer: Answer::Cached(rows), elapsed_ms: 0 };
                 }
-                let (answer, complete) = AssertUnwindSafe(self.inner.run(&source, terms, query.adult, deadline))
+                let (answer, complete) = AssertUnwindSafe(self.inner.run(&source, terms, query, deadline))
                     .catch_unwind()
                     .await
                     // A parser bug on hostile input costs that source, not the search.
@@ -313,9 +313,16 @@ impl Inner {
     }
 
     /// Also says whether the answer is complete enough to cache.
-    async fn run(&self, source: &Source, terms: &Terms, adult: bool, deadline: Instant) -> (Answer, bool) {
-        let ctx =
-            Ctx { http: &self.http, stores: &self.stores, terms, adult, deadline, partial: AtomicBool::new(false) };
+    async fn run(&self, source: &Source, terms: &Terms, query: &SearchQuery, deadline: Instant) -> (Answer, bool) {
+        let ctx = Ctx {
+            http: &self.http,
+            stores: &self.stores,
+            terms,
+            adult: query.adult,
+            fresh: query.fresh,
+            deadline,
+            partial: AtomicBool::new(false),
+        };
         let rows = timeout_at(deadline, source.search(&ctx)).await.unwrap_or(Err(Failure::Timeout));
         let answer = match rows.and_then(|rows| vet(terms, rows)) {
             Ok(rows) => Answer::Fresh(Arc::new(rows)),
@@ -355,6 +362,7 @@ pub async fn record(config: &SearchConfig, source: &str, query: &str) -> Result<
         stores: &inner.stores,
         terms: &terms,
         adult: false,
+        fresh: true,
         deadline: Instant::now() + Duration::from_secs(60),
         partial: AtomicBool::new(false),
     };

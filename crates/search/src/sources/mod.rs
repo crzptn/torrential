@@ -10,6 +10,7 @@ mod hashes;
 mod knaben;
 mod listing;
 mod nyaa;
+mod pages;
 mod rss;
 mod torznab;
 mod ubuntu;
@@ -160,16 +161,21 @@ impl From<FetchError> for Failure {
     }
 }
 
-/// State that outlives one search: hashed `.torrent` files and the Academic
-/// Torrents catalog.
+/// State that outlives one search: hashed `.torrent` files, the Academic Torrents
+/// catalog, and the official listing pages.
 pub(crate) struct Stores {
     hashes: hashes::Hashes,
     academic: academic::Catalog,
+    pages: pages::Pages,
 }
 
 impl Stores {
     pub fn new(cache_dir: Option<PathBuf>) -> Stores {
-        Stores { hashes: hashes::Hashes::new(cache_dir.clone()), academic: academic::Catalog::new(cache_dir) }
+        Stores {
+            hashes: hashes::Hashes::new(cache_dir.clone()),
+            academic: academic::Catalog::new(cache_dir.clone()),
+            pages: pages::Pages::new(cache_dir),
+        }
     }
 
     /// Writes what this search hashed, outside any source's deadline.
@@ -183,8 +189,10 @@ pub(crate) struct Ctx<'a> {
     pub stores: &'a Stores,
     pub terms: &'a Terms,
     pub adult: bool,
+    /// Fetch listing pages even when the copy on disk is new.
+    pub fresh: bool,
     pub deadline: Instant,
-    /// Set when part of an answer failed, so it is shown but not cached.
+    /// Set when part of an answer failed or is out of date, so it is shown but not cached.
     pub partial: AtomicBool,
 }
 

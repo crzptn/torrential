@@ -85,14 +85,14 @@ fn cells(row: &str) -> impl Iterator<Item = String> + '_ {
 /// marks the answer partial when some do.
 pub(super) async fn fetch_all(ctx: &Ctx<'_>, dirs: Vec<Url>) -> Result<Vec<(Url, Vec<Entry>)>, Failure> {
     let pages = futures_util::future::join_all(dirs.into_iter().map(|dir| async move {
-        let page = ctx.http.get(&dir, LISTING_CAP, ctx.deadline).await;
+        let page = ctx.stores.pages.get(ctx, &dir, LISTING_CAP, |body| listing(body).is_ok()).await;
         (dir, page)
     }))
     .await;
     let mut first_error = None;
     let mut listings = Vec::new();
     for (dir, page) in pages {
-        match page.map_err(Failure::from).and_then(|body| listing(&body)) {
+        match page.and_then(|body| listing(&body)) {
             Ok(entries) => listings.push((dir, entries)),
             Err(e) => {
                 first_error.get_or_insert(e);
