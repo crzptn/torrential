@@ -2,6 +2,7 @@ pub mod admission;
 pub mod book;
 pub mod engine_port;
 pub mod files;
+pub mod libtorrent;
 pub mod magnet;
 pub mod owner;
 pub mod resolve;
@@ -27,6 +28,7 @@ use crate::env::Env;
 use crate::paths::{self, Paths};
 use admission::Disk;
 use engine_port::{EnginePort, ParseTorrent};
+use libtorrent::{Libtorrent, Network};
 use owner::{Owner, OwnerConfig};
 use search_port::SearchPort;
 use server::{Ctx, OwnerHandle};
@@ -45,30 +47,55 @@ pub struct Ports {
 
 impl Ports {
     /// `TORRENTIAL_TEST_ENGINE=fake` swaps in the simulated engine and search, for tests and for
-    /// trying the CLI without a network.
-    fn from_env(env: &Env) -> Self {
+    /// trying the CLI without a network. `TORRENTIAL_TEST_NETWORK=loopback` keeps libtorrent on
+    /// 127.0.0.1 with discovery off, for tests that run their own peers and list them in
+    /// `TORRENTIAL_TEST_PEERS`, and `TORRENTIAL_TEST_DISK=roomy` lets them download on a disk
+    /// below the free-space reserve.
+    fn from_env(env: &Env, paths: &Paths) -> Result<Self, Error> {
         if env.var("TORRENTIAL_TEST_ENGINE") == Some("fake") {
             let rate =
                 env.var("TORRENTIAL_TEST_FAKE_RATE").and_then(torrential_core::units::parse_size).unwrap_or(10 << 20);
-            return Self {
+            return Ok(Self {
                 engine: Box::new(engine_port::Fake::new(engine_port::Swarm::inventive(rate))),
                 parse: engine_port::parse_fake,
                 search: Arc::new(search_port::Fake::new(search_port::fake_catalog())),
                 disk: Box::new(admission::RoomyDisk),
-            };
+            });
         }
-        Self {
-            engine: Box::new(engine_port::Unwired::default()),
-            parse: engine_port::parse_unwired,
+        let network = match env.var("TORRENTIAL_TEST_NETWORK") {
+            Some("loopback") => Network::Loopback { peers: test_peers(env)? },
+            _ => Network::Public,
+        };
+        let disk: Box<dyn Disk> = match env.var("TORRENTIAL_TEST_DISK") {
+            Some("roomy") => Box::new(admission::RoomyDisk),
+            _ => Box::new(admission::RealDisk),
+        };
+        Ok(Self {
+            engine: Box::new(Libtorrent::start(&paths.state, network)?),
+            parse: libtorrent::parse,
             search: Arc::new(search_port::Unwired),
-            disk: Box::new(admission::RealDisk),
-        }
+            disk,
+        })
     }
+}
+
+fn test_peers(env: &Env) -> Result<Vec<std::net::SocketAddr>, Error> {
+    let Some(list) = env.var("TORRENTIAL_TEST_PEERS") else { return Ok(Vec::new()) };
+    list.split(',')
+        .map(|peer| {
+            peer.trim().parse().map_err(|_| {
+                Error::new(ErrorCode::Usage, format!("TORRENTIAL_TEST_PEERS has {peer:?}, which is not an address"))
+            })
+        })
+        .collect()
 }
 
 pub struct Running {
     pub ctx: Arc<Ctx>,
     pub owner: tokio::task::JoinHandle<()>,
+    /// Ends once every engine handle is dropped. The port's own shutdown, such as saving the DHT
+    /// table, runs on this thread.
+    pub engine: std::thread::JoinHandle<()>,
 }
 
 pub fn start(
@@ -79,13 +106,13 @@ pub fn start(
     version: String,
 ) -> Result<Running, Error> {
     let (events_tx, events) = mpsc::unbounded_channel();
-    let (engine, _thread) = engine_port::spawn(ports.engine, events_tx);
+    let (engine, thread) = engine_port::spawn(ports.engine, events_tx);
     let owner = Owner::new(store, engine.clone(), ports.parse, ports.disk, config)?;
     let (commands_tx, commands) = mpsc::unbounded_channel();
     let task = runtime.spawn(owner.run(commands, events));
     let ctx =
         Arc::new(Ctx { owner: OwnerHandle(commands_tx), search: ports.search, engine, parse: ports.parse, version });
-    Ok(Running { ctx, owner: task })
+    Ok(Running { ctx, owner: task, engine: thread })
 }
 
 pub fn log(message: &str) {
@@ -154,8 +181,8 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         .build()
         .map_err(|e| Error::internal(format!("cannot start the async runtime: {e}")))?;
     let version = env.version();
-    let ports = Ports::from_env(env);
-    runtime.block_on(async {
+    let ports = Ports::from_env(env, paths)?;
+    let engine = runtime.block_on(async {
         let socket = paths.socket();
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).map_err(|e| {
@@ -179,9 +206,11 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         accept.abort();
         signals.abort();
         let _ = std::fs::remove_file(&socket);
-        log("engine stopped");
-        Ok::<(), Error>(())
+        Ok::<_, Error>(running.engine)
     })?;
+    drop(runtime);
+    let _ = engine.join();
+    log("engine stopped");
     Ok(())
 }
 

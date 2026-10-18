@@ -1,6 +1,6 @@
-//! The seam between the engine process and the torrent engine. `torrential-engine`
-//! (libtorrent through cxx) implements [`EnginePort`] in the wiring round. [`Fake`]
-//! simulates a swarm for tests, and [`Unwired`] answers in builds without an engine.
+//! The seam between the engine process and the torrent engine. [`super::libtorrent`]
+//! implements [`EnginePort`] over `torrential-engine`, and [`Fake`] simulates a swarm for
+//! tests.
 //!
 //! The port runs on its own thread (see [`spawn`]). Every outcome, including a failed
 //! call, comes back to the owner as an [`EngineEvent`].
@@ -231,54 +231,6 @@ fn apply(port: &mut dyn EnginePort, command: EngineCommand) -> Option<EngineEven
         }
     };
     result.err().map(|error| EngineEvent::Failed { id, error })
-}
-
-#[derive(Default)]
-pub struct Unwired {
-    removed: Vec<TorrentId>,
-}
-
-pub fn unwired_error() -> Error {
-    Error::internal("this build of torrential has no torrent engine yet")
-        .with_hint("install a release build of torrential")
-}
-
-pub fn parse_unwired(_: &[u8]) -> Result<Metainfo, Error> {
-    Err(unwired_error())
-}
-
-impl EnginePort for Unwired {
-    fn add(&mut self, _: AddTorrent) -> Result<(), Error> {
-        Err(unwired_error())
-    }
-    fn select(&mut self, _: TorrentId, _: &[bool]) -> Result<(), Error> {
-        Err(unwired_error())
-    }
-    fn pause(&mut self, _: TorrentId) -> Result<(), Error> {
-        Err(unwired_error())
-    }
-    fn resume(&mut self, _: TorrentId) -> Result<(), Error> {
-        Err(unwired_error())
-    }
-    fn recheck(&mut self, _: TorrentId) -> Result<(), Error> {
-        Err(unwired_error())
-    }
-    fn save_resume_data(&mut self, _: TorrentId) -> Result<(), Error> {
-        Err(unwired_error())
-    }
-    fn remove(&mut self, id: TorrentId) -> Result<(), Error> {
-        self.removed.push(id);
-        Ok(())
-    }
-    fn file_progress(&mut self, _: TorrentId) -> Result<Vec<u64>, Error> {
-        Err(unwired_error())
-    }
-    fn poll(&mut self, max_wait: Duration) -> Vec<EngineEvent> {
-        if self.removed.is_empty() {
-            std::thread::sleep(max_wait);
-        }
-        self.removed.drain(..).map(|id| EngineEvent::Removed { id }).collect()
-    }
 }
 
 /// The `.torrent` format the fake engine reads: JSON instead of bencode.

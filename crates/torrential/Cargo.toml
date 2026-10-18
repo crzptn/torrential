@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 torrential-core = { path = "../core" }
+torrential-engine = { path = "../engine" }
 anstream = "1"
 anstyle = "1"
 clap = { version = "4.6", features = ["derive", "wrap_help"] }

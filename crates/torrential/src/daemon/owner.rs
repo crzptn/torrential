@@ -998,7 +998,10 @@ impl Owner {
         let short = id.to_hex()[..6].to_string();
         let intent = job.record.intent.clone();
         match (intent, damaged, mode) {
-            (Intent::Running, ..) => job.observed = Observed::InEngine(Phase::Downloading),
+            (Intent::Running, ..) => {
+                job.observed = Observed::InEngine(Phase::Downloading);
+                self.engine.send(EngineCommand::Resume(id));
+            }
             (Intent::Paused, ..) => job.observed = Observed::InEngine(Phase::Paused),
             (Intent::Done { .. } | Intent::Failed { .. }, 0, _) => {
                 let finished_at = match job.record.intent {

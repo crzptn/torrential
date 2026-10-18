@@ -621,7 +621,7 @@ fn sample(code: ErrorCode) -> Error {
             "torrential verify 6bc1af --repair downloads them again",
         ),
         ErrorCode::Interrupted => given(code, "interrupted", "run the command again"),
-        ErrorCode::Internal => crate::daemon::engine_port::unwired_error(),
+        ErrorCode::Internal => Error::internal("the engine thread stopped"),
     }
 }
 

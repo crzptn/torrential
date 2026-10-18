@@ -28,6 +28,7 @@ impl Home {
             ("HOME", dir.path().display().to_string()),
             ("TORRENTIAL_HOME", dir.path().join("th").display().to_string()),
             ("TORRENTIAL_TEST_IDLE_TIMEOUT", "30s".to_string()),
+            ("TORRENTIAL_TEST_NETWORK", "loopback".to_string()),
         ];
         all.extend(vars.iter().map(|(k, v)| (*k, v.to_string())));
         Self { dir, vars: all }

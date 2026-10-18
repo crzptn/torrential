@@ -382,16 +382,14 @@ hint: run the command again
   "next": null
 }
 === internal, exit 1
-error[internal]: this build of torrential has no torrent engine yet
-hint: install a release build of torrential
+error[internal]: the engine thread stopped
 --- json
 {
   "schema": 1,
   "type": "error",
   "error": {
     "code": "internal",
-    "message": "this build of torrential has no torrent engine yet",
-    "hint": "install a release build of torrential"
+    "message": "the engine thread stopped"
   },
   "next": null
 }

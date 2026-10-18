@@ -150,7 +150,8 @@ impl Disk for RealDisk {
     }
 }
 
-/// For the fake engine, which writes nothing: plenty of space, and the real filesystem for conflicts.
+/// Plenty of space, and the real filesystem for conflicts: for the fake engine, which writes nothing,
+/// and for swarm tests on a disk below the reserve.
 pub struct RoomyDisk;
 
 impl Disk for RoomyDisk {
