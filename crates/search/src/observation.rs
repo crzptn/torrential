@@ -155,6 +155,17 @@ pub(crate) fn parse_magnet(raw: &str) -> Option<Magnet> {
     Some(Magnet { hash, trackers })
 }
 
+/// Undoes the HTML escaping The Pirate Bay applies to names, which apibay and
+/// Knaben pass on.
+pub(crate) fn unescape_html(name: &str) -> String {
+    name.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#039;", "'")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
 /// Unreserved characters stay literal; everything else is percent-encoded, spaces as `%20`.
 const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
 

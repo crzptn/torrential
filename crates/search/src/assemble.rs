@@ -139,7 +139,13 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     }
     let name = group
         .iter()
-        .map(|(s, o)| (std::cmp::Reverse(o.name().chars().count()), s.authority, o.name()))
+        .map(|(s, o)| {
+            // Indexes cut long titles and mark the cut with an ellipsis, which
+            // makes the cut name longer than the whole one.
+            let name = o.name();
+            let whole = name.strip_suffix("...").or_else(|| name.strip_suffix('…')).map(str::trim_end);
+            (std::cmp::Reverse(whole.unwrap_or(name).chars().count()), whole.is_some(), s.authority, name)
+        })
         .min()
         .map(|(.., name)| name.to_string())
         .unwrap_or_default();

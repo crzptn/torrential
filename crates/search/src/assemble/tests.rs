@@ -100,6 +100,14 @@ fn merges_one_torrent_listed_by_two_sources() {
 }
 
 #[test]
+fn a_cut_title_loses_to_the_whole_one() {
+    let cut = row(&h(0xab), "Linux Command Line (Hands-On) Ubuntu Linux & Linux Scripting ...");
+    let whole = row(&h(0xab), "Linux Command Line (Hands-On) Ubuntu Linux & Linux Scripting");
+    let result = search(&SearchQuery::new("ubuntu"), &[fresh(&knaben(), vec![cut, whole])]);
+    assert_eq!(names(&result), ["Linux Command Line (Hands-On) Ubuntu Linux & Linux Scripting"]);
+}
+
+#[test]
 fn a_v2_listing_joins_the_hybrid_listing_of_the_same_torrent() {
     let (v1, v2) = (h(0x11), "22".repeat(32));
     let hybrid = Observation::new(

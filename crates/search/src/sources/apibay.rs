@@ -5,7 +5,7 @@ use torrential_core::{Category, Flag};
 use url::Url;
 
 use super::{Ctx, Failure, at};
-use crate::observation::{Identity, Observation, Peers, count, infohash, percent, tracker};
+use crate::observation::{Identity, Observation, Peers, count, infohash, percent, tracker, unescape_html};
 
 /// The trackers thepiratebay.org adds to the magnets it prints (`print_trackers` in
 /// its `static/main.js`). apibay returns bare hashes.
@@ -71,7 +71,7 @@ fn observation(row: Row, trackers: &[String]) -> Option<Observation> {
     let hash = infohash(&row.info_hash)?;
     let code: u32 = row.category.trim().parse().unwrap_or(0);
     let trusted = matches!(row.status.as_str(), "vip" | "trusted");
-    let mut obs = Observation::new(Identity::Hash { hash, torrent_url: None }, &unescape(&row.name))?
+    let mut obs = Observation::new(Identity::Hash { hash, torrent_url: None }, &unescape_html(&row.name))?
         .flag(Flag::Trusted, trusted)
         .flag(Flag::Adult, (500..600).contains(&code));
     obs.peers = Peers::new(count(&row.seeders), count(&row.leechers));
@@ -91,16 +91,6 @@ fn observation(row: Row, trackers: &[String]) -> Option<Observation> {
         obs.info_url = Some(format!("https://thepiratebay.org/description.php?id={}", row.id));
     }
     Some(obs)
-}
-
-/// apibay returns names HTML-escaped, as its site prints them.
-fn unescape(name: &str) -> String {
-    name.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#039;", "'")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
 }
 
 #[cfg(test)]

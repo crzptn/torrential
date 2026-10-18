@@ -6,7 +6,7 @@ use torrential_core::{Category, Flag};
 use url::Url;
 
 use super::{Ctx, Failure, at};
-use crate::observation::{Identity, Observation, Peers, infohash, parse_magnet, percent, web_url};
+use crate::observation::{Identity, Observation, Peers, infohash, parse_magnet, percent, unescape_html, web_url};
 
 pub(super) async fn search(ctx: &Ctx<'_>, base: &Url) -> Result<Vec<Observation>, Failure> {
     let mut url = at(base, "v2/search");
@@ -55,7 +55,7 @@ fn observation(hit: Hit) -> Option<Observation> {
         (None, None) => return None,
     };
     let (category, adult) = category(&hit.category_id);
-    let mut obs = Observation::new(identity, hit.title.as_deref()?)?.flag(Flag::Adult, adult);
+    let mut obs = Observation::new(identity, &unescape_html(hit.title.as_deref()?))?.flag(Flag::Adult, adult);
     let count = |n: Option<i64>| n.and_then(|n| u32::try_from(n).ok());
     // Knaben's own scrape is fresher than the count the origin index reported.
     obs.peers = match hit.live_seeders {
