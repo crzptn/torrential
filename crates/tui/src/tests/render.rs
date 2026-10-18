@@ -177,6 +177,16 @@ fn every_file_of_a_download_is_one_key_away() {
 }
 
 #[test]
+fn a_typing_user_sees_that_f1_opens_the_keys() {
+    let mut state = with_downloads((100, 30));
+    press(&mut state, "/");
+    assert!(line(&render(&state), 29).ends_with("enter search   ↓ list   f1 keys"), "{}", line(&render(&state), 29));
+    press(&mut state, "night");
+    state.update(key(KeyCode::F(1)));
+    assert!(shot(&state).contains("     always │ ? f1 keys"), "{}", shot(&state));
+}
+
+#[test]
 fn a_cut_name_keeps_its_end() {
     let screen = shot(&searched((80, 24)));
     assert!(screen.contains("Night of the…Dead (1968) [DVD]"), "{screen}");

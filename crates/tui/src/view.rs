@@ -758,7 +758,7 @@ const HELP: [(&str, &[(&str, &str)]); 6] = [
             ("y", "copy path"),
         ],
     ),
-    ("always", &[("?", "keys"), ("esc", "back"), ("q", "quit"), ("ctrl+c", "quit")]),
+    ("always", &[("? f1", "keys"), ("esc", "back"), ("q", "quit"), ("ctrl+c", "quit")]),
 ];
 
 const NOTES: [&str; 4] = [
@@ -811,8 +811,8 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
     let pairs: Vec<(&str, &str)> = match (state.focus, state.cursor) {
         _ if state.confirm.is_some() => Vec::new(),
         _ if state.help => vec![("esc", "close")],
-        (Focus::Query, _) if state.items().is_empty() => vec![("enter", "search")],
-        (Focus::Query, _) => vec![("enter", "search"), ("↓", "list")],
+        (Focus::Query, _) if state.items().is_empty() => vec![("enter", "search"), ("f1", "keys")],
+        (Focus::Query, _) => vec![("enter", "search"), ("↓", "list"), ("f1", "keys")],
         (Focus::Files, Some(Item::Download(_))) => {
             vec![("space", pause), ("esc", "back"), ("o", "open"), ("?", "keys")]
         }

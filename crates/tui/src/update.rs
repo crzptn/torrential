@@ -232,6 +232,10 @@ impl State {
         if let Some(id) = self.confirm {
             return self.confirm_key(id, key);
         }
+        // F1 works while typing, where `?` is a character.
+        if key.code == KeyCode::F(1) {
+            return self.act(Action::Help);
+        }
         if self.focus == Focus::Query {
             return self.query_key(key);
         }

@@ -426,3 +426,14 @@ fn inside_a_download_files_space_still_pauses_and_h_steps_back() {
     press(&mut state, "h");
     assert_eq!((state.focus, cursor_name(&state)), (Focus::List, "wikipedia-en-2026-09-text".into()));
 }
+
+#[test]
+fn f1_opens_help_while_typing_where_question_mark_types() {
+    let mut state = with_downloads((100, 30));
+    press(&mut state, "/night?");
+    assert_eq!((state.query.text.as_str(), state.help), ("night?", false));
+    state.update(key(KeyCode::F(1)));
+    assert_eq!((state.query.text.as_str(), state.help, state.focus), ("night?", true, Focus::Query));
+    state.update(key(KeyCode::F(1)));
+    assert!(!state.help);
+}
