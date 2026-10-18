@@ -102,13 +102,15 @@ async fn search(ctx: &Ctx, query: SearchQuery) -> Result<SearchResult, Error> {
     Ok(result)
 }
 
-/// Sanitizes names, and saves the releases as shown so a later engine process still resolves
-/// their IDs. This process resolves them through the search port.
+/// Sanitizes names, and saves the releases as shown, with their private links less the API key,
+/// so a later engine process still resolves their IDs. This process resolves them through the
+/// search port.
 fn record(ctx: &Ctx, result: &mut SearchResult) {
     for release in &mut result.releases {
         release.name = sanitize(&release.name);
     }
-    ctx.owner.tell(Command::RecordResults(result.releases.clone()));
+    let saved = result.releases.iter().map(|r| (r.clone(), ctx.search.saved_link(&r.id))).collect();
+    ctx.owner.tell(Command::RecordResults(saved));
 }
 
 async fn stream_search(ctx: &Ctx, query: SearchQuery, wr: &mut OwnedWriteHalf) -> std::io::Result<()> {
@@ -208,7 +210,7 @@ async fn release_source(ctx: &Ctx, release: Release, cached: Option<Arc<Metainfo
         return Ok(Source::Torrent { metainfo: (*metainfo).clone(), origin: Origin::Cache });
     }
     let magnet = release.magnet.as_deref().map(magnet::parse).transpose()?;
-    if let Some(url) = release.torrent_url {
+    if let Some(url) = ctx.search.torrent_url(&release)? {
         match fetch(ctx, url).await {
             Ok(metainfo) => return Ok(Source::Torrent { metainfo, origin: Origin::Url }),
             // A magnet without trackers, like archive.org's, finds peers only through the DHT, and

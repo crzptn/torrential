@@ -196,6 +196,7 @@ fn private_links_stay_out_of_results_and_with_their_own_listing() {
             [Some(public_magnet.clone()), None, public_info.clone()],
         ]
     );
+    let linked: Vec<Release> = linked.into_iter().map(|(release, _)| release).collect();
     assert_eq!(
         links(&linked),
         [
@@ -225,7 +226,7 @@ fn locator_rows_get_a_stable_u_ref() {
     assert_eq!(first.releases[0].id, ReleaseId::Locator(LocatorId::from_bytes(digest)));
     assert!(first.releases[0].id.to_ref().starts_with('u'));
     assert_eq!((first.releases[0].torrent_url.as_deref(), first.releases[0].magnet.as_deref()), (None, None));
-    assert_eq!(linked[0].torrent_url.as_deref(), Some(url));
+    assert_eq!((linked[0].0.torrent_url.as_deref(), linked[0].1.as_deref()), (Some(url), Some("tracker")));
     assert_eq!(again.releases, first.releases);
 }
 

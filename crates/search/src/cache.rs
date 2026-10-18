@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use torrential_core::{HexPrefix, Release, ReleaseId};
 
 use crate::observation::Observation;
+use crate::sources::SavedLink;
 
 /// Knaben's CDN caches searches for the same five minutes.
 const TTL: Duration = Duration::from_secs(5 * 60);
@@ -26,18 +27,30 @@ pub struct ResultCache {
 #[derive(Default)]
 struct State {
     answers: HashMap<AnswerKey, (Instant, Arc<Vec<Observation>>)>,
-    recent: HashMap<ReleaseId, (u64, Release)>,
+    recent: HashMap<ReleaseId, Recent>,
     seq: u64,
+}
+
+/// A release a search returned, and its private `.torrent` link as an engine saves it.
+struct Recent {
+    seq: u64,
+    release: Release,
+    saved: Option<SavedLink>,
 }
 
 impl State {
     fn trim(&mut self) {
         if self.recent.len() > MAX_RECENT {
-            let mut seqs: Vec<u64> = self.recent.values().map(|(seq, _)| *seq).collect();
+            let mut seqs: Vec<u64> = self.recent.values().map(|r| r.seq).collect();
             seqs.sort_unstable();
             let cutoff = seqs[seqs.len() - MAX_RECENT];
-            self.recent.retain(|_, (seq, _)| *seq >= cutoff);
+            self.recent.retain(|_, r| r.seq >= cutoff);
         }
+    }
+
+    fn insert(&mut self, release: Release, saved: Option<SavedLink>) {
+        self.seq += 1;
+        self.recent.insert(release.id, Recent { seq: self.seq, release, saved });
     }
 }
 
@@ -63,9 +76,15 @@ impl ResultCache {
     /// not for printing.
     pub fn find(&self, prefix: &HexPrefix) -> Vec<Release> {
         let state = self.lock();
-        let mut found: Vec<&(u64, Release)> = state.recent.values().filter(|(_, r)| prefix.matches(&r.id)).collect();
-        found.sort_by_key(|(seq, _)| std::cmp::Reverse(*seq));
-        found.into_iter().map(|(_, r)| r.clone()).collect()
+        let mut found: Vec<&Recent> = state.recent.values().filter(|r| prefix.matches(&r.release.id)).collect();
+        found.sort_by_key(|r| std::cmp::Reverse(r.seq));
+        found.into_iter().map(|r| r.release.clone()).collect()
+    }
+
+    /// The private `.torrent` link of a recent release, without its API key, for an engine to
+    /// save. `None` when its link is public, or it has none.
+    pub fn saved_link(&self, id: &ReleaseId) -> Option<SavedLink> {
+        self.lock().recent.get(id)?.saved.clone()
     }
 
     pub(crate) fn answer(&self, key: &AnswerKey, now: Instant) -> Option<Arc<Vec<Observation>>> {
@@ -87,27 +106,24 @@ impl ResultCache {
         state.answers.insert(key, (now, rows));
     }
 
-    /// Remembers releases an earlier engine process showed, newest first, so their
-    /// IDs still resolve. Call it before the first search: it never replaces a
-    /// release this cache already holds. Shown releases carry no private links.
-    pub fn restore(&self, releases: Vec<Release>) {
+    /// Remembers what an earlier engine process saved, newest first, so their IDs
+    /// still resolve. Call it before the first search: it never replaces a release
+    /// this cache already holds. Shown releases carry no private links, and saved
+    /// links carry no key.
+    pub fn restore(&self, saved: Vec<(Release, Option<SavedLink>)>) {
         let mut state = self.lock();
-        for release in releases.into_iter().rev() {
+        for (release, link) in saved.into_iter().rev() {
             if !state.recent.contains_key(&release.id) {
-                state.seq += 1;
-                let seq = state.seq;
-                state.recent.insert(release.id, (seq, release));
+                state.insert(release, link);
             }
         }
         state.trim();
     }
 
-    pub(crate) fn remember(&self, releases: &[Release]) {
+    pub(crate) fn remember(&self, releases: Vec<(Release, Option<SavedLink>)>) {
         let mut state = self.lock();
-        for release in releases {
-            state.seq += 1;
-            let seq = state.seq;
-            state.recent.insert(release.id, (seq, release.clone()));
+        for (release, saved) in releases {
+            state.insert(release, saved);
         }
         state.trim();
     }

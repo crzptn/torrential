@@ -40,6 +40,9 @@ pub(crate) fn vet(terms: &Terms, rows: Vec<Observation>) -> Result<Vec<Observati
     if (total - kept.len()) * 2 > total { Err(Failure::Irrelevant) } else { Ok(kept) }
 }
 
+/// A release with every link, and the private source whose `.torrent` link it carries, if any.
+pub(crate) type Linked = (Release, Option<String>);
+
 /// Fails with `providers_unavailable` when no source answered. An answer with no
 /// rows is still an answer. Also returns the shown releases with every link, for
 /// resolving their IDs later.
@@ -49,7 +52,7 @@ pub(crate) fn assemble(
     terms: &Terms,
     runs: &[Run],
     elapsed_ms: u32,
-) -> Result<(SearchResult, Vec<Release>), Error> {
+) -> Result<(SearchResult, Vec<Linked>), Error> {
     let (result, linked) = merged(query, profile, terms, runs, elapsed_ms);
     if !result.sources.iter().any(|r| r.outcome.is_ok()) {
         return Err(all_failed(result.sources));
@@ -65,7 +68,7 @@ pub(crate) fn merged(
     terms: &Terms,
     runs: &[Run],
     elapsed_ms: u32,
-) -> (SearchResult, Vec<Release>) {
+) -> (SearchResult, Vec<Linked>) {
     let mut runs: Vec<&Run> = runs.iter().collect();
     runs.sort_by_key(|r| r.source.authority);
     let sources: Vec<SourceReport> = runs.iter().map(|r| report(r)).collect();
@@ -83,7 +86,7 @@ pub(crate) fn merged(
     let releases = kept.iter().map(Candidate::shown).collect();
     let query = SearchQuery { profile, ..query.clone() };
     let result = SearchResult { query, releases, total, hidden_adult, sources, elapsed_ms };
-    (result, kept.into_iter().map(|c| c.release).collect())
+    (result, kept.into_iter().map(|c| (c.release, c.private_url)).collect())
 }
 
 fn report(run: &Run) -> SourceReport {
@@ -108,8 +111,8 @@ pub(crate) struct Candidate {
     /// Every link, for the engine to download from.
     pub release: Release,
     hash: Option<InfoHash>,
-    /// The `.torrent` URL came from a private source and may carry an API key.
-    private_url: bool,
+    /// The private source the `.torrent` URL came from, which may have put an API key in it.
+    private_url: Option<String>,
     /// The trackers came from a private source and carry the user's passkey.
     private_trackers: bool,
     /// The page link came from a private source, which may put a passkey in it.
@@ -134,7 +137,7 @@ impl Candidate {
     /// private sources. Agents and people refer to it by ID instead.
     fn shown(&self) -> Release {
         let mut release = self.release.clone();
-        if self.private_url {
+        if self.private_url.is_some() {
             release.torrent_url = None;
         }
         if self.private_trackers {
@@ -214,7 +217,8 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
         group.iter().filter(|(s, _)| s.public || !any_public).flat_map(|(_, o)| &o.trackers).collect();
     let trackers: Vec<String> = trackers.into_iter().take(MAX_TRACKERS).cloned().collect();
     let hash = combined_hash(group);
-    let link = group.iter().filter_map(|(s, o)| o.torrent_url().map(|url| (s.authority, !s.public, url))).min();
+    let link =
+        group.iter().filter_map(|(s, o)| o.torrent_url().map(|url| (s.authority, !s.public, url, &s.name))).min();
     let info = group.iter().filter_map(|(s, o)| o.info_url.as_deref().map(|url| (s.authority, !s.public, url))).min();
     let relevance = group.iter().map(|(_, o)| terms.relevance(o.name())).max().unwrap_or(terms.relevance(""));
     let extra_words = terms.extra_words(&name);
@@ -226,7 +230,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     let languages = Language::named_in(&name, terms.words());
     Candidate {
         hash,
-        private_url: link.is_some_and(|(_, private, _)| private),
+        private_url: link.filter(|(_, private, ..)| *private).map(|(.., source)| source.clone()),
         private_trackers: !any_public && !trackers.is_empty(),
         private_info: info.is_some_and(|(_, private, _)| private),
         release: Release {
@@ -240,7 +244,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
             category,
             flags,
             sources: authorities.into_iter().map(|(_, name)| name.to_string()).collect(),
-            torrent_url: link.map(|(.., url)| url.to_string()),
+            torrent_url: link.map(|(_, _, url, _)| url.to_string()),
             info_url: info.map(|(.., url)| url.to_string()),
         },
         relevance,

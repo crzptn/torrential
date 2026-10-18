@@ -6,6 +6,7 @@ use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, Release, Selection, 
 
 use super::admission::Cap;
 use super::book::{Intent, JobRecord};
+use super::search_port::SavedLink;
 
 /// A database records how many entries it has run, so a shipped entry must never change.
 const MIGRATIONS: &[&str] = &[
@@ -55,6 +56,8 @@ CREATE TABLE results (
     "ALTER TABLE jobs ADD COLUMN piece_map TEXT;",
     "ALTER TABLE jobs ADD COLUMN files_verified TEXT;",
     "ALTER TABLE jobs ADD COLUMN max_size_from_setup INTEGER NOT NULL DEFAULT 0;",
+    // A private result's `.torrent` link without its API key, which an engine puts back from the config.
+    "ALTER TABLE results ADD COLUMN link TEXT;",
 ];
 
 /// A removed download, remembered briefly so a repeated `rm` reports `already_removed`.
@@ -448,28 +451,35 @@ impl Store {
         Ok(owners)
     }
 
-    pub fn record_results(&mut self, releases: &[Release], now: i64) -> Result<(), Error> {
+    /// `saved` pairs each release as shown with its private link less the API key.
+    pub fn record_results(&mut self, saved: &[(Release, Option<SavedLink>)], now: i64) -> Result<(), Error> {
         self.write(|tx| {
-            for release in releases {
+            for (release, link) in saved {
                 tx.execute(
-                    "INSERT OR REPLACE INTO results (id, release, seen_at) VALUES (?1, ?2, ?3)",
-                    params![release.id.to_ref(), json(release), now],
+                    "INSERT OR REPLACE INTO results (id, release, seen_at, link) VALUES (?1, ?2, ?3, ?4)",
+                    params![release.id.to_ref(), json(release), now, link.as_ref().map(json)],
                 )?;
             }
             tx.execute("DELETE FROM results WHERE seen_at < ?1", [now - RESULTS_SECS]).map(drop)
         })
     }
 
-    pub fn results(&self, now: i64) -> Result<Vec<Release>, Error> {
+    pub fn results(&self, now: i64) -> Result<Vec<(Release, Option<SavedLink>)>, Error> {
         let mut stmt = self
             .conn
-            .prepare("SELECT release FROM results WHERE seen_at >= ?1 ORDER BY seen_at DESC")
+            .prepare("SELECT release, link FROM results WHERE seen_at >= ?1 ORDER BY seen_at DESC")
             .map_err(|e| self.fail(e))?;
-        let rows = stmt.query_map([now - RESULTS_SECS], |r| r.get::<_, String>(0)).map_err(|e| self.fail(e))?;
+        let rows = stmt
+            .query_map([now - RESULTS_SECS], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))
+            .map_err(|e| self.fail(e))?;
         let mut out = Vec::new();
         for row in rows {
-            let text = row.map_err(|e| self.fail(e))?;
-            out.push(serde_json::from_str(&text).map_err(|_| corrupt(&self.path, "a search result is unreadable"))?);
+            let (release, link) = row.map_err(|e| self.fail(e))?;
+            let unreadable = |_| corrupt(&self.path, "a search result is unreadable");
+            out.push((
+                serde_json::from_str(&release).map_err(unreadable)?,
+                link.map(|link| serde_json::from_str(&link)).transpose().map_err(unreadable)?,
+            ));
         }
         Ok(out)
     }

@@ -27,13 +27,14 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, timeout_at};
-use torrential_core::{Error, ErrorCode, Profile, SearchQuery, SearchResult, text};
+use torrential_core::{Error, ErrorCode, Profile, Release, SearchQuery, SearchResult, text};
 use url::Url;
 
-use crate::assemble::{Answer, Run, assemble, merged, vet};
+use crate::assemble::{Answer, Linked, Run, assemble, merged, vet};
 use crate::cache::AnswerKey;
 pub use crate::cache::ResultCache;
 use crate::http::{FetchError, Http, Retry};
+pub use crate::sources::SavedLink;
 use crate::sources::{Ctx, Failure, Source, Stores};
 use crate::terms::Terms;
 
@@ -185,7 +186,7 @@ impl Search {
             }
             if runs.len() < selected.len() {
                 let (result, linked) = merged(query, rank_for(), &terms, &runs, millis(started.elapsed()));
-                cache.remember(&linked);
+                cache.remember(self.inner.saved_links(linked));
                 let pending = selected
                     .iter()
                     .filter(|s| !runs.iter().any(|r| r.source.name == s.meta.name))
@@ -196,8 +197,37 @@ impl Search {
         }
         self.inner.stores.save().await;
         let (result, linked) = assemble(query, rank_for(), &terms, &runs, millis(started.elapsed()))?;
-        cache.remember(&linked);
+        cache.remember(self.inner.saved_links(linked));
         Ok(result)
+    }
+
+    /// The `.torrent` link to download `release` from: its own, or the one an earlier engine
+    /// process saved for it, with the current API key of the source that issued it. Fails with
+    /// `usage` when that link needs a key and its source is gone or has none.
+    pub fn torrent_url(&self, release: &Release) -> Result<Option<String>, Error> {
+        if release.torrent_url.is_some() {
+            return Ok(release.torrent_url.clone());
+        }
+        let Some(saved) = self.inner.cache.saved_link(&release.id) else { return Ok(None) };
+        let name = &saved.source;
+        let needs_key = |why: &str, hint: String| {
+            Error::new(
+                ErrorCode::Usage,
+                format!("this result's .torrent link needs an API key for the {name} indexer, which {why}"),
+            )
+            .with_hint(format!("{hint} and run torrential daemon stop, or search again"))
+        };
+        let Some(source) = self.inner.sources.iter().find(|s| s.meta.name == *name) else {
+            return Err(if self.inner.disabled.contains(name) {
+                needs_key("is disabled", format!("remove {name} from sources.disabled in the torrential config"))
+            } else {
+                needs_key("is not configured", format!("add {name} back to sources.torznab in the torrential config"))
+            });
+        };
+        let url = source
+            .link(&saved)
+            .ok_or_else(|| needs_key("has none", format!("set api_key_env for {name} in the torrential config")))?;
+        Ok(Some(url))
     }
 
     /// The `.torrent` file at `url`, which may be a private link from
@@ -265,6 +295,21 @@ impl Inner {
         let sources = sources::registry(config)?;
         let disabled = config.disabled.clone();
         Ok(Inner { http, sources, disabled, stores: Stores::new(config.cache_dir.clone()), cache })
+    }
+
+    /// Each release with its private `.torrent` link as an engine saves it: without the key of the
+    /// source that issued it.
+    fn saved_links(&self, linked: Vec<Linked>) -> Vec<(Release, Option<SavedLink>)> {
+        linked
+            .into_iter()
+            .map(|(release, private)| {
+                let saved = private.and_then(|name| {
+                    let source = self.sources.iter().find(|s| s.meta.name == name)?;
+                    source.save_link(release.torrent_url.as_deref()?)
+                });
+                (release, saved)
+            })
+            .collect()
     }
 
     /// Also says whether the answer is complete enough to cache.

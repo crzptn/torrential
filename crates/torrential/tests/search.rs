@@ -160,7 +160,12 @@ impl Home {
     }
 
     fn set(&mut self, key: &'static str, value: &str) {
+        self.unset(key);
         self.vars.push((key, value.into()));
+    }
+
+    fn unset(&mut self, key: &'static str) {
+        self.vars.retain(|(k, _)| *k != key);
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -351,6 +356,102 @@ fn private_indexer_links_never_reach_the_output() {
     }
     assert_eq!(server.asked("/torznab/api"), ["/torznab/api?t=search&q=ubuntu&apikey=k3y"]);
     assert_eq!(server.asked("/dl/privatehd/"), vec!["/dl/privatehd/?jackett_apikey=k3y&path=def&file=ubuntu"; 3]);
+}
+
+#[test]
+fn a_private_locator_resolves_after_a_restart_with_the_key_from_the_environment() {
+    let server = Server::start(|base| {
+        let feed =
+            String::from_utf8(fixture("torznab/jackett-ubuntu.xml")).unwrap().replace("http://127.0.0.1:9117", base);
+        vec![("/torznab/api", vec![ok(feed.into_bytes())]), ("/dl/privatehd/", vec![ok(torrent("ubuntu-private.iso"))])]
+    });
+    let indexer =
+        |key_env: &str| format!("  torznab:\n    - name: jackett\n      url: {}/torznab/api\n{key_env}", server.base);
+    let mut home = Home::new(&server, &[], &indexer("      api_key_env: TEST_JACKETT_KEY\n"));
+    let config = std::fs::read_to_string(home.path("th/config/config.yaml")).unwrap();
+    home.set("TEST_JACKETT_KEY", "k3y");
+    let name = |run: &Run| run.json()["files"]["name"].as_str().map(String::from);
+
+    let found = home.run(&["search", "ubuntu", "--json"]).json();
+    let locator = found["result"]["releases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["id"].as_str())
+        .find(|id| id.starts_with('u'))
+        .unwrap()[..7]
+        .to_string();
+    let before = home.run(&["files", &locator, "--json"]);
+    home.run(&["daemon", "stop"]);
+    let on_disk: Vec<String> = walk(&home.path("th"))
+        .into_iter()
+        .filter(|path| std::fs::read(path).unwrap().windows(3).any(|w| w == b"k3y"))
+        .map(|path| path.display().to_string())
+        .collect();
+    home.set("TEST_JACKETT_KEY", "n3w");
+    let after = home.run(&["files", &locator, "--json"]);
+    home.run(&["daemon", "stop"]);
+    home.write_config(&config.replace("      api_key_env: TEST_JACKETT_KEY\n", ""));
+    let keyless = home.run(&["files", &locator]);
+    home.run(&["daemon", "stop"]);
+    home.write_config(&config.replace(&indexer("      api_key_env: TEST_JACKETT_KEY\n"), ""));
+    let removed = home.run(&["files", &locator]);
+    home.run(&["daemon", "stop"]);
+    home.write_config(&config);
+    home.unset("TEST_JACKETT_KEY");
+    let unset = home.run(&["files", &locator]);
+
+    assert_eq!(name(&before), Some("ubuntu-private.iso".into()), "{}{}", before.stdout, before.stderr);
+    assert_eq!(on_disk, Vec::<String>::new(), "the API key reached the disk");
+    assert_eq!(name(&after), Some("ubuntu-private.iso".into()), "{}{}", after.stdout, after.stderr);
+    assert_eq!(
+        server.asked("/dl/privatehd/"),
+        [
+            "/dl/privatehd/?jackett_apikey=k3y&path=def&file=ubuntu",
+            "/dl/privatehd/?path=def&file=ubuntu&jackett_apikey=n3w"
+        ]
+    );
+    assert_eq!(
+        (keyless.code, keyless.stderr.as_str()),
+        (
+            2,
+            "error[usage]: this result's .torrent link needs an API key for the jackett indexer, which has none\n\
+             hint: set api_key_env for jackett in the torrential config and run torrential daemon stop, or search \
+             again\n"
+        )
+    );
+    assert_eq!(
+        (removed.code, removed.stderr.as_str()),
+        (
+            2,
+            "error[usage]: this result's .torrent link needs an API key for the jackett indexer, which is not \
+             configured\nhint: add jackett back to sources.torznab in the torrential config and run torrential \
+             daemon stop, or search again\n"
+        )
+    );
+    let config_file = home.path("th/config/config.yaml").display().to_string();
+    assert_eq!(
+        (unset.code, unset.stderr.as_str()),
+        (
+            2,
+            &*format!(
+                "error[usage]: {config_file} line 6: the \"jackett\" indexer takes its API key from TEST_JACKETT_KEY, \
+                 which is not set\nhint: fix {config_file}\n"
+            )
+        )
+    );
+}
+
+/// Every file under `dir`.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .flat_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() { walk(&path) } else { vec![path] }
+        })
+        .collect()
 }
 
 fn send(socket: &mut UnixStream, request: &Request) {

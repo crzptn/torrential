@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use torrential_core::error::Details;
 use torrential_core::{Category, ErrorCode, Flag, HexPrefix, SearchQuery, SourceOutcome};
-use torrential_search::{Progress, ResultCache, Search, SearchConfig, TorznabConfig};
+use torrential_search::{Progress, ResultCache, SavedLink, Search, SearchConfig, TorznabConfig};
 
 #[derive(Clone)]
 struct Reply {
@@ -755,7 +755,7 @@ async fn restored_results_resolve_without_replacing_fresh_links() {
         ..locator.clone()
     };
 
-    cache.restore(vec![locator.clone(), older]);
+    cache.restore(vec![(locator.clone(), None), (older, None)]);
 
     let private = cache.find(&locator.id.to_ref().parse().unwrap());
     assert_eq!(
@@ -764,6 +764,54 @@ async fn restored_results_resolve_without_replacing_fresh_links() {
     );
     let restored: Vec<String> = cache.find(&"9b5212".parse().unwrap()).into_iter().map(|r| r.name).collect();
     assert_eq!(restored, ["archlinux-2026.10.01-x86_64.iso"]);
+}
+
+#[tokio::test]
+async fn a_private_link_is_saved_without_its_key_and_takes_the_current_one_back() {
+    let server = Server::start(vec![("/torznab/api", vec![ok(fixture("torznab/jackett-ubuntu.xml"))])]).await;
+    let config = |key: Option<&str>| SearchConfig {
+        torznab: vec![TorznabConfig {
+            name: "jackett".into(),
+            url: format!("{}/torznab/api", server.base),
+            api_key: key.map(String::from),
+        }],
+        ..SearchConfig::default()
+    };
+    let cache = ResultCache::new();
+    let search = Search::new(&config(Some("k3y")), cache.clone()).unwrap();
+    let result = search.search(&query("ubuntu", &["jackett"])).await.unwrap();
+    let locator = result.releases.iter().find(|r| r.id.to_ref().starts_with('u')).unwrap().clone();
+    let saved = cache.saved_link(&locator.id);
+
+    let next_engine = |config: SearchConfig| {
+        let cache = ResultCache::new();
+        cache.restore(vec![(locator.clone(), saved.clone())]);
+        let found = cache.find(&locator.id.to_ref().parse().unwrap()).remove(0);
+        Search::new(&config, cache).unwrap().torrent_url(&found)
+    };
+    let rotated = next_engine(config(Some("n3w")));
+    let keyless = next_engine(config(None)).unwrap_err();
+    let gone = next_engine(SearchConfig::default()).unwrap_err();
+
+    assert_eq!(
+        saved,
+        Some(SavedLink {
+            source: "jackett".into(),
+            url: "http://127.0.0.1:9117/dl/privatehd/?path=def&file=ubuntu".into(),
+            key_params: vec!["jackett_apikey".into()],
+        })
+    );
+    assert_eq!(
+        rotated.unwrap().as_deref(),
+        Some("http://127.0.0.1:9117/dl/privatehd/?path=def&file=ubuntu&jackett_apikey=n3w")
+    );
+    assert_eq!(
+        [keyless.message, gone.message],
+        [
+            "this result's .torrent link needs an API key for the jackett indexer, which has none",
+            "this result's .torrent link needs an API key for the jackett indexer, which is not configured",
+        ]
+    );
 }
 
 #[tokio::test]

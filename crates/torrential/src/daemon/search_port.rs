@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use torrential_core::{
-    Error, ErrorCode, HexPrefix, Profile, Release, SearchQuery, SearchResult, SourceOutcome, SourceReport,
+    Error, ErrorCode, HexPrefix, Profile, Release, ReleaseId, SearchQuery, SearchResult, SourceOutcome, SourceReport,
 };
-pub use torrential_search::Progress;
+pub use torrential_search::{Progress, SavedLink};
 use torrential_search::{ResultCache, Search, SearchConfig};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -36,8 +36,13 @@ pub trait SearchPort: Send + Sync {
     /// links from private sources, which can carry an API key, so they are for downloading and
     /// never for printing.
     fn find(&self, prefix: &HexPrefix) -> Vec<Release>;
-    /// Remembers what an earlier engine process showed, newest first. Called once, at start.
-    fn restore(&self, releases: Vec<Release>);
+    /// The `.torrent` link to download a release [`SearchPort::find`] returned from. See
+    /// [`Search::torrent_url`].
+    fn torrent_url(&self, release: &Release) -> Result<Option<String>, Error>;
+    /// A recent release's private `.torrent` link without its API key, for the next engine process.
+    fn saved_link(&self, id: &ReleaseId) -> Option<SavedLink>;
+    /// Remembers what an earlier engine process saved, newest first. Called once, at start.
+    fn restore(&self, saved: Vec<(Release, Option<SavedLink>)>);
 }
 
 /// The real search, with the one result cache the engine process owns.
@@ -85,8 +90,16 @@ impl SearchPort for Live {
         self.cache.find(prefix)
     }
 
-    fn restore(&self, releases: Vec<Release>) {
-        self.cache.restore(releases);
+    fn torrent_url(&self, release: &Release) -> Result<Option<String>, Error> {
+        self.search.torrent_url(release)
+    }
+
+    fn saved_link(&self, id: &ReleaseId) -> Option<SavedLink> {
+        self.cache.saved_link(id)
+    }
+
+    fn restore(&self, saved: Vec<(Release, Option<SavedLink>)>) {
+        self.cache.restore(saved);
     }
 }
 
@@ -260,9 +273,17 @@ impl SearchPort for Fake {
         self.0.lock().unwrap().recent.iter().filter(|r| prefix.matches(&r.id)).cloned().collect()
     }
 
-    fn restore(&self, releases: Vec<Release>) {
+    fn torrent_url(&self, release: &Release) -> Result<Option<String>, Error> {
+        Ok(release.torrent_url.clone())
+    }
+
+    fn saved_link(&self, _: &ReleaseId) -> Option<SavedLink> {
+        None
+    }
+
+    fn restore(&self, saved: Vec<(Release, Option<SavedLink>)>) {
         let mut state = self.0.lock().unwrap();
-        for release in releases {
+        for (release, _) in saved {
             if !state.recent.iter().any(|r| r.id == release.id) {
                 state.recent.push(release);
             }

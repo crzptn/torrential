@@ -19,6 +19,7 @@ use super::engine_port::{
 use super::files;
 use super::magnet::{self, Magnet};
 use super::resolve::{self, Found, Scope};
+use super::search_port::SavedLink;
 use super::store::{Store, Tombstone};
 
 #[derive(Clone, Debug)]
@@ -124,7 +125,7 @@ pub enum Command {
     Remove { refs: Vec<String>, reply: Reply<Vec<Change>> },
     Verify { reference: String, repair: bool, reply: Reply<Vec<Change>> },
     Watch { refs: Vec<String>, reply: Reply<(Vec<Job>, broadcast::Receiver<Update>)> },
-    RecordResults(Vec<Release>),
+    RecordResults(Vec<(Release, Option<SavedLink>)>),
     Connected,
     Disconnected,
     Shutdown { reply: oneshot::Sender<()> },
@@ -370,9 +371,10 @@ impl Owner {
         (self.parse)(&bytes).ok().map(Arc::new)
     }
 
-    /// Saves search results as shown, for the next engine process to restore.
-    fn record_results(&mut self, releases: Vec<Release>) {
-        let _ = self.store.record_results(&releases, now());
+    /// Saves search results as shown, with their private links less the API key, for the next
+    /// engine process to restore.
+    fn record_results(&mut self, saved: Vec<(Release, Option<SavedLink>)>) {
+        let _ = self.store.record_results(&saved, now());
     }
 
     fn others_remaining(&self, dir: &Path, except: TorrentId) -> u64 {

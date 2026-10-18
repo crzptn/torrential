@@ -18,9 +18,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use torrential_core::{Error, ErrorCode, SourceOutcome, text};
-use url::Url;
+use url::{Url, form_urlencoded};
 
 use sha1::{Digest, Sha1};
 
@@ -111,6 +112,19 @@ pub(crate) struct Source {
     adapter: Adapter,
 }
 
+/// A `.torrent` link from a configured Torznab source, as an engine saves it for the next one:
+/// without the API key it was issued under. [`crate::Search::torrent_url`] puts the source's
+/// current key back.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct SavedLink {
+    /// The source's name in the config.
+    pub source: String,
+    /// The link without the query parameters whose value was the key.
+    pub url: String,
+    /// Those parameters' names, such as `apikey` or Jackett's `jackett_apikey`.
+    pub key_params: Vec<String>,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Failure {
     Timeout,
@@ -190,6 +204,44 @@ impl Source {
             }
             _ => self.base.to_string(),
         }
+    }
+
+    /// `url`, a `.torrent` link this Torznab source issued, without its API key. `None` for
+    /// another kind of source, and when the key is also somewhere no query parameter carries it.
+    pub fn save_link(&self, url: &str) -> Option<SavedLink> {
+        let Adapter::Torznab { api_key } = &self.adapter else { return None };
+        let mut url = Url::parse(url).ok()?;
+        let mut key_params = Vec::new();
+        if let Some(key) = api_key.as_deref().filter(|k| !k.is_empty()) {
+            let mut kept = Vec::new();
+            for pair in url.query().unwrap_or_default().split('&') {
+                match form_urlencoded::parse(pair.as_bytes()).next() {
+                    Some((name, value)) if value == key => key_params.push(name.into_owned()),
+                    _ => kept.push(pair),
+                }
+            }
+            let query = kept.join("&");
+            url.set_query((!query.is_empty()).then_some(query.as_str()));
+            // Decoding the whole link finds the key in a path segment or another parameter's value.
+            if form_urlencoded::parse(url.as_str().as_bytes()).any(|(a, b)| a.contains(key) || b.contains(key)) {
+                return None;
+            }
+        }
+        Some(SavedLink { source: self.meta.name.clone(), url: url.into(), key_params })
+    }
+
+    /// `saved` with this source's API key in each of its key parameters. `None` when the link
+    /// needs a key and this source has none.
+    pub fn link(&self, saved: &SavedLink) -> Option<String> {
+        let mut url = Url::parse(&saved.url).ok()?;
+        if !saved.key_params.is_empty() {
+            let Adapter::Torznab { api_key: Some(key) } = &self.adapter else { return None };
+            let mut pairs = url.query_pairs_mut();
+            for name in &saved.key_params {
+                pairs.append_pair(name, key);
+            }
+        }
+        Some(url.into())
     }
 
     pub fn archive_item(&self, name: &str, web_seeds: &[String]) -> Option<archive_org::Item> {
@@ -289,5 +341,48 @@ pub(crate) mod fixture {
     pub fn read(name: &str) -> Vec<u8> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn jackett(key: Option<&str>) -> Arc<Source> {
+        let torznab = TorznabConfig {
+            name: "jackett".into(),
+            url: "http://127.0.0.1:9117/api".into(),
+            api_key: key.map(String::from),
+        };
+        let config = SearchConfig { torznab: vec![torznab], ..SearchConfig::default() };
+        registry(&config).unwrap().into_iter().find(|s| s.meta.name == "jackett").unwrap()
+    }
+
+    #[test]
+    fn a_saved_link_leaves_out_the_key_and_takes_the_current_one_back() {
+        let save = |key, url: &str| jackett(key).save_link(url).map(|l| (l.url, l.key_params));
+        let issued = "http://127.0.0.1:9117/dl/x/?jackett_apikey=k3y&path=a%2Bb%3D&file=Ubuntu+26.04";
+        let saved = jackett(Some("k3y")).save_link(issued).unwrap();
+
+        assert_eq!(
+            saved,
+            SavedLink {
+                source: "jackett".into(),
+                url: "http://127.0.0.1:9117/dl/x/?path=a%2Bb%3D&file=Ubuntu+26.04".into(),
+                key_params: vec!["jackett_apikey".into()],
+            }
+        );
+        assert_eq!(
+            jackett(Some("n3w")).link(&saved).as_deref(),
+            Some("http://127.0.0.1:9117/dl/x/?path=a%2Bb%3D&file=Ubuntu+26.04&jackett_apikey=n3w")
+        );
+        assert_eq!(jackett(None).link(&saved), None);
+        assert_eq!(
+            save(Some("k3y"), "http://h/1/download?apikey=k3y&link=x"),
+            Some(("http://h/1/download?link=x".into(), vec!["apikey".into()]))
+        );
+        assert_eq!(save(Some("k3y"), "http://h/dl/k3y/a.torrent?apikey=k3y"), None, "a key in the path");
+        assert_eq!(save(Some("k3y"), "http://h/dl?apikey=k3y&next=%2Fget%3Fkey%3Dk3y"), None, "an encoded key");
+        assert_eq!(save(None, "http://h/dl?id=7"), Some(("http://h/dl?id=7".into(), Vec::new())));
     }
 }
