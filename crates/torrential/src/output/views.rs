@@ -52,8 +52,8 @@ pub fn short_ref(id: &str) -> String {
 
 pub fn source_outcome(outcome: &SourceOutcome) -> String {
     match outcome {
-        SourceOutcome::Ok { results } => format!("{results} results"),
-        SourceOutcome::Cached { results } => format!("{results} results, cached"),
+        SourceOutcome::Ok { results } => format::count(*results as usize, "result"),
+        SourceOutcome::Cached { results } => format!("{}, cached", format::count(*results as usize, "result")),
         SourceOutcome::Timeout => "timeout".to_string(),
         SourceOutcome::Http { status } => format!("http {status}"),
         SourceOutcome::Connect { reason } => format!("connect failed ({})", sanitize(reason)),
@@ -92,8 +92,8 @@ pub fn search(result: &SearchResult, now: i64) -> Doc {
         .collect();
     let ok = result.sources.iter().filter(|s| s.outcome.is_ok()).count();
     let mut line = vec![
-        format!("{} of {} results", result.releases.len(), result.total),
-        format!("{ok} of {} sources ok", result.sources.len()),
+        format!("{} of {}", result.releases.len(), format::count(result.total as usize, "result")),
+        format!("{ok} of {} ok", format::count(result.sources.len(), "source")),
     ];
     line.extend(
         result
@@ -164,13 +164,16 @@ pub fn files(reply: &FilesReply) -> Doc {
     };
     let count = reply.files.len();
     let mut summary = vec![format!(
-        "{count} files in {name} · {} · file list {source} in {}",
+        "{} in {name} · {} · file list {source} in {}",
+        format::count(count, "file"),
         format_size(reply.total_size),
         format::seconds_tenths(reply.elapsed_ms)
     )];
     if count > MAX_FILE_ROWS {
-        summary
-            .push(format!("showing {MAX_FILE_ROWS} of {count} files; get --files <GLOB> --dry-run checks a pattern"));
+        summary.push(format!(
+            "showing {MAX_FILE_ROWS} of {}; get --files <GLOB> --dry-run checks a pattern",
+            format::count(count, "file")
+        ));
     }
     if risky {
         summary.push("executables inside a media torrent are a common malware sign".to_string());
@@ -308,7 +311,7 @@ pub fn jobs(jobs: &[Job]) -> Doc {
             None => counts.push((name, 1)),
         }
     }
-    let mut line = vec![format!("{} {}", jobs.len(), if jobs.len() == 1 { "download" } else { "downloads" })];
+    let mut line = vec![format::count(jobs.len(), "download")];
     line.extend(counts.iter().map(|(name, count)| format!("{count} {name}")));
     let mut summary = vec![line.join(" · ")];
     for (job, id) in jobs.iter().zip(&ids) {
@@ -353,7 +356,7 @@ pub fn job(job: &Job) -> Doc {
     fields.push(("progress", Cell::new(progress)));
     if matches!(job.status, JobStatus::Metadata | JobStatus::Checking | JobStatus::Downloading) {
         fields.push(("down", Cell::new(format::rate(p.down_rate))));
-        fields.push(("peers", Cell::new(format!("{} ({} seeds)", p.peers, p.seeds))));
+        fields.push(("peers", Cell::new(format!("{} ({})", p.peers, format::count(p.seeds as usize, "seed")))));
         fields.push(("eta", Cell::new(format::eta(p.eta))));
     }
     fields.push(("files", Cell::new(selection(&job.selection))));
@@ -586,7 +589,7 @@ pub fn doctor(checks: &[Check], fix: Option<String>) -> Doc {
     let problems = checks.iter().filter(|c| matches!(c.status, CheckStatus::Warn | CheckStatus::Fail)).count();
     Doc {
         body: Body::Table { header: vec!["CHECK", "STATUS", "DETAIL"], rows },
-        summary: vec![format!("{problems} {}", if problems == 1 { "problem" } else { "problems" })],
+        summary: vec![format::count(problems, "problem")],
         next: fix,
     }
 }

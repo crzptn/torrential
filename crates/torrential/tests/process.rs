@@ -214,8 +214,8 @@ fn search_get_and_wait_to_done_in_four_calls() {
     let wait = home.run(&["wait", "9b5212"]);
     assert_eq!(wait.code, 0, "{}{}", wait.stdout, wait.stderr);
     let path = Path::new(&home.downloads()).join("archlinux-2026.10.01-x86_64.iso");
-    assert!(wait.stdout.contains(&format!("· path {}", path.display())), "{}", wait.stdout);
-    assert_eq!(wait.stdout.lines().last(), Some("next: none"));
+    let last = wait.stdout.lines().last().unwrap();
+    assert!(last.starts_with("# done after ") && last.ends_with(&format!(" · path {}", path.display())), "{last}");
     let again = home.run(&["get", "9b5212", "--dir", &home.downloads()]);
     assert!(again.stdout.starts_with("existing 9b5212"), "{}", again.stdout);
 }
@@ -300,7 +300,7 @@ fn daemon_stop_is_idempotent() {
     assert_eq!(home.run(&["status"]).code, 0);
     let (pid, _) = home.engine().unwrap();
     let stop = home.run(&["daemon", "stop"]);
-    assert_eq!(stop.stdout, format!("result: stopped\npid:    {pid}\nnext:   none\n"));
+    assert_eq!(stop.stdout, format!("result: stopped\npid:    {pid}\n"));
     assert!(!alive(pid));
-    assert_eq!(home.run(&["daemon", "stop"]).stdout, "result: already_stopped\nnext:   none\n");
+    assert_eq!(home.run(&["daemon", "stop"]).stdout, "result: already_stopped\n");
 }

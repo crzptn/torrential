@@ -99,8 +99,9 @@ pub fn check_conflicts(plan: &Plan) -> Result<(), Error> {
     Err(Error::new(
         ErrorCode::PathConflict,
         format!(
-            "{n} {} under {}",
-            if n == 1 { "file already exists" } else { "files already exist" },
+            "{} already {} under {}",
+            crate::output::format::count(n, "file"),
+            if n == 1 { "exists" } else { "exist" },
             plan.destination.display()
         ),
     )

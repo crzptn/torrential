@@ -3,7 +3,7 @@ source: crates/torrential/src/output/views/tests.rs
 expression: "both(&search(&result, NOW), &Response::Search { result })"
 ---
 ID	SEEDS	SIZE	AGE	SOURCE	FLAGS	NAME
-# 0 of 0 results · 1 of 1 sources ok · 1.4s
+# 0 of 0 results · 1 of 1 source ok · 1.4s
 next: torrential search <other words>
 
 --- json

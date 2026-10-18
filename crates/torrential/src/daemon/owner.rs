@@ -1032,7 +1032,7 @@ impl Owner {
             (Intent::Done { .. } | Intent::Failed { .. }, n, Verify::Report) => {
                 let error = Error::new(
                     ErrorCode::VerificationFailed,
-                    format!("{n} damaged {} in the selected files", if n == 1 { "piece" } else { "pieces" }),
+                    format!("{} in the selected files", crate::output::format::count(n as usize, "damaged piece")),
                 )
                 .with_hint(format!("torrential verify {short} --repair downloads them again"));
                 self.fail(id, error);

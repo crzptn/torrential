@@ -64,9 +64,12 @@ pub fn prefix<'a>(
                 })
                 .collect();
             let first = candidates[0].id.clone();
-            Err(Error::new(ErrorCode::AmbiguousRef, format!("{typed} matches {n} torrents"))
-                .with_details(Details::Candidates(candidates))
-                .with_hint(format!("use a longer prefix, such as: torrential {command} {first}")))
+            Err(Error::new(
+                ErrorCode::AmbiguousRef,
+                format!("{typed} matches {}", crate::output::format::count(n, "torrent")),
+            )
+            .with_details(Details::Candidates(candidates))
+            .with_hint(format!("use a longer prefix, such as: torrential {command} {first}")))
         }
     }
 }

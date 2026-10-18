@@ -67,7 +67,6 @@ impl Cell {
 impl Doc {
     pub fn plain(&self) -> String {
         let mut out = String::new();
-        let next = self.next.as_deref().unwrap_or("none");
         match &self.body {
             Body::Table { header, rows } => {
                 if !header.is_empty() {
@@ -78,7 +77,9 @@ impl Doc {
                     push_line(&mut out, &cells.join("\t"));
                 }
                 self.push_summary(&mut out, |s| format!("# {s}"));
-                push_line(&mut out, &format!("next: {next}"));
+                if let Some(next) = &self.next {
+                    push_line(&mut out, &format!("next: {next}"));
+                }
             }
             Body::Fields { title, fields } => {
                 if !title.is_empty() {
@@ -90,7 +91,9 @@ impl Doc {
                     push_line(&mut out, &format!("{:width$}{}", format!("{key}:"), value.text));
                 }
                 self.push_summary(&mut out, |s| format!("# {s}"));
-                push_line(&mut out, &format!("{:width$}{next}", "next:"));
+                if let Some(next) = &self.next {
+                    push_line(&mut out, &format!("{:width$}{next}", "next:"));
+                }
             }
         }
         out

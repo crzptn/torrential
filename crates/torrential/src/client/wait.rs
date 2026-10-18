@@ -288,10 +288,10 @@ fn live_message(job: &Job) -> String {
     let name = job.name.as_deref().map(torrential_core::text::sanitize).unwrap_or_default();
     match job.status {
         JobStatus::Downloading => format!(
-            "{}  {}  {} peers  eta {}  {name}",
+            "{}  {}  {}  eta {}  {name}",
             format::percent(&job.progress),
             format::rate(job.progress.down_rate),
-            job.progress.peers,
+            format::count(job.progress.peers as usize, "peer"),
             format::eta(job.progress.eta)
         ),
         ref status => format!("{}  {}  {name}", status.name(), format::percent(&job.progress)),

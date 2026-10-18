@@ -151,6 +151,22 @@ fn files_of_a_download_show_progress_per_file() {
     insta::assert_snapshot!(both(&files(&reply), &Response::Files { files: reply }));
 }
 
+#[test]
+fn a_one_file_torrent_counts_one_file() {
+    let reply = FilesReply {
+        id: ARCH.into(),
+        name: Some("archlinux-2026.10.01-x86_64.iso".into()),
+        total_size: GIB,
+        files: vec![file(0, "archlinux-2026.10.01-x86_64.iso", GIB)],
+        metadata_source: "peers".into(),
+        elapsed_ms: 900,
+    };
+    assert_eq!(
+        files(&reply).summary,
+        ["1 file in archlinux-2026.10.01-x86_64.iso · 1.0 GiB · file list from peers in 0.9s"]
+    );
+}
+
 fn job(hex: &str, name: Option<&str>, status: JobStatus, progress: Progress) -> Job {
     let id = tid(hex);
     let dir = PathBuf::from("/Users/ada/Downloads/torrential");

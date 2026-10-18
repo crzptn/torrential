@@ -25,7 +25,6 @@ next:      torrential status
 engine: stopped
 socket: /tmp/torrential-501/engine.sock
 log:    /Users/ada/.local/state/torrential/engine.log
-next:   none
 
 --- json
 {
