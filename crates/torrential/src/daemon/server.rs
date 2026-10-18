@@ -100,9 +100,13 @@ async fn search(ctx: &Ctx, query: SearchQuery) -> Result<torrential_core::Search
 }
 
 fn parse(ctx: &Ctx, bytes: &[u8]) -> Result<Metainfo, Error> {
-    let metainfo = (ctx.parse)(bytes)?;
-    files::check_paths(&metainfo)?;
-    Ok(metainfo)
+    if bytes.len() as u64 > MAX_TORRENT_BYTES {
+        return Err(Error::new(
+            ErrorCode::InvalidTorrent,
+            format!("{} bytes is too large for a .torrent file", bytes.len()),
+        ));
+    }
+    (ctx.parse)(bytes)
 }
 
 async fn read_torrent(ctx: &Ctx, path: &std::path::Path) -> Result<Metainfo, Error> {

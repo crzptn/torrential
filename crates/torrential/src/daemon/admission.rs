@@ -59,13 +59,13 @@ pub fn plan(
     metainfo: &Metainfo,
     selection: &Selection,
     dir: &Path,
-    before: Option<&[bool]>,
+    already_wanted: Option<&[bool]>,
     disk: &dyn Disk,
 ) -> Result<Plan, Error> {
     let wanted = files::wanted(metainfo, selection)?;
     let selected_size = metainfo.files.iter().zip(&wanted).filter(|(_, w)| **w).map(|(f, _)| f.size).sum();
-    let new: Vec<bool> = match before {
-        Some(before) => wanted.iter().zip(before).map(|(now, was)| *now && !*was).collect(),
+    let new: Vec<bool> = match already_wanted {
+        Some(already) => wanted.iter().zip(already).map(|(now, was)| *now && !*was).collect(),
         None => wanted.clone(),
     };
     let conflicts = files::targets(metainfo, dir, &new).into_iter().filter(|p| disk.exists(p)).collect();
@@ -106,15 +106,15 @@ pub fn check_conflicts(plan: &Plan) -> Result<(), Error> {
     .with_hint("choose another folder with --dir, or move the existing files; torrential never overwrites"))
 }
 
-pub fn check_disk(space: Space, needed: u64, committed: u64) -> Result<(), Error> {
+pub fn check_disk(space: Space, needed: u64, others_remaining: u64) -> Result<(), Error> {
     let keep = reserve(space.total);
-    let required = needed + committed + keep;
+    let required = needed + others_remaining + keep;
     if required <= space.free {
         return Ok(());
     }
     let mut message = format!("needs {} more on this disk", format_size(needed));
-    if committed > 0 {
-        message.push_str(&format!(" plus {} for other downloads", format_size(committed)));
+    if others_remaining > 0 {
+        message.push_str(&format!(" plus {} for other downloads", format_size(others_remaining)));
     }
     message.push_str(&format!(
         ", but only {} is free and {} stays in reserve",
@@ -208,6 +208,7 @@ mod tests {
             files: vec![("a.bin".into(), size), ("b.bin".into(), GIB)],
         }
         .metainfo()
+        .unwrap()
     }
 
     fn plan_for(size: u64, disk: &FakeDisk) -> Plan {

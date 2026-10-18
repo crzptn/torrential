@@ -5,17 +5,6 @@ use torrential_core::{Error, ErrorCode, FileRisk, Selection};
 
 use super::engine_port::Metainfo;
 
-/// Refuses a torrent whose name or file paths would leave its folder. Every torrent from the
-/// engine or a `.torrent` file passes through here before anything uses its paths.
-pub fn check_paths(metainfo: &Metainfo) -> Result<(), Error> {
-    let escapes = |p: &str| p.is_empty() || p.starts_with('/') || p.split('/').any(|c| c == ".." || c.is_empty());
-    if escapes(&metainfo.name) || metainfo.name.contains('/') || metainfo.files.iter().any(|f| escapes(&f.path)) {
-        return Err(Error::new(ErrorCode::InvalidTorrent, "the torrent has a file path that leaves its folder")
-            .with_hint("this torrent is malformed or hostile; do not download it"));
-    }
-    Ok(())
-}
-
 pub fn compile(patterns: &[String]) -> Result<GlobSet, Error> {
     let mut set = GlobSetBuilder::new();
     for pattern in patterns {
@@ -91,6 +80,7 @@ mod tests {
             ],
         }
         .metainfo()
+        .unwrap()
     }
 
     #[test]
@@ -120,20 +110,6 @@ mod tests {
     }
 
     #[test]
-    fn paths_that_leave_the_folder_are_refused() {
-        let with = |name: &str, path: &str| {
-            FakeTorrentFile { info_hash: InfoHash::V1([1; 20]), name: name.into(), files: vec![(path.into(), 1)] }
-                .metainfo()
-        };
-        assert_eq!(check_paths(&with("set", "a/b.mkv")), Ok(()));
-        for (name, path) in
-            [("set", "../etc/passwd"), ("set", "/etc/passwd"), ("..", "a"), ("a/b", "c"), ("set", "a//b")]
-        {
-            assert_eq!(check_paths(&with(name, path)).unwrap_err().code, ErrorCode::InvalidTorrent, "{name} {path}");
-        }
-    }
-
-    #[test]
     fn single_files_land_beside_folders() {
         let dir = Path::new("/d");
         assert_eq!(
@@ -148,6 +124,6 @@ mod tests {
             name: "a.iso".into(),
             files: vec![("a.iso".into(), 5)],
         };
-        assert_eq!(targets(&iso.metainfo(), dir, &[true]), [PathBuf::from("/d/a.iso")]);
+        assert_eq!(targets(&iso.metainfo().unwrap(), dir, &[true]), [PathBuf::from("/d/a.iso")]);
     }
 }

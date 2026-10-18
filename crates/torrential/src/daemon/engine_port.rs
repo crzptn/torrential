@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use torrential_core::{Error, ErrorCode, InfoHash, TorrentId};
 
+/// A torrent's file list. Only [`Metainfo::new`] builds one, so every path in it stays
+/// inside the torrent's folder. A port that receives a hostile file list reports the
+/// constructor's error as [`EngineEvent::Failed`].
 #[derive(Clone, PartialEq, Debug)]
 pub struct Metainfo {
     pub info_hash: InfoHash,
@@ -23,22 +26,37 @@ pub struct Metainfo {
     pub single_file: bool,
     /// The `.torrent` bytes, kept so a restart can add the torrent without asking peers.
     pub bytes: Vec<u8>,
+    checked: (),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MetaFile {
-    /// Relative to the torrent's folder, with `/` separators. Already checked to stay inside it.
+    /// Relative to the torrent's folder, with `/` separators.
     pub path: String,
     pub size: u64,
 }
 
 impl Metainfo {
+    pub fn new(
+        info_hash: InfoHash,
+        name: String,
+        files: Vec<MetaFile>,
+        single_file: bool,
+        bytes: Vec<u8>,
+    ) -> Result<Self, Error> {
+        let escapes = |p: &str| p.is_empty() || p.starts_with('/') || p.split('/').any(|c| c == ".." || c.is_empty());
+        if escapes(&name) || name.contains('/') || files.iter().any(|f| escapes(&f.path)) {
+            return Err(Error::new(ErrorCode::InvalidTorrent, "the torrent has a file path that leaves its folder")
+                .with_hint("this torrent is malformed or hostile; do not download it"));
+        }
+        Ok(Self { info_hash, name, files, single_file, bytes, checked: () })
+    }
+
     pub fn total(&self) -> u64 {
         self.files.iter().map(|f| f.size).sum()
     }
 }
 
-/// Parses `.torrent` bytes. libtorrent is the only `.torrent` parser in production.
 pub type ParseTorrent = fn(&[u8]) -> Result<Metainfo, Error>;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -276,21 +294,17 @@ impl FakeTorrentFile {
         serde_json::to_vec(self).expect("fake torrents serialize")
     }
 
-    pub fn metainfo(&self) -> Metainfo {
-        Metainfo {
-            info_hash: self.info_hash,
-            name: self.name.clone(),
-            files: self.files.iter().map(|(path, size)| MetaFile { path: path.clone(), size: *size }).collect(),
-            single_file: self.files.len() == 1 && self.files[0].0 == self.name,
-            bytes: self.bytes(),
-        }
+    pub fn metainfo(&self) -> Result<Metainfo, Error> {
+        let files = self.files.iter().map(|(path, size)| MetaFile { path: path.clone(), size: *size }).collect();
+        let single_file = self.files.len() == 1 && self.files[0].0 == self.name;
+        Metainfo::new(self.info_hash, self.name.clone(), files, single_file, self.bytes())
     }
 }
 
 pub fn parse_fake(bytes: &[u8]) -> Result<Metainfo, Error> {
     serde_json::from_slice::<FakeTorrentFile>(bytes)
-        .map(|t| t.metainfo())
-        .map_err(|e| Error::new(ErrorCode::InvalidTorrent, format!("not a torrent file: {e}")))
+        .map_err(|e| Error::new(ErrorCode::InvalidTorrent, format!("not a torrent file: {e}")))?
+        .metainfo()
 }
 
 #[derive(Clone, Default)]
@@ -384,7 +398,7 @@ impl Swarm {
     fn metadata(&self, id: TorrentId, magnet: Option<&str>) -> Option<Metainfo> {
         let state = self.0.lock().unwrap();
         if let Some(t) = state.published.get(&id) {
-            return Some(t.metainfo());
+            return t.metainfo().ok();
         }
         if !state.invent_from_magnets {
             return None;
@@ -392,7 +406,7 @@ impl Swarm {
         let magnet = super::magnet::parse(magnet?).ok()?;
         let size = magnet.exact_length.unwrap_or(1 << 30);
         let name = magnet.name.unwrap_or_else(|| id.to_hex());
-        Some(FakeTorrentFile { info_hash: magnet.info_hash, name: name.clone(), files: vec![(name, size)] }.metainfo())
+        FakeTorrentFile { info_hash: magnet.info_hash, name: name.clone(), files: vec![(name, size)] }.metainfo().ok()
     }
 }
 
@@ -522,5 +536,24 @@ impl EnginePort for Fake {
             }
         }
         self.events.drain(..).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_that_leave_the_folder_are_refused() {
+        let with = |name: &str, path: &str| {
+            FakeTorrentFile { info_hash: InfoHash::V1([1; 20]), name: name.into(), files: vec![(path.into(), 1)] }
+                .metainfo()
+        };
+        assert_eq!(with("set", "a/b.mkv").unwrap().files[0].path, "a/b.mkv");
+        for (name, path) in
+            [("set", "../etc/passwd"), ("set", "/etc/passwd"), ("..", "a"), ("a/b", "c"), ("set", "a//b")]
+        {
+            assert_eq!(with(name, path).unwrap_err().code, ErrorCode::InvalidTorrent, "{name} {path}");
+        }
     }
 }

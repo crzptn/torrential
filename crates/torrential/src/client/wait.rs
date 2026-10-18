@@ -9,7 +9,7 @@ use torrential_core::{Error, ErrorCode, Job, JobStatus, TorrentId};
 use super::connect::Conn;
 use crate::cli::Until;
 use crate::output::theme::Token;
-use crate::output::views::{self, WaitEnd};
+use crate::output::views::{self, WaitEnd, Watched};
 use crate::output::{Body, Doc, Mode, json_document, json_line};
 use crate::wire;
 
@@ -20,17 +20,16 @@ pub fn heartbeat(timeout: Option<Duration>) -> Duration {
     timeout.map_or(HUMAN_HEARTBEAT, |t| (t / 20).clamp(Duration::from_secs(60), Duration::from_secs(240)))
 }
 
-/// Why the wait is over, once it is. `jobs` holds one entry per watched download, in order.
-pub fn evaluate(jobs: &[Job], ids: &[String], until: Until) -> Option<WaitEnd> {
+pub fn evaluate(watched: &[Watched], until: Until) -> Option<WaitEnd> {
     let met = |job: &Job| match until {
         Until::Done => matches!(job.status, JobStatus::Done { .. }),
         Until::Metadata => job.progress.size.is_some(),
     };
-    let named = |pred: &dyn Fn(&Job) -> bool| jobs.iter().zip(ids).find(|(j, _)| pred(j)).map(|(_, id)| id.clone());
+    let named = |pred: &dyn Fn(&Job) -> bool| watched.iter().find(|w| pred(&w.job)).map(|w| w.id.clone());
     if let Some(id) = named(&|j| matches!(j.status, JobStatus::Error { .. })) {
         return Some(WaitEnd::Failed { id });
     }
-    if jobs.iter().all(met) {
+    if watched.iter().all(|w| met(&w.job)) {
         return Some(match until {
             Until::Done => WaitEnd::Done,
             Until::Metadata => WaitEnd::Metadata,
@@ -58,7 +57,7 @@ struct ResultLine<'a> {
     kind: &'static str,
     outcome: &'static str,
     elapsed: u64,
-    jobs: &'a [Job],
+    jobs: Vec<&'a Job>,
 }
 
 impl Printer {
@@ -79,10 +78,11 @@ impl Printer {
         }
     }
 
-    pub fn end(&self, end: &WaitEnd, elapsed: Duration, jobs: &[Job], ids: &[String]) -> String {
-        let (summary, next) = views::wait_end(end, elapsed, jobs, ids);
+    pub fn end(&self, end: &WaitEnd, elapsed: Duration, watched: &[Watched]) -> String {
+        let (summary, next) = views::wait_end(end, elapsed, watched);
         match self.mode {
             Mode::Json => {
+                let jobs = watched.iter().map(|w| &w.job).collect();
                 let line = ResultLine { kind: "result", outcome: end.outcome(), elapsed: elapsed.as_secs(), jobs };
                 json_document(&line, next.as_deref())
             }
@@ -92,26 +92,24 @@ impl Printer {
 }
 
 struct State {
-    jobs: Vec<Job>,
-    ids: Vec<String>,
+    watched: Vec<Watched>,
     printed: Vec<&'static str>,
 }
 
 impl State {
     fn new(jobs: Vec<Job>) -> Self {
-        let ids = views::short_ids(&jobs.iter().map(|j| j.id).collect::<Vec<_>>());
         let printed = vec![""; jobs.len()];
-        Self { jobs, ids, printed }
+        Self { watched: views::watched(jobs), printed }
     }
 
     fn update(&mut self, job: Job) -> Option<usize> {
-        let i = self.jobs.iter().position(|j| j.id == job.id)?;
-        self.jobs[i] = job;
+        let i = self.watched.iter().position(|w| w.job.id == job.id)?;
+        self.watched[i].job = job;
         Some(i)
     }
 
     fn removed(&self, id: &TorrentId) -> Option<String> {
-        self.jobs.iter().zip(&self.ids).find(|(j, _)| j.id == *id).map(|(_, short)| short.clone())
+        self.watched.iter().find(|w| w.job.id == *id).map(|w| w.id.clone())
     }
 }
 
@@ -168,36 +166,37 @@ pub fn run(
     print(&mut out, printer.header());
     let heartbeat = heartbeat(timeout);
     let mut last_beat = started;
-    for (i, job) in state.jobs.iter().enumerate() {
-        print(&mut out, printer.row(Duration::ZERO, &state.ids[i], job));
-        state.printed[i] = job.status.name();
+    for (i, w) in state.watched.iter().enumerate() {
+        print(&mut out, printer.row(Duration::ZERO, &w.id, &w.job));
+        state.printed[i] = w.job.status.name();
     }
     let deadline = timeout.map(|t| started + t);
     loop {
-        if let Some(end) = evaluate(&state.jobs, &state.ids, until) {
-            print(&mut out, printer.end(&end, started.elapsed(), &state.jobs, &state.ids));
+        if let Some(end) = evaluate(&state.watched, until) {
+            print(&mut out, printer.end(&end, started.elapsed(), &state.watched));
             return Ok(end.exit_code());
         }
         let now = Instant::now();
         if deadline.is_some_and(|d| now >= d) {
             let end = WaitEnd::Timeout;
-            print(&mut out, printer.end(&end, started.elapsed(), &state.jobs, &state.ids));
+            print(&mut out, printer.end(&end, started.elapsed(), &state.watched));
             return Ok(end.exit_code());
         }
         if now >= last_beat + heartbeat {
             last_beat = now;
-            for (i, job) in state.jobs.iter().enumerate() {
-                print(&mut out, printer.row(started.elapsed(), &state.ids[i], job));
+            for w in &state.watched {
+                print(&mut out, printer.row(started.elapsed(), &w.id, &w.job));
             }
         }
         let wake = deadline.map_or(last_beat + heartbeat, |d| d.min(last_beat + heartbeat));
         match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
             Ok(Ok(Event::Job { job })) => {
                 if let Some(i) = state.update(*job) {
-                    let name = state.jobs[i].status.name();
+                    let w = &state.watched[i];
+                    let name = w.job.status.name();
                     if name != state.printed[i] {
                         state.printed[i] = name;
-                        print(&mut out, printer.row(started.elapsed(), &state.ids[i], &state.jobs[i]));
+                        print(&mut out, printer.row(started.elapsed(), &w.id, &w.job));
                     }
                 }
             }
@@ -209,7 +208,7 @@ pub fn run(
             Ok(Ok(Event::Removed { id })) => {
                 if let Some(short) = id.parse().ok().and_then(|id| state.removed(&id)) {
                     let end = WaitEnd::Stopped { id: short };
-                    print(&mut out, printer.end(&end, started.elapsed(), &state.jobs, &state.ids));
+                    print(&mut out, printer.end(&end, started.elapsed(), &state.watched));
                     return Ok(end.exit_code());
                 }
             }
@@ -241,21 +240,21 @@ pub fn attach(conn: Conn, refs: Vec<String>, until: Until, timeout: Option<Durat
     .expect("the bar template is valid")
     .progress_chars("━━─");
     let handles: Vec<ProgressBar> = state
-        .ids
+        .watched
         .iter()
-        .map(|id| bars.add(ProgressBar::new(1000).with_style(style.clone()).with_prefix(id.clone())))
+        .map(|w| bars.add(ProgressBar::new(1000).with_style(style.clone()).with_prefix(w.id.clone())))
         .collect();
     let deadline = timeout.map(|t| started + t);
     loop {
-        for (bar, job) in handles.iter().zip(&state.jobs) {
+        for (bar, job) in handles.iter().zip(state.watched.iter().map(|w| &w.job)) {
             bar.set_position(job.progress.fraction().map_or(0, |f| (f * 1000.0) as u64));
             bar.set_message(live_message(job));
         }
-        let end = evaluate(&state.jobs, &state.ids, until)
+        let end = evaluate(&state.watched, until)
             .or_else(|| deadline.is_some_and(|d| Instant::now() >= d).then_some(WaitEnd::Timeout));
         if let Some(end) = end {
             let _ = bars.clear();
-            let (summary, next) = views::wait_end(&end, started.elapsed(), &state.jobs, &state.ids);
+            let (summary, next) = views::wait_end(&end, started.elapsed(), &state.watched);
             anstream::print!(
                 "{}",
                 Doc { body: Body::Fields { title: Vec::new(), fields: Vec::new() }, summary, next }.human()
@@ -329,19 +328,24 @@ mod tests {
 
     #[test]
     fn a_wait_ends_on_done_error_or_a_stop() {
-        let ids = vec!["010101".to_string(), "020202".to_string()];
         let done = JobStatus::Done { finished_at: 1 };
         let failed = JobStatus::Error { error: Error::new(ErrorCode::DiskFull, "full") };
         let both_done = [job(1, done.clone(), Some(5)), job(2, done.clone(), Some(5))];
-        assert_eq!(evaluate(&both_done, &ids, Until::Done), Some(WaitEnd::Done));
+        assert_eq!(evaluate(&views::watched(both_done.to_vec()), Until::Done), Some(WaitEnd::Done));
         let running = [job(1, done.clone(), Some(5)), job(2, JobStatus::Downloading, Some(5))];
-        assert_eq!(evaluate(&running, &ids, Until::Done), None);
-        assert_eq!(evaluate(&running, &ids, Until::Metadata), Some(WaitEnd::Metadata));
+        assert_eq!(evaluate(&views::watched(running.to_vec()), Until::Done), None);
+        assert_eq!(evaluate(&views::watched(running.to_vec()), Until::Metadata), Some(WaitEnd::Metadata));
         let one_failed = [job(1, JobStatus::Downloading, None), job(2, failed, Some(5))];
-        assert_eq!(evaluate(&one_failed, &ids, Until::Done), Some(WaitEnd::Failed { id: "020202".into() }));
+        assert_eq!(
+            evaluate(&views::watched(one_failed.to_vec()), Until::Done),
+            Some(WaitEnd::Failed { id: "020202".into() })
+        );
         let paused = [job(1, JobStatus::Paused, Some(5)), job(2, done, Some(5))];
-        assert_eq!(evaluate(&paused, &ids, Until::Done), Some(WaitEnd::Stopped { id: "010101".into() }));
-        assert_eq!(evaluate(&paused, &ids, Until::Metadata), Some(WaitEnd::Metadata));
+        assert_eq!(
+            evaluate(&views::watched(paused.to_vec()), Until::Done),
+            Some(WaitEnd::Stopped { id: "010101".into() })
+        );
+        assert_eq!(evaluate(&views::watched(paused.to_vec()), Until::Metadata), Some(WaitEnd::Metadata));
     }
 
     #[test]

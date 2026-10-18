@@ -12,6 +12,7 @@ use torrential_core::protocol::{GetRequest, Request, Response};
 use torrential_core::{Error, ErrorCode, SearchQuery, Target};
 
 use crate::cli::{Command, DaemonCommand, GetArgs, SearchArgs, Until};
+use crate::daemon::server::METADATA_WAIT;
 use crate::env::Env;
 use crate::output::views::{self, ChangeCommand, Check, CheckStatus, DaemonReport};
 use crate::output::{self, Mode, Typed, render};
@@ -56,8 +57,8 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
         Command::Search(args) => search(engine()?, args, mode),
         Command::Files(args) => {
             let target = Target::parse(&args.reference, &cwd)?;
-            let request = Request::Files { target, timeout_ms: server_wait_ms() };
-            match answer(engine()?.call_within(&request, server_wait() + Duration::from_secs(15))?)? {
+            let request = Request::Files { target, timeout_ms: METADATA_WAIT.as_millis() as u32 };
+            match answer(engine()?.call_within(&request, METADATA_WAIT + Duration::from_secs(15))?)? {
                 Response::Files { files } => {
                     let doc = views::files(&files);
                     Ok(emit(mode, &doc, &Response::Files { files }))
@@ -134,15 +135,6 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
     }
 }
 
-/// How long the engine looks for a magnet's file list.
-fn server_wait() -> Duration {
-    crate::daemon::server::METADATA_WAIT
-}
-
-fn server_wait_ms() -> u32 {
-    server_wait().as_millis() as u32
-}
-
 fn search(mut conn: Conn, args: SearchArgs, mode: Mode) -> Result<u8, Error> {
     let query = SearchQuery {
         text: args.words.join(" "),
@@ -174,7 +166,7 @@ fn get(mut conn: Conn, args: GetArgs, mode: Mode, cwd: &Path, env: &Env) -> Resu
     let dir = args.dir.map(|d| absolute(&d, cwd, env));
     let dry_run = args.dry_run;
     let request = Request::Get(GetRequest { target, dir, files: args.files, max_size: args.max_size, dry_run });
-    let within = if dry_run { server_wait() + Duration::from_secs(15) } else { connect::DEFAULT_REPLY_WITHIN };
+    let within = if dry_run { METADATA_WAIT + Duration::from_secs(15) } else { connect::DEFAULT_REPLY_WITHIN };
     let reply = match answer(conn.call_within(&request, within)?)? {
         Response::Get { reply } => reply,
         other => return Err(connect::unexpected(&other)),

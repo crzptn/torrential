@@ -375,13 +375,13 @@ fn wait_transcript(mode: Mode, end: WaitEnd, frames: &[(u64, Job)], elapsed: u64
         }
         latest
     };
-    let ids = short_ids(&jobs.iter().map(|j| j.id).collect::<Vec<_>>());
+    let latest = watched(jobs);
     let mut out = printer.header();
     for (at, job) in frames {
-        let id = &ids[jobs.iter().position(|j| j.id == job.id).unwrap()];
+        let id = &latest.iter().find(|w| w.job.id == job.id).unwrap().id;
         out.push_str(&printer.row(Duration::from_secs(*at), id, job));
     }
-    out.push_str(&printer.end(&end, Duration::from_secs(elapsed), &jobs, &ids));
+    out.push_str(&printer.end(&end, Duration::from_secs(elapsed), &latest));
     out
 }
 
@@ -508,6 +508,7 @@ fn sample(code: ErrorCode) -> Error {
             files: vec![("Night.mp4".into(), 70 * GIB)],
         }
         .metainfo()
+        .unwrap()
     };
     let disk = Space { device: 1, total: 100 * GIB, free: 3 * GIB };
     let plan = |conflicts| Plan {

@@ -71,12 +71,18 @@ pub struct Running {
     pub owner: tokio::task::JoinHandle<()>,
 }
 
-pub fn start(store: Store, ports: Ports, config: OwnerConfig, version: String) -> Result<Running, Error> {
+pub fn start(
+    runtime: &tokio::runtime::Handle,
+    store: Store,
+    ports: Ports,
+    config: OwnerConfig,
+    version: String,
+) -> Result<Running, Error> {
     let (events_tx, events) = mpsc::unbounded_channel();
     let (engine, _thread) = engine_port::spawn(ports.engine, events_tx);
     let owner = Owner::new(store, engine.clone(), ports.parse, ports.disk, config)?;
     let (commands_tx, commands) = mpsc::unbounded_channel();
-    let task = tokio::spawn(owner.run(commands, events));
+    let task = runtime.spawn(owner.run(commands, events));
     let ctx =
         Arc::new(Ctx { owner: OwnerHandle(commands_tx), search: ports.search, engine, parse: ports.parse, version });
     Ok(Running { ctx, owner: task })
@@ -157,12 +163,11 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         })?;
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| io(&format!("protect {}", socket.display()), e))?;
-        let running = start(store, ports, config, version.clone())?;
+        let running = start(&tokio::runtime::Handle::current(), store, ports, config, version.clone())?;
         log(&format!("engine {version} started, pid {}, socket {}", std::process::id(), socket.display()));
         let ctx = running.ctx.clone();
         let accept = tokio::spawn(async move {
-            // SAFETY: geteuid has no preconditions and cannot fail.
-            let uid = unsafe { libc::geteuid() };
+            let uid = paths::uid();
             while let Ok((stream, _)) = listener.accept().await {
                 if stream.peer_cred().is_ok_and(|cred| cred.uid() == uid) {
                     tokio::spawn(server::connection(ctx.clone(), stream));
@@ -171,8 +176,6 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         });
         let signals = tokio::spawn(stop_on_signal(running.ctx.owner.clone()));
         let _ = running.owner.await;
-        // Lets a connection that asked for the shutdown write its reply before the process ends.
-        tokio::time::sleep(Duration::from_millis(100)).await;
         accept.abort();
         signals.abort();
         let _ = std::fs::remove_file(&socket);
@@ -202,9 +205,7 @@ fn prepare_runtime_dir(dir: &Path) -> Result<(), Error> {
         |why: String| Error::new(ErrorCode::DaemonUnavailable, why).with_hint("remove it, or set XDG_RUNTIME_DIR");
     std::fs::create_dir_all(dir).map_err(|e| refuse(format!("cannot create {}: {e}", dir.display())))?;
     let meta = dir.symlink_metadata().map_err(|e| refuse(format!("cannot inspect {}: {e}", dir.display())))?;
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    let uid = unsafe { libc::geteuid() };
-    if !meta.is_dir() || meta.uid() != uid {
+    if !meta.is_dir() || meta.uid() != paths::uid() {
         return Err(refuse(format!("{} is not a directory owned by you", dir.display())));
     }
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))

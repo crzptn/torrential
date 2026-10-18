@@ -4,6 +4,7 @@ use std::process::Command;
 use torrential_core::{Error, ErrorCode};
 
 use crate::env::Env;
+use crate::paths::uid;
 
 pub const LABEL: &str = "dev.torrential.engine";
 
@@ -112,11 +113,6 @@ fn run(program: &str, args: &[&str]) -> Result<(), Error> {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr).trim()
     )))
-}
-
-fn uid() -> u32 {
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    unsafe { libc::geteuid() }
 }
 
 /// Writes the unit and starts it. Running it twice changes nothing the second time.

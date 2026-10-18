@@ -21,9 +21,7 @@ const MAX_SOCKET_PATH: usize = 107;
 
 impl Paths {
     pub fn from_process(env: &Env) -> Result<Self, Error> {
-        // SAFETY: geteuid has no preconditions and cannot fail.
-        let uid = unsafe { libc::geteuid() };
-        Self::resolve(env, uid, dirs::download_dir())
+        Self::resolve(env, uid(), dirs::download_dir())
     }
 
     pub fn resolve(env: &Env, uid: u32, os_downloads: Option<PathBuf>) -> Result<Self, Error> {
@@ -93,6 +91,11 @@ impl Paths {
     pub fn startup_error(&self) -> PathBuf {
         self.state.join("engine.error")
     }
+}
+
+pub fn uid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
 }
 
 fn no_home() -> Error {

@@ -51,7 +51,8 @@ impl Harness {
             search: Arc::new(search.clone()),
             disk: Box::new(disk.clone()),
         };
-        start(Store::open(&dir.path().join("state.db")).unwrap(), ports, config(dir.path()), "0.1.0".into()).unwrap()
+        let store = Store::open(&dir.path().join("state.db")).unwrap();
+        start(&tokio::runtime::Handle::current(), store, ports, config(dir.path()), "0.1.0".into()).unwrap()
     }
 
     /// Kills the engine without letting it save anything, then starts a new one on the same state.
@@ -343,6 +344,23 @@ async fn both_hashes_of_a_hybrid_torrent_name_one_download() {
     let by_v2 = Target::Magnet(format!("magnet:?xt=urn:btmh:1220{}", "77".repeat(32)));
     assert_eq!(h.get(by_v2, &[]).await.unwrap().outcome, GetOutcome::Existing);
     assert_eq!(h.status().await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_downloads_that_turn_out_to_be_one_hybrid_torrent_converge() {
+    let h = Harness::new();
+    let hybrid = FakeTorrentFile {
+        info_hash: InfoHash::Hybrid { v1: [0x31; 20], v2: [0x32; 32] },
+        name: "hybrid".into(),
+        files: vec![("hybrid".into(), GIB)],
+    };
+    let by_v2 = Target::Magnet(format!("magnet:?xt=urn:btmh:1220{}", "32".repeat(32)));
+    let original = h.get(by_v2, &[]).await.unwrap().job.id;
+    h.get(Target::Magnet(format!("magnet:?xt=urn:btih:{}", "31".repeat(20))), &[]).await.unwrap();
+    assert_eq!(h.status().await.len(), 2);
+    h.swarm.publish(hybrid);
+    let jobs = h.until("one job is left", |jobs| jobs.len() == 1).await;
+    assert_eq!(jobs[0].id, original);
 }
 
 #[tokio::test(flavor = "multi_thread")]

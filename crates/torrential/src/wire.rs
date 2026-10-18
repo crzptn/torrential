@@ -29,14 +29,19 @@ pub fn write(w: &mut impl Write, message: &impl Serialize) -> io::Result<()> {
     w.flush()
 }
 
-/// `None` at a clean end of stream.
+/// `None` when the stream ends between frames. An end inside a frame is an error.
 pub fn read<T: DeserializeOwned>(r: &mut impl Read) -> io::Result<Option<T>> {
     let mut header = [0; 4];
-    match r.read_exact(&mut header) {
-        Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e),
+    let first = loop {
+        match r.read(&mut header[..1]) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            other => break other?,
+        }
+    };
+    if first == 0 {
+        return Ok(None);
     }
+    r.read_exact(&mut header[1..])?;
     let mut body = vec![0; frame_len(header)?];
     r.read_exact(&mut body)?;
     decode(&body).map(Some)
@@ -49,11 +54,10 @@ pub async fn write_async(w: &mut (impl AsyncWrite + Unpin), message: &impl Seria
 
 pub async fn read_async<T: DeserializeOwned>(r: &mut (impl AsyncRead + Unpin)) -> io::Result<Option<T>> {
     let mut header = [0; 4];
-    match r.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e),
+    if r.read(&mut header[..1]).await? == 0 {
+        return Ok(None);
     }
+    r.read_exact(&mut header[1..]).await?;
     let mut body = vec![0; frame_len(header)?];
     r.read_exact(&mut body).await?;
     decode(&body).map(Some)
@@ -71,6 +75,16 @@ mod tests {
         let mut cursor = io::Cursor::new(buf);
         assert_eq!(read::<Request>(&mut cursor).unwrap(), Some(Request::Shutdown));
         assert_eq!(read::<Request>(&mut cursor).unwrap(), None);
+    }
+
+    #[test]
+    fn a_stream_cut_inside_a_frame_is_an_error() {
+        let mut frame = Vec::new();
+        write(&mut frame, &Request::Shutdown).unwrap();
+        for cut in [2, 7] {
+            let err = read::<Request>(&mut io::Cursor::new(&frame[..cut])).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof, "cut at {cut}");
+        }
     }
 
     #[test]

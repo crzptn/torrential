@@ -467,19 +467,32 @@ pub fn wait_row(elapsed: Duration, id: &str, job: &Job) -> Vec<Cell> {
     row
 }
 
-pub fn wait_end(end: &WaitEnd, elapsed: Duration, jobs: &[Job], ids: &[String]) -> (Vec<String>, Option<String>) {
+#[derive(Clone, PartialEq, Debug)]
+pub struct Watched {
+    pub id: String,
+    pub job: Job,
+}
+
+pub fn watched(jobs: Vec<Job>) -> Vec<Watched> {
+    let ids = short_ids(&jobs.iter().map(|j| j.id).collect::<Vec<_>>());
+    ids.into_iter().zip(jobs).map(|(id, job)| Watched { id, job }).collect()
+}
+
+pub fn wait_end(end: &WaitEnd, elapsed: Duration, watched: &[Watched]) -> (Vec<String>, Option<String>) {
     let after = format::elapsed(elapsed);
-    let all = ids.join(" ");
-    let find = |id: &str| jobs.iter().zip(ids).find(|(_, i)| i.as_str() == id).map(|(j, _)| j);
+    let all = watched.iter().map(|w| w.id.as_str()).collect::<Vec<_>>().join(" ");
+    let find = |id: &str| watched.iter().find(|w| w.id == id).map(|w| &w.job);
     match end {
         WaitEnd::Done => {
-            let paths: Vec<String> =
-                jobs.iter().map(|j| sanitize(&j.path.as_deref().unwrap_or(&j.dir).display().to_string())).collect();
+            let paths: Vec<String> = watched
+                .iter()
+                .map(|w| sanitize(&w.job.path.as_deref().unwrap_or(&w.job.dir).display().to_string()))
+                .collect();
             (vec![format!("done after {after} · path {}", paths.join(", "))], None)
         }
         WaitEnd::Metadata => (vec![format!("file list known after {after}")], Some(format!("torrential files {all}"))),
         WaitEnd::Timeout => {
-            let eta = jobs.iter().filter_map(|j| j.progress.eta).max();
+            let eta = watched.iter().filter_map(|w| w.job.progress.eta).max();
             let mut line = format!("still running after {after}");
             if let Some(eta) = eta {
                 line.push_str(&format!(" · eta {}", format::eta(Some(eta))));

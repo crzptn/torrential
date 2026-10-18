@@ -329,8 +329,8 @@ impl Store {
         })
     }
 
-    /// Drops a duplicate job without a tombstone, when metadata shows it is another job's torrent.
-    pub fn forget(&mut self, id: TorrentId) -> Result<(), Error> {
+    /// Leaves no tombstone, because the torrent stays tracked by the job it duplicated.
+    pub fn remove_duplicate(&mut self, id: TorrentId) -> Result<(), Error> {
         self.write(|tx| tx.execute("DELETE FROM jobs WHERE id = ?1", [id.to_hex()]).map(drop))
     }
 
@@ -357,14 +357,21 @@ impl Store {
         Ok(out)
     }
 
-    /// The job that owns a v1 or v2 hash, given as hex.
-    pub fn alias_owner(&self, hash: &str) -> Result<Option<TorrentId>, Error> {
-        let id: Option<String> = self
-            .conn
-            .query_row("SELECT job FROM aliases WHERE hash = ?1", [hash], |r| r.get(0))
-            .optional()
-            .map_err(|e| self.fail(e))?;
-        id.map(|id| id.parse().map_err(|_| corrupt(&self.path, "an alias names an unreadable job id"))).transpose()
+    pub fn alias_owners(&self, info_hash: &InfoHash) -> Result<Vec<TorrentId>, Error> {
+        let mut stmt =
+            self.conn.prepare("SELECT DISTINCT job FROM aliases WHERE hash = ?1").map_err(|e| self.fail(e))?;
+        let mut owners = Vec::new();
+        for key in alias_keys(info_hash) {
+            let rows = stmt.query_map([key], |r| r.get::<_, String>(0)).map_err(|e| self.fail(e))?;
+            for row in rows {
+                let id = row.map_err(|e| self.fail(e))?;
+                let id = id.parse().map_err(|_| corrupt(&self.path, "an alias names an unreadable job id"))?;
+                if !owners.contains(&id) {
+                    owners.push(id);
+                }
+            }
+        }
+        Ok(owners)
     }
 
     pub fn record_results(&mut self, releases: &[Release], now: i64) -> Result<(), Error> {
@@ -428,8 +435,7 @@ fn intent_columns(intent: &Intent) -> (&'static str, Option<i64>, Option<String>
     }
 }
 
-/// The keys a torrent is known by: its full v1 and v2 hashes, in hex.
-pub fn alias_keys(info_hash: &InfoHash) -> Vec<String> {
+fn alias_keys(info_hash: &InfoHash) -> Vec<String> {
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
     [info_hash.v1().map(|h| hex(&h)), info_hash.v2().map(|h| hex(&h))].into_iter().flatten().collect()
 }
@@ -504,10 +510,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(&dir.path().join("state.db")).unwrap();
         store.insert(&record(1), None, 100).unwrap();
-        let id = Some(TorrentId::from_bytes([1; 20]));
-        assert_eq!(store.alias_owner(&"01".repeat(20)).unwrap(), id);
-        assert_eq!(store.alias_owner(&"02".repeat(32)).unwrap(), id);
-        assert_eq!(store.alias_owner(&"03".repeat(20)).unwrap(), None);
+        let id = TorrentId::from_bytes([1; 20]);
+        assert_eq!(store.alias_owners(&InfoHash::V1([1; 20])).unwrap(), [id]);
+        assert_eq!(store.alias_owners(&InfoHash::V2([2; 32])).unwrap(), [id]);
+        assert_eq!(store.alias_owners(&InfoHash::V1([3; 20])).unwrap(), []);
     }
 
     #[test]

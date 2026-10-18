@@ -18,7 +18,7 @@ use super::engine_port::{
 };
 use super::magnet::{self, Magnet};
 use super::resolve::{self, Found, Scope};
-use super::store::{Store, Tombstone, alias_keys};
+use super::store::{Store, Tombstone};
 
 #[derive(Clone, Debug)]
 pub struct OwnerConfig {
@@ -227,7 +227,13 @@ impl Owner {
                     Some(command) => self.command(command),
                     None => self.begin_stop(None),
                 },
-                Some(event) = events.recv() => self.engine_event(event),
+                event = events.recv() => match event {
+                    Some(event) => self.engine_event(event),
+                    None => {
+                        super::log("the engine thread stopped, so the engine process is exiting");
+                        self.stopped = true;
+                    }
+                },
                 _ = tick.tick() => self.tick(),
             }
         }
@@ -320,10 +326,7 @@ impl Owner {
         if self.jobs.contains_key(&hash.id()) {
             return Some(hash.id());
         }
-        alias_keys(hash)
-            .iter()
-            .find_map(|h| self.store.alias_owner(h).ok().flatten())
-            .filter(|id| self.jobs.contains_key(id))
+        self.store.alias_owners(hash).ok()?.into_iter().find(|id| self.jobs.contains_key(id))
     }
 
     fn resolve_any(&self, reference: &str, command: &'static str) -> Result<Resolved, Error> {
@@ -357,8 +360,7 @@ impl Owner {
         }
     }
 
-    /// Other running downloads' unwritten bytes on the same disk as `dir`.
-    fn committed(&self, dir: &Path, except: TorrentId) -> u64 {
+    fn others_remaining(&self, dir: &Path, except: TorrentId) -> u64 {
         let Ok(space) = self.disk.space(dir) else { return 0 };
         self.jobs
             .values()
@@ -401,7 +403,7 @@ impl Owner {
             if !dry_run {
                 admission::check_conflicts(plan)?;
             }
-            admission::check_disk(plan.space, plan.selected_size, self.committed(&dir, id))?;
+            admission::check_disk(plan.space, plan.selected_size, self.others_remaining(&dir, id))?;
         }
         let record = JobRecord {
             id,
@@ -484,7 +486,7 @@ impl Owner {
             admission::check_conflicts(&plan)?;
         }
         let needed = plan.selected_size.saturating_sub(job.verified());
-        admission::check_disk(plan.space, needed, self.committed(&job.record.dir, id))?;
+        admission::check_disk(plan.space, needed, self.others_remaining(&job.record.dir, id))?;
         if dry_run {
             let mut preview = job.clone();
             preview.record.selection = selection;
@@ -792,15 +794,7 @@ impl Owner {
     fn engine_event(&mut self, event: EngineEvent) {
         match event {
             EngineEvent::Metadata { id, metainfo } => {
-                if let Err(error) = super::files::check_paths(&metainfo) {
-                    if self.probes.remove(&id) {
-                        self.engine.send(EngineCommand::Remove(id));
-                        self.draining.insert(id);
-                        self.reply_metadata_waiters(id, Err(error));
-                    } else if self.jobs.contains_key(&id) {
-                        self.fail(id, error);
-                    }
-                } else if self.probes.remove(&id) {
+                if self.probes.remove(&id) {
                     let _ = self.store.cache_metainfo(id, &metainfo.bytes, now());
                     self.engine.send(EngineCommand::Remove(id));
                     self.draining.insert(id);
@@ -848,6 +842,8 @@ impl Owner {
             EngineEvent::Checked { id, damaged_pieces } => self.checked(id, damaged_pieces),
             EngineEvent::Failed { id, error } => {
                 if self.probes.remove(&id) {
+                    self.engine.send(EngineCommand::Remove(id));
+                    self.draining.insert(id);
                     self.reply_metadata_waiters(id, Err(error));
                 } else if self.jobs.contains_key(&id) {
                     self.fail(id, error);
@@ -862,10 +858,12 @@ impl Owner {
     }
 
     fn job_metadata(&mut self, id: TorrentId, metainfo: Metainfo) {
-        let claimed = alias_keys(&metainfo.info_hash)
-            .iter()
-            .find_map(|h| self.store.alias_owner(h).ok().flatten())
-            .filter(|owner| *owner != id && self.jobs.contains_key(owner));
+        let claimed = self
+            .store
+            .alias_owners(&metainfo.info_hash)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|owner| *owner != id && self.jobs.contains_key(owner));
         if let Some(original) = claimed {
             self.drop_duplicate(id, original);
             return;
@@ -883,7 +881,7 @@ impl Owner {
         let admitted = admission::plan(&metainfo, &selection, &dir, None, self.disk.as_ref()).and_then(|plan| {
             admission::check_size(&plan, max_size)?;
             admission::check_conflicts(&plan)?;
-            admission::check_disk(plan.space, plan.selected_size, self.committed(&dir, id))?;
+            admission::check_disk(plan.space, plan.selected_size, self.others_remaining(&dir, id))?;
             Ok(plan)
         });
         match admitted {
@@ -905,7 +903,7 @@ impl Owner {
 
     /// Two downloads turned out to be one hybrid torrent. The one that claimed the hash first stays.
     fn drop_duplicate(&mut self, id: TorrentId, original: TorrentId) {
-        let _ = self.store.forget(id);
+        let _ = self.store.remove_duplicate(id);
         if let Some(job) = self.jobs.remove(&id)
             && job.observed.in_engine()
         {
@@ -1054,7 +1052,8 @@ impl Owner {
         }
         if job.metainfo.is_some()
             && let Ok(space) = self.disk.space(&job.record.dir)
-            && let Err(error) = admission::check_disk(space, job.remaining(), self.committed(&job.record.dir, id))
+            && let Err(error) =
+                admission::check_disk(space, job.remaining(), self.others_remaining(&job.record.dir, id))
         {
             self.fail(id, error);
             return;

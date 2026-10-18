@@ -20,27 +20,24 @@ pub enum Token {
 }
 
 impl Token {
-    pub fn style(self) -> Style {
-        let fg = |c: RgbColor| Style::new().fg_color(Some(Color::Rgb(c)));
+    fn rgb(self) -> Option<RgbColor> {
         match self {
-            Self::Text => Style::new(),
-            Self::Muted => fg(MUTED),
-            Self::Accent => fg(ACCENT),
-            Self::Mint => fg(MINT),
-            Self::Error => fg(ERROR),
-            Self::Heading => fg(MUTED).bold(),
+            Self::Text => None,
+            Self::Muted | Self::Heading => Some(MUTED),
+            Self::Accent => Some(ACCENT),
+            Self::Mint => Some(MINT),
+            Self::Error => Some(ERROR),
         }
     }
 
-    /// The indicatif template color for progress bars, which take named or 256 colors only.
-    pub fn bar_color(self) -> &'static str {
-        match self {
-            Self::Mint => "123",
-            Self::Accent => "223",
-            Self::Error => "210",
-            Self::Muted | Self::Heading => "248",
-            Self::Text => "white",
-        }
+    pub fn style(self) -> Style {
+        let style = Style::new().fg_color(self.rgb().map(Color::Rgb));
+        if self == Self::Heading { style.bold() } else { style }
+    }
+
+    /// For progress bar templates, which take colors as `#rrggbb`.
+    pub fn bar_color(self) -> String {
+        self.rgb().map_or_else(|| "white".to_string(), |RgbColor(r, g, b)| format!("#{r:02x}{g:02x}{b:02x}"))
     }
 }
 
