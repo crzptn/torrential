@@ -13,9 +13,11 @@ use torrential_core::{
     Codec, Eighths, Flag, Job, JobStatus, Quality, Release, ReleaseId, Resolution, Slice, SourceOutcome, TorrentFile,
 };
 
-use crate::format::{self, age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
+use crate::format::{
+    self, age, ellipsize, first_fit, home_path, middle, percent, rate, seeds, shortenings, size, width,
+};
 use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
-use crate::state::{Engine, Files, Focus, Item, SearchPhase, Sort, State, Tone, label};
+use crate::state::{Engine, Files, Focus, Item, RankedFor, SearchPhase, Sort, State, Tone, label};
 use crate::theme::*;
 use crate::tree::{Check, NodeKind, Tree};
 
@@ -599,18 +601,38 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
     }
 }
 
+/// The order the results are in. In the engine's order, a search the machine changes says what
+/// it ranked for, as much as fits before the column heads.
 fn heads(buf: &mut Buffer, state: &State, c: &Columns, y: u16) {
     margin(buf, y, "found", fg(PENCIL));
-    let order = match state.sort {
-        Sort::BestMatch => "best match first",
-        Sort::Seeds => "most seeds first",
-        Sort::Size => "largest first",
-        Sort::Age => "newest first",
+    let room = c.size - "size".len() as u16 - 2 - CONTENT;
+    let ranked_for = state.search.as_ref().and_then(|s| s.ranked_for.as_ref());
+    let ranked = ranked_for.and_then(|r| first_fit(ranked_lines(r), usize::from(room) - "ranked for ".len()));
+    let order = match (state.sort, ranked) {
+        (Sort::BestMatch, Some(ranked)) => format!("ranked for {ranked}"),
+        (Sort::BestMatch, None) => "best match first".into(),
+        (Sort::Seeds, _) => "most seeds first".into(),
+        (Sort::Size, _) => "largest first".into(),
+        (Sort::Age, _) => "newest first".into(),
     };
-    put(buf, CONTENT, y, c.flag.saturating_sub(CONTENT + 2), order, fg(PENCIL));
+    put(buf, CONTENT, y, room, &order, fg(PENCIL));
     put_right(buf, c.size, y, "size", fg(PENCIL));
     put_right(buf, c.seeds, y, "seeds", fg(PENCIL));
     put_right(buf, c.age, y, "age", fg(PENCIL));
+}
+
+/// What the found row may say a search ranked for, longest first. A search with overrides says
+/// them after the profile, as the CLI does, or names only the machine, so a cut never leaves part
+/// of an override.
+fn ranked_lines(ranked: &RankedFor) -> Vec<String> {
+    let shorter = shortenings(&ranked.profile);
+    match &ranked.overrides {
+        None => shorter,
+        Some(overrides) => {
+            let label = shorter.last().cloned();
+            shorter.into_iter().map(|profile| format!("{profile} · overrides: {overrides}")).chain(label).collect()
+        }
+    }
 }
 
 /// The flag a row has room for: the warning first, then provenance.

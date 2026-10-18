@@ -6,11 +6,13 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use torrential_core::protocol::{Change, Event, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
-use torrential_core::{Error, Job, JobStatus, ReleaseId, SearchQuery, SearchResult, TorrentId};
+use torrential_core::{Arch, Error, Job, JobStatus, ReleaseId, SearchQuery, SearchResult, TorrentId};
 
 use crate::format::home_path;
 use crate::layout;
-use crate::state::{DownloadFiles, Engine, Files, Focus, Input, Item, JobAction, Search, SearchPhase, State, Tone};
+use crate::state::{
+    DownloadFiles, Engine, Files, Focus, Input, Item, JobAction, RankedFor, Search, SearchPhase, State, Tone,
+};
 use crate::tree::Tree;
 
 #[derive(Debug)]
@@ -680,6 +682,7 @@ impl State {
             sources: Vec::new(),
             elapsed_ms: 0,
             phase: SearchPhase::Running { pending: Vec::new() },
+            ranked_for: None,
         });
         self.query = Input { caret: text.chars().count(), text: text.clone() };
         self.files.clear();
@@ -695,6 +698,7 @@ impl State {
 
     fn merge(&mut self, id: u64, result: SearchResult, phase: SearchPhase) {
         let Some(search) = self.search.as_mut().filter(|s| s.id == id) else { return };
+        search.ranked_for = ranked_for(&result);
         search.releases = result.releases;
         search.sources = result.sources;
         search.elapsed_ms = result.elapsed_ms;
@@ -907,4 +911,17 @@ impl State {
 
 fn remove_char(text: &str, at: usize) -> String {
     text.chars().enumerate().filter(|(i, _)| *i != at).map(|(_, c)| c).collect()
+}
+
+/// The CLI's rule for its `# ranked for` line. Films and shows get the whole profile and its
+/// overrides, and software whose names mention an architecture gets the architecture alone.
+fn ranked_for(result: &SearchResult) -> Option<RankedFor> {
+    let profile = &result.query.profile;
+    if result.is_video() {
+        Some(RankedFor { profile: profile.describe(), overrides: profile.overrides() })
+    } else if result.releases.iter().any(|r| !Arch::named_in(&r.name).is_empty()) {
+        Some(RankedFor { profile: profile.describe_arch(), overrides: None })
+    } else {
+        None
+    }
 }

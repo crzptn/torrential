@@ -11,7 +11,7 @@ expression: shot(&scenario(size))
 "     paused │ 1 download                                                        "
 "       done │ 2 downloads                                                       "
 "            │                                                                   "
-"      found │ best match first                               size  seeds   age  "
+"      found │ ranked for this Mac: 1080p screen, shows HDR   size  seeds   age  "
 "            ● Night of the Living Dead (1968)  pd         1.3 GiB      –    9y  "
 "            │   archive.org · public domain                                     "
 "            │ Night of the…Dead (1968) [DVD]   pd         3.4 GiB      –   12y  "

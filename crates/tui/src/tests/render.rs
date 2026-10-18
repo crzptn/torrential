@@ -8,6 +8,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use torrential_core::protocol::{GetOutcome, GetReply};
+use torrential_core::{Preferences, Profile};
 
 use super::*;
 use crate::theme::{self, ColorMode};
@@ -318,6 +319,104 @@ fn a_row_shows_the_resolution_and_its_details_spell_out_the_quality() {
     assert!(line(&buf, y).ends_with("colorized     pd                734 MiB      –    6y"), "{}", line(&buf, y));
 }
 
+fn heads_row(state: &State) -> String {
+    let buf = render(state);
+    line(&buf, find(&buf, "found │").1)
+}
+
+#[test]
+fn a_film_search_says_what_it_ranked_for_in_as_many_parts_as_fit() {
+    assert_eq!(
+        heads_row(&searched((160, 45))),
+        "      found │ ranked for this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English           size  seeds   age"
+    );
+    assert_eq!(
+        heads_row(&searched((100, 30))),
+        "      found │ ranked for this Mac: 1080p screen, shows HDR, plays HEVC, arm64    size  seeds   age"
+    );
+    assert_eq!(
+        heads_row(&searched((80, 24))),
+        "      found │ ranked for this Mac: 1080p screen, shows HDR   size  seeds   age"
+    );
+    assert_eq!(heads_row(&searched((60, 16))), "      found │ ranked for this Mac        size  seeds   age");
+    let mut state = searched((100, 30));
+    press(&mut state, "s");
+    assert!(heads_row(&state).contains("found │ most seeds first"), "another order ranks for nothing");
+}
+
+#[test]
+fn a_search_ranks_for_what_its_results_depend_on() {
+    let found = |releases: Vec<Release>| {
+        let mut state = with_downloads((100, 30));
+        press(&mut state, "/ubuntu");
+        state.update(key(KeyCode::Enter));
+        state.update(Msg::SearchDone { search: 1, result: Ok(result(releases, final_sources())) });
+        heads_row(&state)
+    };
+    let iso = |name| Release {
+        category: Some(Category::Software),
+        ..release("6a1f00", name, "knaben", &[], Some(950), 6_100 * MIB, 400)
+    };
+    assert_eq!(
+        found(vec![iso("ubuntu-24.04.1-desktop-amd64.iso")]),
+        "      found │ ranked for this Mac: arm64                                         size  seeds   age",
+        "software that names an architecture"
+    );
+    assert_eq!(
+        found(vec![iso("Ubuntu Linux Bible, 10th Edition")]),
+        "      found │ best match first                                                   size  seeds   age"
+    );
+}
+
+/// The night search, as the engine ranked it with `profile`.
+fn searched_for(size: (u16, u16), profile: Profile) -> State {
+    let mut state = with_downloads(size);
+    press(&mut state, "/night");
+    state.update(key(KeyCode::Enter));
+    let mut found = result(night(), final_sources());
+    found.query.profile = profile;
+    state.update(Msg::SearchDone { search: 1, result: Ok(found) });
+    state
+}
+
+#[test]
+fn a_search_before_detection_says_so_without_cutting_the_words() {
+    let pending = || Profile { detected: None, ..Profile::default() };
+    assert_eq!(
+        heads_row(&searched_for((80, 24), pending())),
+        "      found │ ranked for this machine, not detected yet      size  seeds   age"
+    );
+    assert_eq!(
+        heads_row(&searched_for((60, 16), pending())),
+        "      found │ best match first           size  seeds   age",
+        "never \"ranked for this machine\""
+    );
+}
+
+#[test]
+fn a_search_with_overrides_names_them_or_only_the_machine() {
+    let with = |preferences| Profile { detected: Some(mac()), preferences, room: None };
+    let tv = || with(Preferences { screen: Some(torrential_core::Screen::Tv4k), ..Preferences::default() });
+    assert_eq!(
+        heads_row(&searched_for((160, 45), tv())),
+        "      found │ ranked for this Mac: 2160p screen, arm64, English · overrides: screen tv-4k        size  seeds   age"
+    );
+    assert_eq!(
+        heads_row(&searched_for((100, 30), tv())),
+        "      found │ ranked for this Mac: 2160p screen · overrides: screen tv-4k        size  seeds   age"
+    );
+    assert_eq!(
+        heads_row(&searched_for((80, 24), tv())),
+        "      found │ ranked for this Mac · overrides: screen tv-4k  size  seeds   age"
+    );
+    let h264 = with(Preferences { playback: Some(torrential_core::Playback::H264), ..Preferences::default() });
+    assert_eq!(
+        heads_row(&searched_for((80, 24), h264)),
+        "      found │ ranked for this Mac                            size  seeds   age",
+        "not \"1080p screen, no HDR\" without the H.264 that the override set"
+    );
+}
+
 #[test]
 fn a_file_list_error_sits_three_cells_after_the_facts() {
     let mut state = searched((100, 30));
@@ -474,7 +573,7 @@ fn without_color_the_mark_the_ticks_and_the_words_still_carry_meaning() {
     assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
     assert!(line(&buf, y).contains("· Night.asr.srt"), "space left it out: {}", line(&buf, y));
     assert!(line(&buf, y + 1).contains("✓ Night.gif"), "{}", line(&buf, y + 1));
-    let (x, y) = find(&buf, "best match first");
+    let (x, y) = find(&buf, "ranked for this Mac");
     assert!(buf[(x, y)].modifier.contains(Modifier::DIM), "pencil turns faint");
     let screen = shot(&state);
     assert!(screen.contains("1 executable left out"), "{screen}");

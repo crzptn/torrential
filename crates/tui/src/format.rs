@@ -159,6 +159,21 @@ pub fn seeds(n: Option<u32>) -> String {
     }
 }
 
+/// `text`, a list joined by `, ` after a `label: `, then with one item fewer at a time down to
+/// the label alone: `this Mac: 1080p screen, arm64`, `this Mac: 1080p screen`, `this Mac`. A text
+/// with no `label: `, such as `this machine, not detected yet`, is all label and never shrinks.
+pub fn shortenings(text: &str) -> Vec<String> {
+    let Some((label, list)) = text.split_once(": ") else { return vec![text.to_string()] };
+    let items: Vec<&str> = list.split(", ").collect();
+    let lists = (1..=items.len()).rev().map(|n| format!("{label}: {}", items[..n].join(", ")));
+    lists.chain([label.to_string()]).collect()
+}
+
+/// The first of `texts` that fits in `room` cells.
+pub fn first_fit(texts: impl IntoIterator<Item = String>, room: usize) -> Option<String> {
+    texts.into_iter().find(|text| width(text) <= room)
+}
+
 /// A path with the home folder written as `~`.
 pub fn home_path(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|h| path.strip_prefix(h).ok()) {
@@ -235,6 +250,21 @@ mod tests {
     #[test]
     fn seeds_read_short() {
         assert_eq!([seeds(None), seeds(Some(0)), seeds(Some(2_041)), seeds(Some(41_200))], ["–", "0", "2,041", "41k"]);
+    }
+
+    #[test]
+    fn a_profile_line_shortens_by_whole_items_and_keeps_its_label() {
+        let fit = |text: &str, room| first_fit(shortenings(text), room);
+        let text = "this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English";
+        assert_eq!(fit(text, 61).as_deref(), Some(text));
+        assert_eq!(fit(text, 60).as_deref(), Some("this Mac: 1080p screen, shows HDR, plays HEVC, arm64"));
+        assert_eq!(fit(text, 30).as_deref(), Some("this Mac: 1080p screen"));
+        assert_eq!(fit(text, 21).as_deref(), Some("this Mac"));
+        assert_eq!(fit(text, 7), None);
+        let pending = "this machine, not detected yet: 2160p screen";
+        assert_eq!(fit(pending, 40).as_deref(), Some("this machine, not detected yet"), "the label stays whole");
+        assert_eq!(fit(pending, 29), None);
+        assert_eq!(shortenings("this machine, not detected yet"), ["this machine, not detected yet"]);
     }
 
     #[test]

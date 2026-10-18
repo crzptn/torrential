@@ -49,6 +49,17 @@ pub struct Search {
     pub sources: Vec<SourceReport>,
     pub elapsed_ms: u32,
     pub phase: SearchPhase,
+    /// `None` for a search the machine does not change, such as one for music.
+    pub ranked_for: Option<RankedFor>,
+}
+
+/// What a search ranked for, as the CLI prints it after `# ranked for`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RankedFor {
+    /// `Profile::describe`, or `Profile::describe_arch` for software.
+    pub profile: String,
+    /// `Profile::overrides`, for a film or show search with any.
+    pub overrides: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

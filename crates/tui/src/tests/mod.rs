@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use torrential_core::protocol::{Event, FilesReply};
 use torrential_core::{
-    Category, Error, ErrorCode, Flag, InfoHash, Job, JobStatus, Progress, Release, ReleaseId, SearchQuery,
-    SearchResult, Selection, SourceOutcome, SourceReport, TorrentFile, TorrentId,
+    Arch, Category, Display, Error, ErrorCode, Flag, InfoHash, Job, JobStatus, Language, Machine, Os, Profile,
+    Progress, Release, ReleaseId, SearchQuery, SearchResult, Selection, SourceOutcome, SourceReport, TorrentFile,
+    TorrentId,
 };
 
 use crate::state::{Item, State};
@@ -189,9 +190,21 @@ fn report(source: &str, outcome: SourceOutcome) -> SourceReport {
     SourceReport { source: source.into(), outcome, elapsed_ms: 400 }
 }
 
+/// The machine the engine detects in every search here: a Mac with a 1080p HDR panel.
+pub fn mac() -> Machine {
+    Machine {
+        os: Os::Macos,
+        display: Some(Display { width: 3024, height: 1964, hdr: true }),
+        arch: Some(Arch::Arm64),
+        language: Language::from_locale("en-IN"),
+    }
+}
+
+/// The engine's answer, ranked for [`mac`] with no overrides.
 pub fn result(releases: Vec<Release>, sources: Vec<SourceReport>) -> SearchResult {
+    let profile = Profile { detected: Some(mac()), ..Profile::default() };
     SearchResult {
-        query: SearchQuery::new("night of the living dead"),
+        query: SearchQuery { profile, ..SearchQuery::new("night of the living dead") },
         total: releases.len() as u32,
         releases,
         hidden_adult: 0,
