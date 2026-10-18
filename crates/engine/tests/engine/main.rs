@@ -3,6 +3,7 @@ mod parse;
 mod pause;
 mod recheck;
 mod resume_data;
+mod selection;
 mod support;
 mod swarm;
 mod upload;

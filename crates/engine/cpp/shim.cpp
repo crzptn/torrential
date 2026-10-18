@@ -215,6 +215,10 @@ lt::session_params make_params(SessionSettings const& s) {
   p.set_bool(lt::settings_pack::allow_multiple_connections_per_ip, s.multiple_connections_per_ip);
   p.set_str(lt::settings_pack::peer_fingerprint, std::string(s.peer_fingerprint));
   p.set_str(lt::settings_pack::user_agent, std::string(s.user_agent));
+  // A finished torrent otherwise disconnects every seed, and a metadata-only
+  // torrent is finished as soon as its metadata arrives. Selecting files then
+  // waits out min_reconnect_time (60 s) before any peer is tried again.
+  p.set_bool(lt::settings_pack::close_redundant_connections, false);
   p.set_int(lt::settings_pack::alert_queue_size, 10000);
   p.set_int(lt::settings_pack::alert_mask, lt::alert_category::status | lt::alert_category::error |
                                                lt::alert_category::storage | lt::alert_category::dht);
