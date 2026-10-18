@@ -492,6 +492,23 @@ rust::Vec<PieceCounts> Session::piece_slices(rust::Slice<const std::uint8_t> id,
   return out;
 }
 
+MissingCounts Session::missing_pieces(rust::Slice<const std::uint8_t> id) const {
+  lt::torrent_handle const h = find_with_metadata(id);
+  lt::torrent_status const st = h.status(lt::torrent_handle::query_pieces);
+  std::vector<lt::download_priority_t> const priorities = h.get_piece_priorities();
+  // Counts each connected peer and web seed that has advertised the piece.
+  std::vector<int> availability;
+  h.piece_availability(availability);
+  MissingCounts r{};
+  for (std::size_t i = 0; i < static_cast<std::size_t>(st.pieces.size()); ++i) {
+    if (i < priorities.size() && priorities[i] == lt::dont_download) continue;
+    if (st.pieces.get_bit(lt::piece_index_t(static_cast<int>(i)))) continue;
+    ++r.missing;
+    if (i >= availability.size() || availability[i] == 0) ++r.unavailable;
+  }
+  return r;
+}
+
 void Session::post_session_stats() { session_.post_session_stats(); }
 
 rust::Vec<std::uint8_t> Session::save_state() const {

@@ -317,6 +317,14 @@ pub struct SelectedPieces {
     pub verified: u32,
 }
 
+/// The selected pieces that have not passed their hash check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MissingPieces {
+    pub missing: u32,
+    /// Those that no connected peer or web seed has.
+    pub unavailable: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileProgress {
     pub index: FileIndex,

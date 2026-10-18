@@ -111,6 +111,11 @@ pub(crate) mod ffi {
         verified: u32,
     }
 
+    struct MissingCounts {
+        missing: u32,
+        unavailable: u32,
+    }
+
     struct FileProgressRecord {
         index: u32,
         size: u64,
@@ -218,6 +223,7 @@ pub(crate) mod ffi {
         fn files(self: &Session, id: &[u8]) -> Result<Vec<FileRecord>>;
         fn status(self: &Session, id: &[u8]) -> Result<StatusRecord>;
         fn piece_slices(self: &Session, id: &[u8], slices: u32) -> Result<Vec<PieceCounts>>;
+        fn missing_pieces(self: &Session, id: &[u8]) -> Result<MissingCounts>;
         fn post_session_stats(self: Pin<&mut Session>) -> Result<()>;
         fn save_state(self: &Session) -> Result<Vec<u8>>;
         fn listen_port(self: &Session) -> Result<u16>;

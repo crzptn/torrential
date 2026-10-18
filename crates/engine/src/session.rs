@@ -6,7 +6,9 @@ use crate::bridge::{self, ffi};
 use crate::config::{Config, Dht, DhtState};
 use crate::error::{EngineError, ErrorKind};
 use crate::identity::TorrentId;
-use crate::torrent::{AddTorrent, Added, FileEntry, FileIndex, FilePriority, Metainfo, SelectedPieces, TorrentStatus};
+use crate::torrent::{
+    AddTorrent, Added, FileEntry, FileIndex, FilePriority, Metainfo, MissingPieces, SelectedPieces, TorrentStatus,
+};
 
 /// One libtorrent session, which serves every torrent.
 ///
@@ -159,6 +161,15 @@ impl Session {
     pub fn piece_slices(&self, id: TorrentId, slices: u32) -> Result<Vec<SelectedPieces>, EngineError> {
         let counts = self.native.piece_slices(id.as_bytes(), slices).map_err(|e| with_id(e, id))?;
         Ok(counts.into_iter().map(|c| SelectedPieces { selected: c.selected, verified: c.verified }).collect())
+    }
+
+    /// Needs metadata. Counts whole pieces like `selected_pieces`. A peer or web seed counts for a
+    /// piece once it is connected and has said it has that piece. libtorrent stops counting a web
+    /// seed for a piece that spans a file the seed redirected elsewhere, or that failed its hash
+    /// check from that seed, so such a piece can be missing with no source while seeds are connected.
+    pub fn missing_pieces(&self, id: TorrentId) -> Result<MissingPieces, EngineError> {
+        let counts = self.native.missing_pieces(id.as_bytes()).map_err(|e| with_id(e, id))?;
+        Ok(MissingPieces { missing: counts.missing, unavailable: counts.unavailable })
     }
 
     /// Asks for session counters. `Alert::SessionStats` delivers them.

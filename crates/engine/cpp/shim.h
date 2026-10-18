@@ -41,6 +41,7 @@ struct StatusRecord;
 struct AlertRecord;
 struct PriorityRecord;
 struct PieceCounts;
+struct MissingCounts;
 
 class Session {
  public:
@@ -62,6 +63,7 @@ class Session {
   rust::Vec<FileRecord> files(rust::Slice<const std::uint8_t> id) const;
   StatusRecord status(rust::Slice<const std::uint8_t> id) const;
   rust::Vec<PieceCounts> piece_slices(rust::Slice<const std::uint8_t> id, std::uint32_t slices) const;
+  MissingCounts missing_pieces(rust::Slice<const std::uint8_t> id) const;
   void post_session_stats();
   rust::Vec<std::uint8_t> save_state() const;
   std::uint16_t listen_port() const;

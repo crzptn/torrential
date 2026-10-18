@@ -22,8 +22,8 @@ pub use error::{EngineError, ErrorKind, NativeError};
 pub use identity::{InfoHash, InfoHashV1, InfoHashV2, TorrentId};
 pub use session::Session;
 pub use torrent::{
-    AddTorrent, Added, FileEntry, FileIndex, FilePriority, FileProgress, FileSelection, Magnet, Metainfo, Progress,
-    ResumeData, SelectedPieces, TorrentSource, TorrentState, TorrentStatus,
+    AddTorrent, Added, FileEntry, FileIndex, FilePriority, FileProgress, FileSelection, Magnet, Metainfo,
+    MissingPieces, Progress, ResumeData, SelectedPieces, TorrentSource, TorrentState, TorrentStatus,
 };
 
 /// The version of the linked libtorrent, such as `2.1.2.0`.

@@ -1,4 +1,5 @@
 mod hybrid;
+mod missing_pieces;
 mod parse;
 mod pause;
 mod piece_slices;
