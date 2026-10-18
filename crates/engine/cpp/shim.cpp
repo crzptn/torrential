@@ -470,18 +470,26 @@ StatusRecord Session::status(rust::Slice<const std::uint8_t> id) const {
   return r;
 }
 
-PieceCounts Session::selected_pieces(rust::Slice<const std::uint8_t> id) const {
+rust::Vec<PieceCounts> Session::piece_slices(rust::Slice<const std::uint8_t> id, std::uint32_t slices) const {
   lt::torrent_handle const h = find_with_metadata(id);
   lt::torrent_status const st = h.status(lt::torrent_handle::query_pieces);
   std::vector<lt::download_priority_t> const priorities = h.get_piece_priorities();
-  PieceCounts r{};
-  for (lt::piece_index_t const p : st.pieces.range()) {
-    auto const i = static_cast<std::size_t>(static_cast<int>(p));
-    if (i < priorities.size() && priorities[i] == lt::dont_download) continue;
-    ++r.selected;
-    if (st.pieces.get_bit(p)) ++r.verified;
+  auto const pieces = static_cast<std::size_t>(st.pieces.size());
+  rust::Vec<PieceCounts> out;
+  if (pieces == 0) return out;
+  out.reserve(slices);
+  for (std::size_t s = 0; s < slices; ++s) {
+    std::size_t const begin = s * pieces / slices;
+    std::size_t const end = std::max(begin + 1, (s + 1) * pieces / slices);
+    PieceCounts r{};
+    for (std::size_t i = begin; i < end; ++i) {
+      if (i < priorities.size() && priorities[i] == lt::dont_download) continue;
+      ++r.selected;
+      if (st.pieces.get_bit(lt::piece_index_t(static_cast<int>(i)))) ++r.verified;
+    }
+    out.push_back(r);
   }
-  return r;
+  return out;
 }
 
 void Session::post_session_stats() { session_.post_session_stats(); }

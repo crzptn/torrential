@@ -61,7 +61,7 @@ class Session {
   rust::Vec<std::uint8_t> info_dictionary(rust::Slice<const std::uint8_t> id) const;
   rust::Vec<FileRecord> files(rust::Slice<const std::uint8_t> id) const;
   StatusRecord status(rust::Slice<const std::uint8_t> id) const;
-  PieceCounts selected_pieces(rust::Slice<const std::uint8_t> id) const;
+  rust::Vec<PieceCounts> piece_slices(rust::Slice<const std::uint8_t> id, std::uint32_t slices) const;
   void post_session_stats();
   rust::Vec<std::uint8_t> save_state() const;
   std::uint16_t listen_port() const;

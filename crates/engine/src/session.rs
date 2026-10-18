@@ -148,8 +148,17 @@ impl Session {
     /// Needs metadata. Unlike `status`, this counts whole pieces, so a damaged
     /// piece that spans two files counts once.
     pub fn selected_pieces(&self, id: TorrentId) -> Result<SelectedPieces, EngineError> {
-        let counts = self.native.selected_pieces(id.as_bytes()).map_err(|e| with_id(e, id))?;
-        Ok(SelectedPieces { selected: counts.selected, verified: counts.verified })
+        let mut whole = self.piece_slices(id, 1)?;
+        whole.pop().ok_or_else(|| EngineError::new(ErrorKind::Native, "the torrent has no pieces"))
+    }
+
+    /// Needs metadata. Cuts the pieces into `slices` runs of equal length, in
+    /// order, and counts each run's pieces like `selected_pieces`. With fewer
+    /// pieces than slices, a piece counts in every slice it covers. The cost
+    /// grows with the number of pieces: one pass over the piece bitfield.
+    pub fn piece_slices(&self, id: TorrentId, slices: u32) -> Result<Vec<SelectedPieces>, EngineError> {
+        let counts = self.native.piece_slices(id.as_bytes(), slices).map_err(|e| with_id(e, id))?;
+        Ok(counts.into_iter().map(|c| SelectedPieces { selected: c.selected, verified: c.verified }).collect())
     }
 
     /// Asks for session counters. `Alert::SessionStats` delivers them.

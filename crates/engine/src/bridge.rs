@@ -217,7 +217,7 @@ pub(crate) mod ffi {
         fn info_dictionary(self: &Session, id: &[u8]) -> Result<Vec<u8>>;
         fn files(self: &Session, id: &[u8]) -> Result<Vec<FileRecord>>;
         fn status(self: &Session, id: &[u8]) -> Result<StatusRecord>;
-        fn selected_pieces(self: &Session, id: &[u8]) -> Result<PieceCounts>;
+        fn piece_slices(self: &Session, id: &[u8], slices: u32) -> Result<Vec<PieceCounts>>;
         fn post_session_stats(self: Pin<&mut Session>) -> Result<()>;
         fn save_state(self: &Session) -> Result<Vec<u8>>;
         fn listen_port(self: &Session) -> Result<u16>;

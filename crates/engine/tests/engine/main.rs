@@ -1,6 +1,7 @@
 mod hybrid;
 mod parse;
 mod pause;
+mod piece_slices;
 mod recheck;
 mod resume_data;
 mod selection;
