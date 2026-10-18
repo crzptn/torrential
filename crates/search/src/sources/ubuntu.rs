@@ -42,19 +42,23 @@ fn current_series(index: &str) -> Vec<String> {
     series.into_iter().take(SERIES).map(|(_, name)| name).collect()
 }
 
-/// A series directory keeps every point release; only the newest of each image
-/// (`desktop-amd64`, `live-server-amd64`) is worth offering.
+/// A series directory keeps every point release, and the betas before them. Only
+/// the newest final build of each image (`desktop-amd64`, `live-server-amd64`) is
+/// worth offering, or its beta while no final build exists.
 fn newest_point_releases(entries: Vec<Entry>) -> Vec<Entry> {
-    let mut newest: Vec<(String, Vec<u32>, Entry)> = Vec::new();
+    let mut newest: Vec<(String, (Vec<u32>, bool), Entry)> = Vec::new();
     for entry in entries {
-        let (image, v) = match entry.name().split_once('-').and_then(|(_, rest)| rest.split_once('-')) {
-            Some((v, image)) => (image.to_string(), version(v).unwrap_or_default()),
-            None => (entry.name().to_string(), Vec::new()),
+        let (image, rank) = match entry.name().split_once('-').and_then(|(_, rest)| rest.split_once('-')) {
+            Some((v, image)) => {
+                let (image, final_build) = image.strip_prefix("beta-").map_or((image, true), |rest| (rest, false));
+                (image.to_string(), (version(v).unwrap_or_default(), final_build))
+            }
+            None => (entry.name().to_string(), (Vec::new(), true)),
         };
         match newest.iter_mut().find(|(i, ..)| *i == image) {
-            Some(slot) if slot.1 < v => *slot = (image, v, entry),
+            Some(slot) if slot.1 < rank => *slot = (image, rank, entry),
             Some(_) => {}
-            None => newest.push((image, v, entry)),
+            None => newest.push((image, rank, entry)),
         }
     }
     newest.into_iter().map(|(.., entry)| entry).collect()
@@ -86,6 +90,20 @@ mod tests {
                 ("ubuntu-24.04.5.1-desktop-amd64.iso.torrent".to_string(), Some(1_789_499_460)),
                 ("ubuntu-24.04.5-live-server-amd64.iso.torrent".to_string(), Some(1_789_059_420)),
             ]
+        );
+    }
+
+    #[test]
+    fn drops_betas_once_the_final_build_is_out() {
+        let page = String::from_utf8(fixture::read("ubuntu/26.10.html")).unwrap();
+        let kept: Vec<String> = newest_point_releases(listing::torrents(&page)).into_iter().map(|e| e.file).collect();
+        assert_eq!(kept, ["ubuntu-26.10-desktop-amd64.iso.torrent", "ubuntu-26.10-live-server-amd64.iso.torrent"]);
+        let beta_only: Vec<Entry> =
+            listing::torrents(&page).into_iter().filter(|e| e.file.contains("-beta-")).collect();
+        let kept: Vec<String> = newest_point_releases(beta_only).into_iter().map(|e| e.file).collect();
+        assert_eq!(
+            kept,
+            ["ubuntu-26.10-beta-desktop-amd64.iso.torrent", "ubuntu-26.10-beta-live-server-amd64.iso.torrent"]
         );
     }
 }
