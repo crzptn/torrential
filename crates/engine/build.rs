@@ -12,7 +12,6 @@ fn main() {
     let boost_root = required_env("BOOST_ROOT");
     let openssl_include = required_env("OPENSSL_INCLUDE_DIR");
     let openssl_lib = required_env("OPENSSL_LIB_DIR");
-    let dylib = if cfg!(target_os = "macos") { "dylib" } else { "so" };
 
     let install = cmake::Config::new(&libtorrent_src)
         .generator("Ninja")
@@ -26,8 +25,8 @@ fn main() {
         .define("webtorrent", "OFF")
         .define("Boost_ROOT", &boost_root)
         .define("OPENSSL_INCLUDE_DIR", &openssl_include)
-        .define("OPENSSL_SSL_LIBRARY", Path::new(&openssl_lib).join(format!("libssl.{dylib}")))
-        .define("OPENSSL_CRYPTO_LIBRARY", Path::new(&openssl_lib).join(format!("libcrypto.{dylib}")))
+        .define("OPENSSL_SSL_LIBRARY", Path::new(&openssl_lib).join("libssl.a"))
+        .define("OPENSSL_CRYPTO_LIBRARY", Path::new(&openssl_lib).join("libcrypto.a"))
         .build();
 
     let defines = exported_defines(&install.join("lib/pkgconfig/libtorrent-rasterbar.pc"));
@@ -55,8 +54,8 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", install.join("lib").display());
     println!("cargo:rustc-link-lib=static=torrent-rasterbar");
     println!("cargo:rustc-link-search=native={openssl_lib}");
-    println!("cargo:rustc-link-lib=dylib=ssl");
-    println!("cargo:rustc-link-lib=dylib=crypto");
+    println!("cargo:rustc-link-lib=static=ssl");
+    println!("cargo:rustc-link-lib=static=crypto");
     if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=SystemConfiguration");
