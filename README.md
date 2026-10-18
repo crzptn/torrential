@@ -96,6 +96,54 @@ hint: add "torrential *" to sandbox.excludedCommands in ~/.claude/settings.json,
 - In interactive Codex, approve the escalation the agent requests. The skill has it ask for the prefix rule `["torrential"]`, so one approval covers later torrential commands.
 - In unattended Codex (`codex exec`), approvals are off, so torrential cannot run. Run the download outside Codex, or give that Codex session network and socket access.
 
+## Sources and lawful use
+
+torrential searches these sources by default:
+
+| Source | What it searches | Flags it sets |
+|---|---|---|
+| `archlinux` | Official Arch Linux ISOs | `official` |
+| `ubuntu` | Official torrents on releases.ubuntu.com | `official` |
+| `debian` | Official torrents on cdimage.debian.org | `official` |
+| `archive.org` | Internet Archive items that have a torrent | `pd`, `cc` |
+| `academictorrents` | The Academic Torrents catalog | |
+| `knaben` | Knaben, an index of public trackers | |
+| `apibay` | The Pirate Bay's API | `trusted` |
+| `nyaa` | Nyaa | `trusted` |
+
+The first five are lawful sources. Among equally relevant results, official torrents rank first, then the other lawful sources, then the general indexes. Torznab feeds that you add in the config rank with the general indexes.
+
+`official` means the publisher's own torrent. `pd` and `cc` mean the source lists a public-domain or Creative Commons license. `trusted` means the index vouches for the uploader. `cam` marks a name that looks like a camera recording, from any source. Search hides adult results unless you pass `--adult`.
+
+torrential does not check whether you may download something. Download only what you have the right to, such as Linux ISOs, public-domain films, open datasets, and Creative Commons works.
+
+## Change the defaults in config.toml
+
+torrential reads `~/.config/torrential/config.toml`, or `$XDG_CONFIG_HOME/torrential/config.toml` when that variable is set. Without the file, the defaults apply.
+
+```toml
+[downloads]
+dir = "~/Downloads/torrents"
+
+[sources]
+disabled = ["nyaa"]
+
+[[sources.torznab]]
+name = "jackett"
+url = "http://127.0.0.1:9117/api/v2.0/indexers/all/results/torznab/api"
+api_key_env = "JACKETT_API_KEY"
+```
+
+- `downloads.dir` is where `get` puts downloads without `--dir`. It must be an absolute path or start with `~/`. The default is a `torrential` folder in your Downloads folder.
+- `sources.disabled` lists the sources that search skips.
+- Each `[[sources.torznab]]` table adds a Torznab feed, such as Jackett or Prowlarr. `name` uses lowercase letters, digits, `-`, `_`, and `.`. `url` is an `http` or `https` URL. `api_key_env` names the environment variable that holds the API key. The file cannot hold the key itself.
+
+An unknown key, a relative `dir`, or an unset `api_key_env` variable is an error that names the line. `torrential doctor` checks the file.
+
+The engine reads the file when it starts. To apply an edit, run `torrential daemon stop`, and the next command starts an engine with the new config. Stopping the engine interrupts running downloads, and `torrential resume --all` continues them.
+
+`TORRENTIAL_HOME` moves the config, state, cache, and engine socket into one folder, so the config file is `$TORRENTIAL_HOME/config/config.toml`. It does not move downloads.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
