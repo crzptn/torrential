@@ -1106,35 +1106,40 @@ impl Owner {
         let verified = verified.unwrap_or_else(|| job.verified());
         let piece_map = piece_map.or_else(|| job.piece_map());
         let files = files.or_else(|| job.record.files_verified.clone());
-        if job.observed == Observed::InEngine(Phase::Finishing { writes_stopped: true }) {
+        let finishing = job.observed == Observed::InEngine(Phase::Finishing { writes_stopped: true });
+        // The engine counted the selection it held when it saved. A selection changed since the
+        // engine finished can hold files it never fetched, so only a count of all of it is done.
+        if finishing && job.selected_size() == Some(verified) {
             let finished_at = now();
-            let size = job.selected_size().unwrap_or(verified);
-            if let Err(error) = self.store.finish(id, finished_at, &data, size) {
+            if let Err(error) = self.store.finish(id, finished_at, &data, verified) {
                 self.fail(id, error);
                 return;
             }
             let job = self.jobs.get_mut(&id).expect("checked above");
             job.record.intent = Intent::Done { finished_at };
-            job.record.verified = size;
+            job.record.verified = verified;
             job.observed = Observed::Absent;
             self.engine.send(EngineCommand::Remove(id));
             self.draining.insert(id);
             self.publish(id);
-        } else {
-            let saved = self.store.save_resume(id, &data, verified, piece_map, files.as_deref(), now()).is_ok();
-            let job = self.jobs.get_mut(&id).expect("checked above");
-            if saved {
-                job.record.verified = verified;
-                job.record.piece_map = piece_map;
-                job.record.files_verified = files;
-            }
-            if job.held_for_save() {
-                job.observed = Observed::Absent;
-                job.forget_sources();
-                self.engine.send(EngineCommand::Remove(id));
-                self.draining.insert(id);
-                self.publish(id);
-            }
+            return;
+        }
+        let saved = self.store.save_resume(id, &data, verified, piece_map, files.as_deref(), now()).is_ok();
+        let job = self.jobs.get_mut(&id).expect("checked above");
+        if saved {
+            job.record.verified = verified;
+            job.record.piece_map = piece_map;
+            job.record.files_verified = files;
+        }
+        if finishing {
+            // Paused and running, so the scheduler resumes it for the rest.
+            job.observed = Observed::InEngine(Phase::Paused);
+        } else if job.held_for_save() {
+            job.observed = Observed::Absent;
+            job.forget_sources();
+            self.engine.send(EngineCommand::Remove(id));
+            self.draining.insert(id);
+            self.publish(id);
         }
     }
 

@@ -1,12 +1,15 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply, GetRequest, Request, Response};
 use torrential_core::{Error, ErrorCode, InfoHash, Job, JobStatus, Selection, Target};
 
 use super::admission::{FakeDisk, GIB, Space};
-use super::engine_port::{Fake, FakeTorrentFile, MetaFile, Metainfo, Swarm, disagreement, parse_fake};
+use super::engine_port::{
+    AddTorrent, EngineEvent, EnginePort, Fake, FakeTorrentFile, MetaFile, Metainfo, ParseTorrent, Swarm, disagreement,
+    parse_fake,
+};
 use super::owner::OwnerConfig;
 use super::search_port::{self, fake_catalog};
 use super::store::Store;
@@ -49,7 +52,15 @@ impl Harness {
     fn with_search(search: search_port::Fake) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let (swarm, disk) = (Swarm::new(0), FakeDisk::new(ROOMY));
-        let running = Self::boot(&dir, &swarm, &disk, &search);
+        let running = Self::boot(&dir, Box::new(Fake::new(swarm.clone())), parse_fake, &disk, &search);
+        Self { dir, running, swarm, disk, search }
+    }
+
+    /// `engine` makes a port for the harness's folder.
+    fn with_engine(engine: impl FnOnce(&std::path::Path) -> Box<dyn EnginePort>, parse: ParseTorrent) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let (swarm, disk, search) = (Swarm::new(0), FakeDisk::new(ROOMY), search_port::Fake::new(fake_catalog()));
+        let running = Self::boot(&dir, engine(dir.path()), parse, &disk, &search);
         Self { dir, running, swarm, disk, search }
     }
 
@@ -60,14 +71,20 @@ impl Harness {
         super::fixture::seed(&mut store, &dir.path().join("downloads"), 0).unwrap();
         drop(store);
         let (swarm, disk, search) = (Swarm::new(0), FakeDisk::new(ROOMY), search_port::Fake::new(fake_catalog()));
-        let running = Self::boot(&dir, &swarm, &disk, &search);
+        let running = Self::boot(&dir, Box::new(Fake::new(swarm.clone())), parse_fake, &disk, &search);
         Self { dir, running, swarm, disk, search }
     }
 
-    fn boot(dir: &tempfile::TempDir, swarm: &Swarm, disk: &FakeDisk, search: &search_port::Fake) -> Running {
+    fn boot(
+        dir: &tempfile::TempDir,
+        engine: Box<dyn EnginePort>,
+        parse: ParseTorrent,
+        disk: &FakeDisk,
+        search: &search_port::Fake,
+    ) -> Running {
         let ports = Ports {
-            engine: Box::new(Fake::new(swarm.clone())),
-            parse: parse_fake,
+            engine,
+            parse,
             search: Arc::new(search.clone()),
             disk: Box::new(disk.clone()),
             machine: crate::machine::Detector::detected(
@@ -91,7 +108,7 @@ impl Harness {
         running.owner.abort();
         let _ = running.owner.await;
         drop(running.ctx);
-        let running = Self::boot(&dir, &swarm, &disk, &search);
+        let running = Self::boot(&dir, Box::new(Fake::new(swarm.clone())), parse_fake, &disk, &search);
         Self { dir, running, swarm, disk, search }
     }
 
@@ -172,6 +189,88 @@ impl Harness {
 
     fn downloads(&self) -> PathBuf {
         self.dir.path().join("downloads")
+    }
+}
+
+/// Holds back the engine's `Paused` events while closed, as an engine slow to stop writing would,
+/// and lets them through in order once open.
+#[derive(Clone, Default)]
+struct Gate(Arc<Mutex<(bool, Vec<EngineEvent>)>>);
+
+impl Gate {
+    fn close(&self) {
+        self.0.lock().unwrap().0 = true;
+    }
+
+    fn open(&self) {
+        self.0.lock().unwrap().0 = false;
+    }
+
+    fn held(&self) -> usize {
+        self.0.lock().unwrap().1.len()
+    }
+
+    async fn until_held(&self, n: usize) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while self.held() < n {
+            assert!(Instant::now() < deadline, "the engine never paused");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+struct Gated<P> {
+    port: P,
+    gate: Gate,
+}
+
+impl<P: EnginePort> EnginePort for Gated<P> {
+    fn add(&mut self, torrent: AddTorrent) -> Result<(), Error> {
+        self.port.add(torrent)
+    }
+
+    fn select(&mut self, id: torrential_core::TorrentId, wanted: &[bool]) -> Result<(), Error> {
+        self.port.select(id, wanted)
+    }
+
+    fn pause(&mut self, id: torrential_core::TorrentId) -> Result<(), Error> {
+        self.port.pause(id)
+    }
+
+    fn resume(&mut self, id: torrential_core::TorrentId) -> Result<(), Error> {
+        self.port.resume(id)
+    }
+
+    fn recheck(&mut self, id: torrential_core::TorrentId) -> Result<(), Error> {
+        self.port.recheck(id)
+    }
+
+    fn save_resume_data(&mut self, id: torrential_core::TorrentId) -> Result<(), Error> {
+        self.port.save_resume_data(id)
+    }
+
+    fn save_resume_data_if_progressed(&mut self, id: torrential_core::TorrentId) -> Result<(), Error> {
+        self.port.save_resume_data_if_progressed(id)
+    }
+
+    fn remove(&mut self, id: torrential_core::TorrentId) -> Result<(), Error> {
+        self.port.remove(id)
+    }
+
+    fn file_progress(&mut self, id: torrential_core::TorrentId) -> Result<Vec<u64>, Error> {
+        self.port.file_progress(id)
+    }
+
+    fn poll(&mut self, max_wait: Duration) -> Vec<EngineEvent> {
+        let events = self.port.poll(max_wait);
+        let (closed, held) = &mut *self.gate.0.lock().unwrap();
+        if !*closed {
+            return held.drain(..).chain(events).collect();
+        }
+        let (paused, others): (Vec<_>, Vec<_>) =
+            events.into_iter().partition(|e| matches!(e, EngineEvent::Paused { .. }));
+        held.extend(paused);
+        others
     }
 }
 
@@ -998,4 +1097,105 @@ async fn watching_every_download_includes_ones_started_later() {
     .await
     .expect("an event for the later download");
     assert_eq!(seen.as_deref(), Some("later.iso"));
+}
+
+/// A libtorrent session on 127.0.0.1 that seeds a two-file torrent, one 16 KiB piece per file.
+struct Seeder {
+    session: torrential_engine::Session,
+    id: torrential_engine::TorrentId,
+    addr: std::net::SocketAddr,
+    torrent: Vec<u8>,
+    _files: tempfile::TempDir,
+}
+
+impl Seeder {
+    const PIECE: u32 = 16 * 1024;
+
+    fn start(files: &[(&str, u8)]) -> Self {
+        use torrential_engine as lt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("set")).unwrap();
+        for (name, byte) in files {
+            std::fs::write(dir.path().join("set").join(name), vec![*byte; Self::PIECE as usize]).unwrap();
+        }
+        let piece = lt::PieceSize::new(Self::PIECE).unwrap();
+        let torrent = lt::create_torrent(&dir.path().join("set"), piece, lt::TorrentFormat::V1).unwrap();
+        let config = lt::Config {
+            listen: vec![std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), 0)],
+            dht: lt::Dht::Off,
+            lsd: false,
+            upnp: false,
+            natpmp: false,
+            connections: lt::ConnectionLimits { multiple_per_ip: true, ..lt::ConnectionLimits::default() },
+            ..lt::Config::default()
+        };
+        let mut session = lt::Session::new(config).unwrap();
+        let source = lt::TorrentSource::Metainfo(torrent.clone());
+        let id = session.add(lt::AddTorrent::new(source, dir.path())).unwrap().id();
+        let total = u64::from(Self::PIECE) * files.len() as u64;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let port = loop {
+            let seeding = session.status(id).unwrap().progress.verified_selected_bytes() == total;
+            if let (true, Some(port)) = (seeding, session.listen_port().unwrap()) {
+                break port;
+            }
+            assert!(Instant::now() < deadline, "the seeder never verified its files");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let addr = std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        Self { session, id, addr, torrent: torrent.into_bytes(), _files: dir }
+    }
+
+    /// A gated libtorrent engine whose only peer is this seeder.
+    fn engine(&self, gate: &Gate) -> impl FnOnce(&std::path::Path) -> Box<dyn EnginePort> {
+        let (peers, gate) = (vec![self.addr], gate.clone());
+        move |dir| {
+            let state = dir.join("state");
+            std::fs::create_dir_all(&state).unwrap();
+            let network = super::libtorrent::Network::Loopback { peers };
+            let search = Arc::new(search_port::Fake::new(Vec::new()));
+            let port = super::libtorrent::Libtorrent::start(&state, network, search, tokio::runtime::Handle::current())
+                .unwrap();
+            Box::new(Gated { port, gate })
+        }
+    }
+
+    /// Dials the engine, which skips a peer for a minute after a pause disconnects it.
+    fn dial(&mut self, h: &Harness) {
+        let port: u16 =
+            std::fs::read_to_string(h.dir.path().join("state/listen.port")).unwrap().trim().parse().unwrap();
+        let _ =
+            self.session.connect_peer(self.id, std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_selection_widened_while_the_engine_finishes_is_done_only_once_the_new_files_verify() {
+    let mut seeder = Seeder::start(&[("a.bin", 1), ("b.bin", 2)]);
+    let gate = Gate::default();
+    let h = Harness::with_engine(seeder.engine(&gate), super::libtorrent::parse);
+    let file = h.dir.path().join("set.torrent");
+    std::fs::write(&file, &seeder.torrent).unwrap();
+    gate.close();
+    let id = h.get(Target::TorrentFile(file), &["a.bin"]).await.unwrap().job.id;
+    gate.until_held(1).await;
+    let short = id.to_hex()[..6].to_string();
+    let widened = h.get(Target::Prefix(short), &["*.bin"]).await.unwrap();
+    assert_eq!((widened.outcome, widened.job.progress.size), (GetOutcome::Updated, Some(32 * 1024)));
+    gate.open();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let job = loop {
+        let job = h.status().await.remove(0);
+        if job.status.name() == "done" || Instant::now() > deadline {
+            break job;
+        }
+        seeder.dial(&h);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let b = std::fs::read(h.downloads().join("set/b.bin")).unwrap_or_default();
+    assert_eq!(
+        (job.status.name(), job.progress.verified, b == vec![2; 16 * 1024]),
+        ("done", 32 * 1024, true),
+        "done means every selected file arrived"
+    );
 }
