@@ -15,7 +15,7 @@ use torrential_core::{Error, ErrorCode, Release, ReleaseId, SearchQuery, SearchR
 use super::engine_port::{EngineHandle, Metainfo, ParseTorrent};
 use super::files;
 use super::magnet::{self, Magnet};
-use super::owner::{Command, FileProgress, FilesInfo, GetCommand, MetaTarget, Origin, Reply, Resolved, Source, Update};
+use super::owner::{Command, FileBytes, FilesInfo, GetCommand, MetaTarget, Origin, Reply, Resolved, Source, Update};
 use super::search_port::{Progress, SearchPort};
 use crate::wire;
 
@@ -238,12 +238,9 @@ async fn files(ctx: &Ctx, target: Target, timeout: Duration) -> Result<FilesRepl
         },
     };
     let m = &info.metainfo;
-    let verified: Vec<u64> = match info.download.as_ref().map(|d| (&d.verified, &d.wanted)) {
-        Some((FileProgress::Done, wanted)) => {
-            m.files.iter().zip(wanted).map(|(f, w)| if *w { f.size } else { 0 }).collect()
-        }
-        Some((FileProgress::Engine, _)) => ctx.engine.file_progress(info.id).await.unwrap_or_default(),
-        Some((FileProgress::Saved(saved), _)) => saved.clone(),
+    let verified: Vec<u64> = match info.download.as_ref().map(|d| &d.verified) {
+        Some(FileBytes::Known(bytes)) => bytes.clone(),
+        Some(FileBytes::Engine) => ctx.engine.file_progress(info.id).await.unwrap_or_default(),
         None => Vec::new(),
     };
     let risks = files::risks(m);

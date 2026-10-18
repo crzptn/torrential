@@ -84,18 +84,16 @@ pub struct FilesInfo {
 #[derive(Clone, Debug)]
 pub struct DownloadFiles {
     pub wanted: Vec<bool>,
-    pub verified: FileProgress,
+    pub verified: FileBytes,
 }
 
-/// Where each file's verified bytes come from.
+/// Each file's verified bytes.
 #[derive(Clone, Debug)]
-pub enum FileProgress {
-    /// Every wanted file is complete.
-    Done,
+pub enum FileBytes {
+    /// From a finished download's sizes, or the last save. Empty before the first save.
+    Known(Vec<u64>),
     /// The engine has the download, so it counts them now.
     Engine,
-    /// The last save's count, empty before the first save.
-    Saved(Vec<u64>),
 }
 
 #[derive(Clone, Debug)]
@@ -581,13 +579,15 @@ impl Owner {
     fn job_files(&self, id: TorrentId) -> Option<FilesInfo> {
         let job = self.jobs.get(&id)?;
         let metainfo = job.metainfo.clone()?;
+        let wanted = job.wanted().unwrap_or_else(|| vec![false; metainfo.files.len()]);
         let verified = match (&job.record.intent, job.observed) {
-            (Intent::Done { .. }, _) => FileProgress::Done,
-            (_, Observed::InEngine(_)) => FileProgress::Engine,
-            _ => FileProgress::Saved(job.record.files_verified.clone().unwrap_or_default()),
+            (Intent::Done { .. }, _) => {
+                FileBytes::Known(metainfo.files.iter().zip(&wanted).map(|(f, w)| if *w { f.size } else { 0 }).collect())
+            }
+            (_, Observed::InEngine(_)) => FileBytes::Engine,
+            _ => FileBytes::Known(job.record.files_verified.clone().unwrap_or_default()),
         };
-        let download =
-            DownloadFiles { wanted: job.wanted().unwrap_or_else(|| vec![false; metainfo.files.len()]), verified };
+        let download = DownloadFiles { wanted, verified };
         Some(FilesInfo { id, metainfo, source: "download", download: Some(download) })
     }
 
