@@ -13,7 +13,7 @@ namespace torrential {
 
 std::string describe_exception(std::exception_ptr error);
 
-}  // namespace torrential
+}
 
 // cxx calls this around every bridge function declared to return Result. The
 // default only catches std::exception, and anything else escaping a noexcept
@@ -27,8 +27,8 @@ static void trycatch(Try&& func, Fail&& fail) noexcept try {
   std::string const message = torrential::describe_exception(std::current_exception());
   fail(message.c_str());
 }
-}  // namespace behavior
-}  // namespace rust
+}
+}
 
 namespace torrential {
 
@@ -95,4 +95,4 @@ ParsedTorrent parse_resume_data(rust::Slice<const std::uint8_t> bytes);
 rust::Vec<std::uint8_t> create_torrent(rust::Str path, std::uint32_t piece_size, bool hybrid);
 rust::String libtorrent_version();
 
-}  // namespace torrential
+}

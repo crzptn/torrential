@@ -91,7 +91,6 @@ pub enum Alert {
 }
 
 impl Alert {
-    /// The torrent this alert is about, if it is about one.
     pub fn torrent(&self) -> Option<InfoHash> {
         match self {
             Alert::MetadataReceived { torrent }

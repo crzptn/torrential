@@ -16,7 +16,6 @@ pub struct InfoHashV2([u8; 32]);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TorrentId([u8; 20]);
 
-/// Which protocol versions a torrent's info hash covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InfoHash {
     V1(InfoHashV1),

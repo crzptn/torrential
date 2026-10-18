@@ -275,7 +275,7 @@ bool torrent_record(lt::alert const* a, AlertKind kind, AlertRecord& r) {
   return true;
 }
 
-}  // namespace
+}
 
 std::string describe_exception(std::exception_ptr error) {
   try {
@@ -506,7 +506,6 @@ MissingCounts Session::missing_pieces(rust::Slice<const std::uint8_t> id) const 
   lt::torrent_handle const h = find_with_metadata(id);
   lt::torrent_status const st = h.status(lt::torrent_handle::query_pieces);
   std::vector<lt::download_priority_t> const priorities = h.get_piece_priorities();
-  // Counts each connected peer and web seed that has advertised the piece.
   std::vector<int> availability;
   h.piece_availability(availability);
   MissingCounts r{};
@@ -682,4 +681,4 @@ rust::Vec<std::uint8_t> create_torrent(rust::Str path, std::uint32_t piece_size,
 
 rust::String libtorrent_version() { return rust::String(lt::version()); }
 
-}  // namespace torrential
+}

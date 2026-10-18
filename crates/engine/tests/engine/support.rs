@@ -38,8 +38,6 @@ pub fn upload(policy: UploadPolicy) -> Config {
 pub struct Node {
     pub session: Session,
     pub log: Vec<Alert>,
-    /// One read can return several alerts, and a later `wait_for` must still
-    /// see the ones after the alert it matched.
     examined: usize,
     port: u16,
 }

@@ -1,8 +1,3 @@
-//! torrential's libtorrent engine. This crate is the only code that touches
-//! libtorrent, and no libtorrent or cxx type appears in its API.
-//!
-//! libtorrent 2.1 is built from `vendor/libtorrent` and linked statically.
-
 #![deny(unsafe_code)]
 
 mod alert;

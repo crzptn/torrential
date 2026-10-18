@@ -49,7 +49,6 @@ fn slices_fill_as_pieces_arrive_and_skipped_files_stay_unwanted() {
     assert_eq!(leecher.session.piece_slices(id, 128).unwrap(), doubled, "each piece covers two slices");
 }
 
-/// `cargo test --release -p torrential-engine --test engine -- --ignored --nocapture piece_slices_cost`
 #[test]
 #[ignore = "hashes a 1.6 GB sparse file"]
 fn piece_slices_cost_at_100k_pieces() {

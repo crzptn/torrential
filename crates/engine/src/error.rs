@@ -1,6 +1,5 @@
 use std::fmt;
 
-/// A failed engine call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineError {
     kind: ErrorKind,

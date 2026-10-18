@@ -15,7 +15,6 @@ fn main() {
 
     let install = cmake::Config::new(&libtorrent_src)
         .generator("Ninja")
-        // libtorrent at -O0 makes swarm tests slow, so the cargo profile never applies.
         .profile("Release")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("CMAKE_INSTALL_LIBDIR", "lib")
