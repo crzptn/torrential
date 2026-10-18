@@ -525,3 +525,32 @@ async fn a_streaming_search_sends_results_as_sources_answer() {
     let reply = h.get(Target::Prefix("bbbbbb".into()), &[]).await.unwrap();
     assert_eq!(reply.outcome, GetOutcome::Started);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watching_every_download_includes_ones_started_later() {
+    let h = Harness::new();
+    let before = torrent(30, "before.iso", &[("before.iso", GIB)]);
+    h.get(h.torrent_file(&before), &[]).await.unwrap();
+    let (client, served) = tokio::net::UnixStream::pair().unwrap();
+    tokio::spawn(server::connection(h.running.ctx.clone(), served));
+    let (mut rd, mut wr) = client.into_split();
+    let hello = Request::Hello { client_version: "0.1.0".into(), wire: torrential_core::protocol::WIRE_VERSION };
+    crate::wire::write_async(&mut wr, &hello).await.unwrap();
+    crate::wire::read_async::<Response>(&mut rd).await.unwrap();
+    crate::wire::write_async(&mut wr, &Request::Watch { refs: Vec::new() }).await.unwrap();
+    let first: torrential_core::protocol::Event = crate::wire::read_async(&mut rd).await.unwrap().unwrap();
+    assert!(matches!(first, torrential_core::protocol::Event::Snapshot { ref jobs } if jobs.len() == 1));
+    let later = torrent(31, "later.iso", &[("later.iso", GIB)]);
+    h.get(h.torrent_file(&later), &[]).await.unwrap();
+    let seen = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match crate::wire::read_async(&mut rd).await.unwrap().unwrap() {
+                torrential_core::protocol::Event::Job { job } if job.id == later.info_hash.id() => return job.name,
+                _ => continue,
+            }
+        }
+    })
+    .await
+    .expect("an event for the later download");
+    assert_eq!(seen.as_deref(), Some("later.iso"));
+}

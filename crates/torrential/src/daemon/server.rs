@@ -298,12 +298,12 @@ async fn serve(ctx: &Ctx, stream: UnixStream) -> std::io::Result<()> {
 }
 
 async fn watch(ctx: &Ctx, refs: Vec<String>, mut rd: OwnedReadHalf, mut wr: OwnedWriteHalf) -> std::io::Result<()> {
+    let everything = refs.is_empty();
     let (jobs, mut updates) = match ctx.owner.ask(|reply| Command::Watch { refs, reply }).await {
         Ok(watch) => watch,
         Err(error) => return wire::write_async(&mut wr, &Response::Error { error }).await,
     };
     let watched: Vec<_> = jobs.iter().map(|j| j.id).collect();
-    let everything = watched.is_empty();
     wire::write_async(&mut wr, &Event::Snapshot { jobs }).await?;
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.tick().await;
