@@ -192,3 +192,34 @@ fn listen_failures_and_taken_ports() {
         "libtorrent moved to a free port"
     );
 }
+
+#[test]
+fn every_interface_reports_its_address_and_scope() {
+    let mut session = Session::new(Config {
+        listen: vec!["0.0.0.0:0".parse().unwrap(), "[::]:0".parse().unwrap()],
+        ..loopback()
+    })
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut addresses = Vec::new();
+    while Instant::now() < deadline {
+        let alerts = session
+            .wait_alerts(Duration::from_millis(100))
+            .expect("every alert converts");
+        addresses.extend(alerts.into_iter().filter_map(|a| match a {
+            Alert::ListenSucceeded { address, .. } => Some(address),
+            _ => None,
+        }));
+    }
+    assert!(
+        addresses.iter().any(|a| a.ip().is_loopback()),
+        "{addresses:?}"
+    );
+    for address in &addresses {
+        if let SocketAddr::V6(v6) = address
+            && v6.ip().segments()[0] & 0xffc0 == 0xfe80
+        {
+            assert_ne!(v6.scope_id(), 0, "link-local {v6} names its interface");
+        }
+    }
+}

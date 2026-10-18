@@ -246,6 +246,19 @@ int metric(char const* name) {
   return index;
 }
 
+// asio writes a scoped IPv6 address as fe80::1%lo0, which no Rust address
+// type parses, so the scope travels as its interface index.
+void set_address(AlertRecord& r, lt::address const& address) {
+  if (!address.is_v6()) {
+    r.address = str(address.to_string());
+    return;
+  }
+  lt::address_v6 v6 = address.to_v6();
+  r.scope_id = static_cast<std::uint32_t>(v6.scope_id());
+  v6.scope_id(0);
+  r.address = str(v6.to_string());
+}
+
 bool torrent_record(lt::alert const* a, AlertKind kind, AlertRecord& r) {
   lt::info_hash_t const ih = static_cast<lt::torrent_alert const*>(a)->handle.info_hashes();
   // An alert can outlive its torrent. Without a live handle there is no
@@ -546,7 +559,7 @@ rust::Vec<AlertRecord> Session::wait_alerts(std::uint32_t timeout_ms) {
       case lt::listen_succeeded_alert::alert_type: {
         auto const* l = lt::alert_cast<lt::listen_succeeded_alert>(a);
         r.kind = AlertKind::ListenSucceeded;
-        r.address = str(l->address.to_string());
+        set_address(r, l->address);
         r.port = static_cast<std::uint16_t>(l->port);
         r.transport = to_transport(l->socket_type);
         keep = true;
@@ -556,7 +569,7 @@ rust::Vec<AlertRecord> Session::wait_alerts(std::uint32_t timeout_ms) {
         auto const* l = lt::alert_cast<lt::listen_failed_alert>(a);
         r.kind = AlertKind::ListenFailed;
         r.interface_name = str(l->listen_interface());
-        r.address = str(l->address.to_string());
+        set_address(r, l->address);
         r.port = static_cast<std::uint16_t>(l->port);
         r.transport = to_transport(l->socket_type);
         r.operation = str(lt::operation_name(l->op));

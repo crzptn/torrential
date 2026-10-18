@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 use std::path::{Path, PathBuf};
 
 use crate::alert::{Alert, SessionStats, Transport};
@@ -179,6 +179,7 @@ pub(crate) mod ffi {
         operation: String,
         piece: i32,
         address: String,
+        scope_id: u32,
         port: u16,
         transport: Transport,
         interface_name: String,
@@ -533,7 +534,10 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
             torrent: torrent()?,
         },
         K::ListenSucceeded => Alert::ListenSucceeded {
-            address: SocketAddr::new(ip(&r.address)?, r.port),
+            address: match ip(&r.address)? {
+                IpAddr::V6(v6) => SocketAddr::V6(SocketAddrV6::new(v6, r.port, 0, r.scope_id)),
+                v4 => SocketAddr::new(v4, r.port),
+            },
             transport: transport(r.transport)?,
         },
         K::ListenFailed => Alert::ListenFailed {
