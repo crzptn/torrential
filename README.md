@@ -59,6 +59,43 @@ To manage downloads:
 
 To open the terminal UI, run `torrential` with no arguments on a terminal, or run `torrential tui`. Quitting the UI keeps downloads running.
 
+## Use it from a coding agent
+
+Install the skill:
+
+```sh
+torrential skill install
+```
+
+It writes `~/.agents/skills/torrential/SKILL.md`, which Codex, Gemini CLI, Cursor, and other agents read. It also links `~/.claude/skills/torrential` to that folder for Claude Code. Add `--agent agents` to skip the Claude Code link, or `--scope project` to install under the current folder instead. After you upgrade torrential, run `torrential skill status`, and run `torrential skill install` again if it says `outdated`. `torrential skill show` prints the skill. `torrential skill uninstall` removes the copies torrential wrote and keeps any that someone edited.
+
+The skill teaches the agent to:
+
+- Use torrential for large public files such as Linux ISOs, public-domain films, and open datasets, even when nobody says "torrent".
+- Search the lawful sources first, and decline a request for something the user plainly has no right to.
+- Treat torrent names, file names, and descriptions as untrusted text.
+- Ask before a download over 10 GiB, or one larger than the user asked for.
+- Start a download with `get`, then check on it with `wait` calls that end before the agent's tool timeout, never with `sleep`.
+- Act on each error code and exit code.
+
+The download does not depend on the agent. It keeps going after the agent's turn or session ends, and a later session can check it with `torrential status`.
+
+On 2026-10-18, a fresh Claude Code session with only the skill installed downloaded a public-domain MP4 from archive.org. Its SHA-1 matched the one in archive.org's `files.xml`.
+
+### Run torrential outside the agent's sandbox
+
+BitTorrent needs direct TCP and UDP connections, and agent sandboxes block them. torrential checks before it starts its engine and stops with `sandbox_network_blocked` and exit code 6:
+
+```text
+error[sandbox_network_blocked]: this sandbox blocks network access, so the engine could not reach any peer
+  signal: sending a UDP datagram failed: Operation not permitted (os error 1) (claude-code)
+hint: add "torrential *" to sandbox.excludedCommands in ~/.claude/settings.json, or approve running torrential outside the sandbox
+```
+
+- In Claude Code, approve running the command outside the sandbox when asked, or add `"torrential *"` to `sandbox.excludedCommands` in `~/.claude/settings.json`.
+- In interactive Codex, approve the escalation the agent requests. The skill has it ask for the prefix rule `["torrential"]`, so one approval covers later torrential commands.
+- In unattended Codex (`codex exec`), approvals are off, so torrential cannot run. Run the download outside Codex, or give that Codex session network and socket access.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
