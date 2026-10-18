@@ -832,7 +832,7 @@ impl Owner {
             }
             EngineEvent::Paused { id } => self.paused(id),
             EngineEvent::ResumeData { id, data } => self.resume_data(id, data),
-            EngineEvent::Checked { id, damaged_pieces } => self.checked(id, damaged_pieces),
+            EngineEvent::Checked { id, damaged_pieces, verified } => self.checked(id, damaged_pieces, verified),
             EngineEvent::Failed { id, error } => {
                 if self.probes.remove(&id) {
                     self.engine.send(EngineCommand::Remove(id));
@@ -985,9 +985,13 @@ impl Owner {
         }
     }
 
-    fn checked(&mut self, id: TorrentId, damaged: u32) {
+    fn checked(&mut self, id: TorrentId, damaged: u32, verified: u64) {
         let Some(job) = self.jobs.get_mut(&id) else { return };
         let Some(mode) = job.verify.take() else { return };
+        // The check replaces what the last save recorded, so progress and the next restart start from it.
+        job.record.verified = verified;
+        job.stats.verified = verified;
+        self.engine.send(EngineCommand::SaveResume(id));
         let short = id.to_hex()[..6].to_string();
         let intent = job.record.intent.clone();
         match (intent, damaged, mode) {

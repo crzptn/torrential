@@ -427,6 +427,40 @@ async fn verify_reports_damage_and_repair_downloads_it_again() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn repair_counts_the_damaged_pieces_as_missing_until_they_download_again() {
+    let h = Harness::new();
+    h.swarm.set_rate(100 * GIB);
+    let iso = torrent(28, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    h.until("done", |jobs| jobs[0].status.name() == "done").await;
+    h.swarm.set_rate(0);
+    h.swarm.damage(iso.info_hash.id(), 3);
+    h.changes(Request::Verify { reference: prefix(&iso), repair: true }).await.unwrap();
+    let jobs = h.until("repairing", |jobs| jobs[0].status.name() == "downloading").await;
+    assert_eq!(jobs[0].progress.verified, GIB - 3 * 16_384);
+    h.swarm.set_rate(100 * GIB);
+    let jobs = h.until("repaired", |jobs| jobs[0].status.name() == "done").await;
+    assert_eq!(jobs[0].progress.verified, GIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_after_a_failed_verify_downloads_the_damaged_pieces_again() {
+    let h = Harness::new();
+    h.swarm.set_rate(100 * GIB);
+    let iso = torrent(29, "arch.iso", &[("arch.iso", GIB)]);
+    h.get(h.torrent_file(&iso), &[]).await.unwrap();
+    h.until("done", |jobs| jobs[0].status.name() == "done").await;
+    h.swarm.set_rate(0);
+    h.swarm.damage(iso.info_hash.id(), 2);
+    h.changes(Request::Verify { reference: prefix(&iso), repair: false }).await.unwrap();
+    let jobs = h.until("damage reported", |jobs| jobs[0].status.name() == "error").await;
+    assert_eq!(jobs[0].progress.verified, GIB - 2 * 16_384);
+    h.changes(Request::Resume { refs: vec![prefix(&iso)], all: false }).await.unwrap();
+    let jobs = h.until("downloading", |jobs| jobs[0].status.name() == "downloading").await;
+    assert_eq!(jobs[0].progress.verified, GIB - 2 * 16_384);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_result_with_only_a_torrent_url_is_fetched_once_found() {
     let iso = torrent(27, "debian.iso", &[("debian.iso", GIB)]);
     let url = "https://cdimage.example/debian.iso.torrent";

@@ -305,11 +305,16 @@ impl Libtorrent {
                 }
             }
             Check::Hashing { hold, started: true } => {
-                self.torrents.get_mut(&id).expect("found above").check = Check::Idle;
-                match self.session.selected_pieces(eid) {
-                    Ok(pieces) => {
+                let t = self.torrents.get_mut(&id).expect("found above");
+                t.check = Check::Idle;
+                let counts = self.session.selected_pieces(eid).and_then(|pieces| {
+                    let status = self.session.status(eid)?;
+                    Ok((pieces, verified(&status.progress, t.files.as_deref(), t.wanted.as_deref()).iter().sum()))
+                });
+                match counts {
+                    Ok((pieces, verified)) => {
                         let damaged_pieces = pieces.selected - pieces.verified;
-                        self.events.push(EngineEvent::Checked { id, damaged_pieces });
+                        self.events.push(EngineEvent::Checked { id, damaged_pieces, verified });
                     }
                     Err(e) => self.events.push(EngineEvent::Failed { id, error: engine_error(e) }),
                 }

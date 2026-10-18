@@ -386,6 +386,7 @@ fn verify_reports_a_corrupted_byte_and_repair_fixes_it() {
     let job = home.until(&fixture.id(), "the check reports", |j| state(j) != "checking");
     assert_eq!(job["error"]["code"], "verification_failed", "{job:#}");
     assert_eq!(job["error"]["message"], "1 damaged piece in the selected files");
+    assert_eq!(verified(&job), fixture.total() - u64::from(PIECE), "the damaged piece no longer counts");
     assert!(!fixture.intact(&home, "a.bin"), "verify alone repairs nothing");
 
     assert_eq!(home.ok(&["verify", &fixture.short(), "--repair"])["changes"][0]["result"], "checking");

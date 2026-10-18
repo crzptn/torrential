@@ -121,10 +121,11 @@ pub enum EngineEvent {
         id: TorrentId,
         data: Vec<u8>,
     },
-    /// A recheck finished. Counts wanted pieces that failed it.
+    /// A recheck finished. Counts wanted pieces that failed it, and wanted bytes that passed.
     Checked {
         id: TorrentId,
         damaged_pieces: u32,
+        verified: u64,
     },
     /// A command failed, or the torrent stopped with an error such as a full disk.
     Failed {
@@ -425,8 +426,9 @@ impl EnginePort for Fake {
         let t = self.torrent(id)?;
         t.verified = (t.verified - f64::from(damaged) * 16_384.0).max(0.0);
         t.stop_downloading();
+        let verified = t.verified as u64;
         self.events.push_back(EngineEvent::Activity { id, activity: Activity::Checking });
-        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged });
+        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged, verified });
         Ok(())
     }
 
