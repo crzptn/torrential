@@ -371,6 +371,27 @@ fn pause_stops_writes_and_resume_finishes() {
 }
 
 #[test]
+fn a_paused_download_keeps_its_file_progress_across_an_engine_restart() {
+    let fixture = Fixture::new("big", &BIG, 9);
+    let seeder = Seeder::start(&fixture, SLOW);
+    let home = Home::new(&seeder);
+    home.get(&fixture.torrent_file(), &[]);
+    home.until(&fixture.id(), "a third is verified", |j| verified(j) >= fixture.total() / 3);
+    assert_eq!(home.ok(&["pause", &fixture.short()])["changes"][0]["result"], "paused");
+    let paused = verified(&home.job(&fixture.id()));
+    let file_bytes = |files: Value| -> Vec<u64> {
+        files["files"]["files"].as_array().unwrap().iter().map(|f| f["verified"].as_u64().unwrap()).collect()
+    };
+    let before = file_bytes(home.ok(&["files", &fixture.short()]));
+    assert_eq!(before.iter().sum::<u64>(), paused, "the files hold the verified bytes: {before:?}");
+    assert!(before.iter().all(|b| *b > 0), "both files have pieces: {before:?}");
+    home.ok(&["daemon", "stop"]);
+    let after = file_bytes(home.ok(&["files", &fixture.short()]));
+    assert_eq!(after, before, "a new engine that has not loaded the paused download reports the same bytes");
+    assert_eq!(state(&home.job(&fixture.id())), "paused");
+}
+
+#[test]
 fn a_killed_engine_resumes_without_downloading_verified_pieces_again() {
     let fixture = Fixture::new("big", &BIG, 5);
     let seeder = Seeder::start(&fixture, SLOW);

@@ -97,6 +97,8 @@ pub struct JobRecord {
     pub verified: u64,
     /// The piece map at the last save, taken with `verified`.
     pub piece_map: Option<PieceMap>,
+    /// Verified bytes in each file at the last save, counted with `verified`. `None` before the first save.
+    pub files_verified: Option<Vec<u64>>,
 }
 
 #[derive(Clone, Debug)]
@@ -273,6 +275,7 @@ mod tests {
             intent,
             verified: 0,
             piece_map: None,
+            files_verified: None,
         };
         JobEntry::new(record, None, observed)
     }

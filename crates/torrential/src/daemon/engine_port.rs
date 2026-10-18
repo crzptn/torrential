@@ -126,6 +126,8 @@ pub enum EngineEvent {
         verified: Option<u64>,
         /// The piece map when the data was taken, if the engine could sample it.
         piece_map: Option<PieceMap>,
+        /// Verified bytes in each file when the data was taken, counted with `verified`.
+        files: Option<Vec<u64>>,
     },
     /// A recheck finished. Counts wanted pieces that failed it, and wanted bytes that passed.
     Checked {
@@ -133,6 +135,8 @@ pub enum EngineEvent {
         damaged_pieces: u32,
         verified: u64,
         piece_map: Option<PieceMap>,
+        /// Verified bytes in each file, counted with `verified`.
+        files: Vec<u64>,
     },
     /// A command failed, or the torrent stopped with an error such as a full disk.
     Failed {
@@ -343,6 +347,10 @@ impl FakeTorrent {
         self.landing().map_or((0, None), |l| (l.verified, l.piece_map))
     }
 
+    fn files(&self) -> Vec<u64> {
+        self.landing().map(|l| l.files).unwrap_or_default()
+    }
+
     fn wanted_size(&self) -> Option<u64> {
         let (m, wanted) = (self.metainfo.as_ref()?, self.wanted.as_ref()?);
         Some(m.files.iter().zip(wanted).filter(|(_, w)| **w).map(|(f, _)| f.size).sum())
@@ -439,8 +447,9 @@ impl EnginePort for Fake {
         t.arrived = (t.arrived - f64::from(damaged) * piece as f64).max(0.0);
         t.stop_downloading();
         let (verified, piece_map) = t.progress();
+        let files = t.files();
         self.events.push_back(EngineEvent::Activity { id, activity: Activity::Checking });
-        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged, verified, piece_map });
+        self.events.push_back(EngineEvent::Checked { id, damaged_pieces: damaged, verified, piece_map, files });
         Ok(())
     }
 
@@ -448,8 +457,8 @@ impl EnginePort for Fake {
         let t = self.torrent(id)?;
         t.saved = t.arrived;
         let (verified, piece_map) = t.progress();
-        let data = t.arrived.to_string().into_bytes();
-        self.events.push_back(EngineEvent::ResumeData { id, data, verified: Some(verified), piece_map });
+        let (data, files) = (t.arrived.to_string().into_bytes(), Some(t.files()));
+        self.events.push_back(EngineEvent::ResumeData { id, data, verified: Some(verified), piece_map, files });
         Ok(())
     }
 
@@ -468,7 +477,7 @@ impl EnginePort for Fake {
     }
 
     fn file_progress(&mut self, id: TorrentId) -> Result<Vec<u64>, Error> {
-        Ok(self.torrent(id)?.landing().map(|l| l.files).unwrap_or_default())
+        Ok(self.torrent(id)?.files())
     }
 
     fn poll(&mut self, max_wait: Duration) -> Vec<EngineEvent> {

@@ -52,6 +52,7 @@ CREATE TABLE results (
 ) STRICT;
 "#,
     "ALTER TABLE jobs ADD COLUMN piece_map TEXT;",
+    "ALTER TABLE jobs ADD COLUMN files_verified TEXT;",
 ];
 
 /// A removed download, remembered briefly so a repeated `rm` reports `already_removed`.
@@ -149,7 +150,8 @@ impl Store {
             .conn
             .prepare(
                 "SELECT j.id, j.info_hash, j.name, j.dir, j.selection, j.max_size, j.magnet, j.intent, j.finished_at, \
-                 j.error, j.added_at, j.verified, j.piece_map, m.bytes FROM jobs j LEFT JOIN metainfo m ON m.id = j.id \
+                 j.error, j.added_at, j.verified, j.piece_map, j.files_verified, m.bytes FROM jobs j \
+                 LEFT JOIN metainfo m ON m.id = j.id \
                  ORDER BY j.added_at",
             )
             .map_err(|e| self.fail(e))?;
@@ -169,7 +171,8 @@ impl Store {
                     r.get::<_, i64>(10)?,
                     r.get::<_, i64>(11)?,
                     r.get::<_, Option<String>>(12)?,
-                    r.get::<_, Option<Vec<u8>>>(13)?,
+                    r.get::<_, Option<String>>(13)?,
+                    r.get::<_, Option<Vec<u8>>>(14)?,
                 ))
             })
             .map_err(|e| self.fail(e))?;
@@ -189,6 +192,7 @@ impl Store {
                 added_at,
                 verified,
                 piece_map,
+                files_verified,
                 bytes,
             ) = row.map_err(|e| self.fail(e))?;
             let bad = |what: &str| corrupt(&self.path, &format!("job {id} has an unreadable {what}"));
@@ -213,6 +217,10 @@ impl Store {
                 intent,
                 verified: verified as u64,
                 piece_map: piece_map.map(|m| m.parse()).transpose().map_err(|_| bad("piece map"))?,
+                files_verified: files_verified
+                    .map(|f| serde_json::from_str(&f))
+                    .transpose()
+                    .map_err(|_| bad("file progress"))?,
             };
             jobs.push(StoredJob { record, metainfo: bytes });
         }
@@ -224,7 +232,7 @@ impl Store {
         self.write(|tx| {
             tx.execute(
                 "INSERT INTO jobs (id, info_hash, name, dir, selection, max_size, magnet, intent, finished_at, error, added_at, verified, \
-                 piece_map) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                 piece_map, files_verified) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     record.id.to_hex(),
                     json(&record.info_hash),
@@ -239,6 +247,7 @@ impl Store {
                     record.added_at,
                     record.verified as i64,
                     record.piece_map.map(|m| m.to_string()),
+                    record.files_verified.as_ref().map(json),
                 ],
             )?;
             insert_aliases(tx, record.id, &record.info_hash)?;
@@ -309,15 +318,16 @@ impl Store {
         bytes: &[u8],
         verified: u64,
         piece_map: Option<PieceMap>,
+        files: Option<&[u64]>,
         now: i64,
     ) -> Result<(), Error> {
-        self.write(|tx| save_resume(tx, id, bytes, verified, piece_map, now))
+        self.write(|tx| save_resume(tx, id, bytes, verified, piece_map, files, now))
     }
 
     /// One transaction, so a crash cannot mark a download done without its final resume data.
     pub fn finish(&mut self, id: TorrentId, finished_at: i64, bytes: &[u8], verified: u64) -> Result<(), Error> {
         self.write(|tx| {
-            save_resume(tx, id, bytes, verified, None, finished_at)?;
+            save_resume(tx, id, bytes, verified, None, None, finished_at)?;
             tx.execute(
                 "UPDATE jobs SET intent = 'done', finished_at = ?2, error = NULL WHERE id = ?1",
                 params![id.to_hex(), finished_at],
@@ -476,6 +486,7 @@ fn save_resume(
     bytes: &[u8],
     verified: u64,
     piece_map: Option<PieceMap>,
+    files: Option<&[u64]>,
     now: i64,
 ) -> rusqlite::Result<()> {
     tx.execute(
@@ -484,8 +495,8 @@ fn save_resume(
     )?;
     let piece_map = piece_map.map(|m| m.to_string());
     tx.execute(
-        "UPDATE jobs SET verified = ?2, piece_map = ?3 WHERE id = ?1",
-        params![id.to_hex(), verified as i64, piece_map],
+        "UPDATE jobs SET verified = ?2, piece_map = ?3, files_verified = ?4 WHERE id = ?1",
+        params![id.to_hex(), verified as i64, piece_map, files.map(|f| json(&f))],
     )
     .map(drop)
 }
@@ -507,6 +518,7 @@ mod tests {
             intent: Intent::Running,
             verified: 0,
             piece_map: None,
+            files_verified: None,
         }
     }
 
@@ -526,14 +538,15 @@ mod tests {
         store.finish(TorrentId::from_bytes([3; 20]), 200, b"resume", 42).unwrap();
         let map: PieceMap = format!("{}{}", "8".repeat(32), "-".repeat(32)).parse().unwrap();
         store.insert(&record(5), None, 100).unwrap();
-        store.save_resume(TorrentId::from_bytes([5; 20]), b"resume", 9, Some(map), 150).unwrap();
+        store.save_resume(TorrentId::from_bytes([5; 20]), b"resume", 9, Some(map), Some(&[4, 5]), 150).unwrap();
         drop(store);
         let store = Store::open(&path).unwrap();
         let jobs = store.jobs().unwrap();
         assert_eq!(jobs[0].record.intent, Intent::Failed { error: Error::new(ErrorCode::DiskFull, "full") });
         assert_eq!(jobs[0].metainfo.as_deref(), Some(&b"torrent"[..]));
         assert_eq!(jobs[1].record, JobRecord { intent: Intent::Done { finished_at: 200 }, verified: 42, ..record(3) });
-        assert_eq!(jobs[2].record, JobRecord { verified: 9, piece_map: Some(map), ..record(5) });
+        let saved = JobRecord { verified: 9, piece_map: Some(map), files_verified: Some(vec![4, 5]), ..record(5) };
+        assert_eq!(jobs[2].record, saved);
         assert_eq!(store.resume(TorrentId::from_bytes([3; 20])).unwrap().as_deref(), Some(&b"resume"[..]));
     }
 
@@ -582,12 +595,13 @@ mod tests {
         let mut store = Store::open(&path).unwrap();
         store.insert(&record(1), None, 100).unwrap();
         store.migrate(&[MIGRATIONS, &["ALTER TABLE jobs ADD COLUMN note TEXT"]].concat()).unwrap();
+        let shipped = MIGRATIONS.len() as i64;
         let version: i64 = store.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 3);
-        let backup = Connection::open(dir.path().join("state.v2.bak")).unwrap();
+        assert_eq!(version, shipped + 1);
+        let backup = Connection::open(dir.path().join(format!("state.v{shipped}.bak"))).unwrap();
         let rows: i64 = backup.query_row("SELECT count(*) FROM jobs", [], |r| r.get(0)).unwrap();
         let backup_version: i64 = backup.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!((rows, backup_version), (1, 2));
+        assert_eq!((rows, backup_version), (1, shipped));
     }
 
     #[test]

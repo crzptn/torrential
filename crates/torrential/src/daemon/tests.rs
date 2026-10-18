@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use torrential_core::protocol::{Change, GetOutcome, GetReply, GetRequest, Request, Response};
+use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply, GetRequest, Request, Response};
 use torrential_core::{Error, ErrorCode, InfoHash, Job, JobStatus, Selection, Target};
 
 use super::admission::{FakeDisk, GIB, Space};
-use super::engine_port::{Fake, FakeTorrentFile, Swarm, disagreement, parse_fake};
+use super::engine_port::{Fake, FakeTorrentFile, MetaFile, Metainfo, Swarm, disagreement, parse_fake};
 use super::owner::OwnerConfig;
 use super::search_port::{self, fake_catalog};
 use super::store::Store;
@@ -47,6 +47,17 @@ impl Harness {
     fn with_search(search: search_port::Fake) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let (swarm, disk) = (Swarm::new(0), FakeDisk::new(ROOMY));
+        let running = Self::boot(&dir, &swarm, &disk, &search);
+        Self { dir, running, swarm, disk, search }
+    }
+
+    /// The downloads `TORRENTIAL_TEST_ENGINE=fake` starts with, in an engine that has loaded none of them.
+    fn seeded() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("state.db")).unwrap();
+        super::fixture::seed(&mut store, &dir.path().join("downloads"), 0).unwrap();
+        drop(store);
+        let (swarm, disk, search) = (Swarm::new(0), FakeDisk::new(ROOMY), search_port::Fake::new(fake_catalog()));
         let running = Self::boot(&dir, &swarm, &disk, &search);
         Self { dir, running, swarm, disk, search }
     }
@@ -128,12 +139,16 @@ impl Harness {
         }
     }
 
-    /// Each file's verified bytes, as `files` reports them.
-    async fn file_bytes(&self, t: &FakeTorrentFile) -> Vec<u64> {
-        match self.ask(Request::Files { target: Target::Prefix(prefix(t)), timeout_ms: 1_000 }).await {
-            Response::Files { files } => files.files.iter().map(|f| f.verified).collect(),
+    async fn files(&self, prefix: &str) -> FilesReply {
+        match self.ask(Request::Files { target: Target::Prefix(prefix.into()), timeout_ms: 1_000 }).await {
+            Response::Files { files } => files,
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    /// Each file's verified bytes, as `files` reports them.
+    async fn file_bytes(&self, t: &FakeTorrentFile) -> Vec<u64> {
+        self.files(&prefix(t)).await.files.iter().map(|f| f.verified).collect()
     }
 
     fn torrent_file(&self, torrent: &FakeTorrentFile) -> Target {
@@ -521,6 +536,51 @@ async fn a_running_downloads_files_agree_with_its_piece_map() {
     let wanted = [true, false, true];
     assert_eq!(disagreement(&set.metainfo().unwrap(), &wanted, progress.verified, &files, &map), None, "{map}");
     assert!(files[2] > 0, "c.bin, last in the torrent, gets pieces too: {files:?}");
+}
+
+/// Fails unless the file bytes `files` reports sum to the download's verified bytes and agree with its map.
+fn assert_files_agree(job: &Job, reply: &FilesReply) {
+    let list = reply.files.iter().map(|f| MetaFile { path: f.path.clone(), size: f.size }).collect();
+    let metainfo = Metainfo::new(job.info_hash, reply.name.clone().unwrap(), list, false, Vec::new()).unwrap();
+    let wanted: Vec<bool> = reply.files.iter().map(|f| f.selected).collect();
+    let bytes: Vec<u64> = reply.files.iter().map(|f| f.verified).collect();
+    let map = job.progress.piece_map.expect("an unfinished download has a piece map");
+    let wrong = disagreement(&metainfo, &wanted, job.progress.verified, &bytes, &map);
+    assert_eq!(wrong, None, "{:?} {} {map}", job.name, job.status.name());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_unfinished_test_download_reports_file_bytes_that_match_its_progress() {
+    let h = Harness::seeded();
+    let mut checked = Vec::new();
+    for job in h.status().await.iter().filter(|j| !matches!(j.status, JobStatus::Done { .. })) {
+        assert_files_agree(job, &h.files(&job.id.to_hex()[..6]).await);
+        checked.push((job.name.clone().unwrap(), job.status.name()));
+    }
+    let expected =
+        [("stackexchange", "paused"), ("openwebtext-2019", "error"), ("wikipedia-en-2026-09-text", "interrupted")];
+    assert_eq!(checked, expected.map(|(name, state)| (name.to_string(), state)));
+    h.changes(Request::Resume { refs: vec!["6f2c81".into()], all: false }).await.unwrap();
+    let jobs =
+        h.until("wikipedia is in the engine", |jobs| jobs.iter().any(|j| j.status.name() == "downloading")).await;
+    let running = jobs.iter().find(|j| j.status.name() == "downloading").unwrap();
+    assert_files_agree(running, &h.files("6f2c81").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_download_keeps_its_file_bytes_across_a_restart() {
+    let h = Harness::new();
+    h.swarm.set_rate(GIB / 2);
+    let set = torrent(33, "set", &[("a.bin", GIB), ("b.bin", GIB / 3), ("c.bin", GIB / 5)]);
+    h.get(h.torrent_file(&set), &["a.bin", "c.bin"]).await.unwrap();
+    h.until("a third is verified", |jobs| jobs[0].progress.verified >= GIB / 3).await;
+    h.changes(Request::Pause { refs: vec![prefix(&set)] }).await.unwrap();
+    let paused = h.file_bytes(&set).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let h = h.crash_and_restart().await;
+    let job = h.status().await.remove(0);
+    assert_eq!((job.status.name(), paused[0] + paused[2]), ("paused", job.progress.verified));
+    assert_eq!(h.file_bytes(&set).await, paused, "the restarted engine reports the bytes it saved at the pause");
 }
 
 #[tokio::test(flavor = "multi_thread")]

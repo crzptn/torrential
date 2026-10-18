@@ -196,9 +196,9 @@ impl Libtorrent {
             (A::TorrentChecked { .. }, Some(id)) => self.checked(id),
             (A::StateChanged { to, .. }, Some(id)) => self.state_changed(id, to),
             (A::ResumeDataSaved { data, .. }, Some(id)) => {
-                let verified = self.verified_bytes(id).ok();
+                let (verified, files) = self.verified_bytes(id).ok().unzip();
                 let piece_map = piece_map(&self.session, id, &self.torrents[&id]);
-                self.events.push(EngineEvent::ResumeData { id, data: data.into_bytes(), verified, piece_map });
+                self.events.push(EngineEvent::ResumeData { id, data: data.into_bytes(), verified, piece_map, files });
             }
             (A::ResumeDataFailed { error, .. }, Some(id)) => {
                 let error = Error::new(ErrorCode::StorageError, format!("libtorrent did not save its state: {error}"))
@@ -321,10 +321,10 @@ impl Libtorrent {
                     .map_err(engine_error)
                     .and_then(|pieces| Ok((pieces, self.verified_bytes(id)?)));
                 match counts {
-                    Ok((pieces, verified)) => {
+                    Ok((pieces, (verified, files))) => {
                         let damaged_pieces = pieces.selected - pieces.verified;
                         let piece_map = piece_map(&self.session, id, &self.torrents[&id]);
-                        self.events.push(EngineEvent::Checked { id, damaged_pieces, verified, piece_map });
+                        self.events.push(EngineEvent::Checked { id, damaged_pieces, verified, piece_map, files });
                     }
                     Err(error) => self.events.push(EngineEvent::Failed { id, error }),
                 }
@@ -339,10 +339,12 @@ impl Libtorrent {
         }
     }
 
-    fn verified_bytes(&self, id: TorrentId) -> Result<u64, Error> {
+    /// Verified bytes in the selected files, and in each file, selected or not, from one status.
+    fn verified_bytes(&self, id: TorrentId) -> Result<(u64, Vec<u64>), Error> {
         let t = self.torrents.get(&id).ok_or_else(|| Error::internal(format!("the engine has no torrent {id}")))?;
         let status = self.session.status(engine_id(id)).map_err(engine_error)?;
-        Ok(sample(&status, t).verified)
+        let all = t.files.as_ref().map(|files| vec![true; files.len()]);
+        Ok((sample(&status, t).verified, verified(&status.progress, t.files.as_deref(), all.as_deref())))
     }
 
     fn stats(&mut self) {
@@ -478,10 +480,7 @@ impl EnginePort for Libtorrent {
     }
 
     fn file_progress(&mut self, id: TorrentId) -> Result<Vec<u64>, Error> {
-        let status = self.session.status(engine_id(id)).map_err(engine_error)?;
-        let t = self.torrent(id)?;
-        let all = t.files.as_ref().map(|files| vec![true; files.len()]);
-        Ok(verified(&status.progress, t.files.as_deref(), all.as_deref()))
+        Ok(self.verified_bytes(id)?.1)
     }
 
     fn poll(&mut self, max_wait: Duration) -> Vec<EngineEvent> {

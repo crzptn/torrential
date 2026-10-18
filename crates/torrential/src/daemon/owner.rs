@@ -81,8 +81,18 @@ pub struct FilesInfo {
 #[derive(Clone, Debug)]
 pub struct DownloadFiles {
     pub wanted: Vec<bool>,
-    pub done: bool,
-    pub in_engine: bool,
+    pub verified: FileProgress,
+}
+
+/// Where each file's verified bytes come from.
+#[derive(Clone, Debug)]
+pub enum FileProgress {
+    /// Every wanted file is complete.
+    Done,
+    /// The engine has the download, so it counts them now.
+    Engine,
+    /// The last save's count, empty before the first save.
+    Saved(Vec<u64>),
 }
 
 #[derive(Clone, Debug)]
@@ -414,6 +424,7 @@ impl Owner {
             intent: Intent::Running,
             verified: 0,
             piece_map: None,
+            files_verified: None,
         };
         if dry_run {
             let job = JobEntry::new(record, metainfo, Observed::Absent).view();
@@ -567,11 +578,13 @@ impl Owner {
     fn job_files(&self, id: TorrentId) -> Option<FilesInfo> {
         let job = self.jobs.get(&id)?;
         let metainfo = job.metainfo.clone()?;
-        let download = DownloadFiles {
-            wanted: job.wanted().unwrap_or_else(|| vec![false; metainfo.files.len()]),
-            done: matches!(job.record.intent, Intent::Done { .. }),
-            in_engine: job.observed.in_engine(),
+        let verified = match (&job.record.intent, job.observed) {
+            (Intent::Done { .. }, _) => FileProgress::Done,
+            (_, Observed::InEngine(_)) => FileProgress::Engine,
+            _ => FileProgress::Saved(job.record.files_verified.clone().unwrap_or_default()),
         };
+        let download =
+            DownloadFiles { wanted: job.wanted().unwrap_or_else(|| vec![false; metainfo.files.len()]), verified };
         Some(FilesInfo { id, metainfo, source: "download", download: Some(download) })
     }
 
@@ -836,11 +849,11 @@ impl Owner {
                 }
             }
             EngineEvent::Paused { id } => self.paused(id),
-            EngineEvent::ResumeData { id, data, verified, piece_map } => {
-                self.resume_data(id, data, verified, piece_map)
+            EngineEvent::ResumeData { id, data, verified, piece_map, files } => {
+                self.resume_data(id, data, verified, piece_map, files)
             }
-            EngineEvent::Checked { id, damaged_pieces, verified, piece_map } => {
-                self.checked(id, damaged_pieces, verified, piece_map)
+            EngineEvent::Checked { id, damaged_pieces, verified, piece_map, files } => {
+                self.checked(id, damaged_pieces, verified, piece_map, files)
             }
             EngineEvent::Failed { id, error } => {
                 if self.probes.remove(&id) {
@@ -969,7 +982,14 @@ impl Owner {
         }
     }
 
-    fn resume_data(&mut self, id: TorrentId, data: Vec<u8>, verified: Option<u64>, piece_map: Option<PieceMap>) {
+    fn resume_data(
+        &mut self,
+        id: TorrentId,
+        data: Vec<u8>,
+        verified: Option<u64>,
+        piece_map: Option<PieceMap>,
+        files: Option<Vec<u64>>,
+    ) {
         let job = self.jobs.get(&id);
         // A periodic save asked for before a pause can arrive after it began. Only the save that
         // follows stopped writes is the last one.
@@ -983,6 +1003,7 @@ impl Owner {
         // The engine's count and map when the data was taken. The last stats can be older than the data.
         let verified = verified.unwrap_or_else(|| job.verified());
         let piece_map = piece_map.or_else(|| job.piece_map());
+        let files = files.or_else(|| job.record.files_verified.clone());
         if job.observed == Observed::InEngine(Phase::Finishing { writes_stopped: true }) {
             let finished_at = now();
             let size = job.selected_size().unwrap_or(verified);
@@ -997,14 +1018,15 @@ impl Owner {
             self.engine.send(EngineCommand::Remove(id));
             self.draining.insert(id);
             self.publish(id);
-        } else if self.store.save_resume(id, &data, verified, piece_map, now()).is_ok() {
+        } else if self.store.save_resume(id, &data, verified, piece_map, files.as_deref(), now()).is_ok() {
             let record = &mut self.jobs.get_mut(&id).expect("checked above").record;
             record.verified = verified;
             record.piece_map = piece_map;
+            record.files_verified = files;
         }
     }
 
-    fn checked(&mut self, id: TorrentId, damaged: u32, verified: u64, piece_map: Option<PieceMap>) {
+    fn checked(&mut self, id: TorrentId, damaged: u32, verified: u64, piece_map: Option<PieceMap>, files: Vec<u64>) {
         let Some(job) = self.jobs.get_mut(&id) else { return };
         let Some(mode) = job.verify.take() else { return };
         // The check replaces what the last save recorded, so progress and the next restart start from it.
@@ -1012,6 +1034,7 @@ impl Owner {
         job.stats.verified = verified;
         job.record.piece_map = piece_map;
         job.stats.piece_map = piece_map;
+        job.record.files_verified = Some(files);
         self.engine.send(EngineCommand::SaveResume(id));
         let short = id.to_hex()[..6].to_string();
         let intent = job.record.intent.clone();

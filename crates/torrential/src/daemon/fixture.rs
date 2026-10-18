@@ -357,9 +357,12 @@ pub fn seed(store: &mut Store, downloads: &Path, now: i64) -> Result<(), Error> 
             intent: seed.intent,
             verified: landing.verified,
             piece_map: landing.piece_map,
+            files_verified: Some(landing.files),
         };
         store.insert(&record, Some(&seed.torrent.bytes()), added_at)?;
-        store.save_resume(id, arrived.to_string().as_bytes(), landing.verified, landing.piece_map, added_at)?;
+        let resume = arrived.to_string();
+        let files = record.files_verified.as_deref();
+        store.save_resume(id, resume.as_bytes(), record.verified, record.piece_map, files, added_at)?;
     }
     Ok(())
 }
