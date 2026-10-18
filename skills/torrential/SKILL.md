@@ -26,7 +26,7 @@ When stdout is not a terminal, output is plain text.
 - Errors go to stderr as `error[<code>]: <message>`, followed by `hint:` with what to do.
 - Add `--json` to any command for exact values. Sizes are bytes, rates are bytes per second, and times are Unix seconds. `wait --json` prints one JSON object per line.
 
-IDs are the first characters of the infohash. Any unique prefix of 4 or more characters works, and a search result keeps its ID after you download it. Every command that takes a reference also accepts a full infohash, a magnet link, a `.torrent` path, or a `.torrent` URL.
+IDs are the first characters of the infohash. Any unique prefix of 4 or more characters works, and a search result keeps its ID after you download it. Every command that takes an ID also accepts a full infohash or a magnet link. `files` and `get` also accept a `.torrent` path or a `.torrent` URL.
 
 ## What search ranks for
 
