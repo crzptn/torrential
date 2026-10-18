@@ -678,7 +678,9 @@ fn sample(code: ErrorCode) -> Error {
             "torrential never resets state on its own; move /Users/ada/.local/state/torrential/state.db aside to start fresh, or restore a backup",
         ),
         ErrorCode::DiskFull => admission::check_disk(disk, 70 * GIB, 0).unwrap_err(),
-        ErrorCode::TooLarge => admission::check_size(&plan(vec![]), admission::DEFAULT_MAX_SIZE).unwrap_err(),
+        ErrorCode::TooLarge => {
+            admission::check_size(plan(vec![]).selected_size, admission::Cap::new(None, None)).unwrap_err()
+        }
         ErrorCode::NoSelection => {
             crate::daemon::files::wanted(&film(), &Selection::Patterns(vec!["*.mkv".into()])).unwrap_err()
         }

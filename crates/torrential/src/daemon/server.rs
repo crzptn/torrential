@@ -229,7 +229,7 @@ async fn metadata(ctx: &Ctx, target: MetaTarget, deadline: Instant) -> Result<Fi
 }
 
 async fn get(ctx: &Ctx, request: GetRequest) -> Result<torrential_core::protocol::GetReply, Error> {
-    let GetRequest { target, dir, files, max_size, dry_run } = request;
+    let GetRequest { target, dir, files, max_size, setup_max_size, dry_run } = request;
     let mut source = resolve(ctx, target, "get").await?;
     if dry_run && let Source::Magnet(magnet) = &source {
         let info = metadata(ctx, MetaTarget::Magnet(magnet.clone()), Instant::now() + METADATA_WAIT).await?;
@@ -238,7 +238,7 @@ async fn get(ctx: &Ctx, request: GetRequest) -> Result<torrential_core::protocol
             None => Source::Torrent { metainfo: (*info.metainfo).clone(), origin: Origin::Peers },
         };
     }
-    let get = GetCommand { source, dir, files, max_size, dry_run };
+    let get = GetCommand { source, dir, files, max_size, setup_max_size, dry_run };
     ctx.owner.ask(|reply| Command::Get { get: Box::new(get), reply }).await
 }
 

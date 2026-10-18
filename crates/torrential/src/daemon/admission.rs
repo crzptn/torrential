@@ -11,7 +11,7 @@ use super::engine_port::Metainfo;
 use super::files;
 
 pub const GIB: u64 = 1024 * 1024 * 1024;
-pub const DEFAULT_MAX_SIZE: u64 = 50 * GIB;
+const DEFAULT_MAX_SIZE: u64 = 50 * GIB;
 const MIN_RESERVE: u64 = 2 * GIB;
 const MAX_RESERVE: u64 = 10 * GIB;
 
@@ -77,18 +77,35 @@ pub fn plan(
     Ok(Plan { wanted, selected_size, destination: dir.join(&metainfo.name), conflicts, space })
 }
 
-pub fn check_size(plan: &Plan, max_size: u64) -> Result<(), Error> {
-    if plan.selected_size <= max_size {
+/// A download's size cap: `--max-size`, else the max size from `torrential setup`, else
+/// [`DEFAULT_MAX_SIZE`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Cap {
+    pub bytes: u64,
+    /// So a refusal names the setup answer as what set it.
+    pub from_setup: bool,
+}
+
+impl Cap {
+    pub fn new(flag: Option<u64>, setup: Option<u64>) -> Self {
+        match (flag, setup) {
+            (Some(bytes), _) => Self { bytes, from_setup: false },
+            (None, Some(bytes)) => Self { bytes, from_setup: true },
+            (None, None) => Self { bytes: DEFAULT_MAX_SIZE, from_setup: false },
+        }
+    }
+}
+
+pub fn check_size(selected: u64, cap: Cap) -> Result<(), Error> {
+    if selected <= cap.bytes {
         return Ok(());
     }
+    let from = if cap.from_setup { " from torrential setup" } else { "" };
     Err(Error::new(
         ErrorCode::TooLarge,
-        format!("the selection is {}, over the {} cap", format_size(plan.selected_size), format_limit(max_size)),
+        format!("the selection is {}, over the {} cap{from}", format_size(selected), format_limit(cap.bytes)),
     )
-    .with_hint(format!(
-        "add --max-size {}GiB to allow it, or pick fewer files with --files",
-        plan.selected_size.div_ceil(GIB)
-    )))
+    .with_hint(format!("add --max-size {}GiB to allow it, or pick fewer files with --files", selected.div_ceil(GIB))))
 }
 
 pub fn check_conflicts(plan: &Plan) -> Result<(), Error> {
@@ -251,12 +268,20 @@ mod tests {
     #[test]
     fn refuses_past_the_size_cap_unless_raised() {
         let disk = FakeDisk::new(Space { free: 500 * GIB, total: 1000 * GIB, ..DISK });
-        let plan = plan_for(60 * GIB, &disk);
-        let err = check_size(&plan, DEFAULT_MAX_SIZE).unwrap_err();
+        let size = plan_for(60 * GIB, &disk).selected_size;
+        let err = check_size(size, Cap::new(None, None)).unwrap_err();
         assert_eq!(err.code, ErrorCode::TooLarge);
         assert_eq!(err.message, "the selection is 61.0 GiB, over the 50 GiB cap");
         assert_eq!(err.hint.as_deref(), Some("add --max-size 61GiB to allow it, or pick fewer files with --files"));
-        assert_eq!(check_size(&plan, 61 * GIB), Ok(()));
+        assert_eq!(check_size(size, Cap::new(Some(61 * GIB), Some(GIB))), Ok(()));
+    }
+
+    #[test]
+    fn a_refusal_names_a_cap_from_setup() {
+        let err = check_size(2_254_911_385, Cap::new(None, Some(2_000_000_000))).unwrap_err();
+        assert_eq!(err.message, "the selection is 2.1 GiB, over the 2 GB cap from torrential setup");
+        let flagged = check_size(2_254_911_385, Cap::new(Some(GIB), Some(2_000_000_000))).unwrap_err();
+        assert_eq!(flagged.message, "the selection is 2.1 GiB, over the 1 GiB cap");
     }
 
     #[test]

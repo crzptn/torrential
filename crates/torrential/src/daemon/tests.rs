@@ -95,6 +95,7 @@ impl Harness {
             dir: Some(self.dir.path().join("downloads")),
             files: files.iter().map(|f| f.to_string()).collect(),
             max_size: None,
+            setup_max_size: None,
             dry_run: false,
         })
         .await
@@ -316,7 +317,40 @@ async fn disk_size_and_existing_files_refuse_a_download() {
 }
 
 fn request(h: &Harness, target: Target) -> GetRequest {
-    GetRequest { target, dir: Some(h.downloads()), files: Vec::new(), max_size: None, dry_run: false }
+    GetRequest {
+        target,
+        dir: Some(h.downloads()),
+        files: Vec::new(),
+        max_size: None,
+        setup_max_size: None,
+        dry_run: false,
+    }
+}
+
+/// Starts a 3 GiB download from a magnet under a 2 GiB cap from setup, which stops once the file list arrives.
+async fn over_its_setup_cap(h: &Harness, n: u8) -> FakeTorrentFile {
+    let film = torrent(n, "film", &[("film.mkv", 2 * GIB), ("extras.mkv", GIB)]);
+    h.swarm.publish(film.clone());
+    h.get_with(GetRequest { setup_max_size: Some(2 * GIB), ..request(h, magnet(&film)) }).await.unwrap();
+    let id = film.info_hash.id();
+    h.until("stopped", |jobs| jobs.iter().any(|j| j.id == id && j.status.name() == "error")).await;
+    film
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cap_from_setup_is_named_when_the_file_list_arrives_over_it() {
+    let h = Harness::new();
+    over_its_setup_cap(&h, 41).await;
+    let jobs = h.status().await;
+    let JobStatus::Error { error } = &jobs[0].status else { panic!("expected an error, got {jobs:?}") };
+    assert_eq!(
+        (error.code, error.message.as_str(), error.hint.as_deref()),
+        (
+            ErrorCode::TooLarge,
+            "the selection is 3.0 GiB, over the 2 GiB cap from torrential setup",
+            Some("add --max-size 3GiB to allow it, or pick fewer files with --files")
+        )
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

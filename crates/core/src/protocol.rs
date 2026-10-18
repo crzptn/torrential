@@ -13,7 +13,7 @@ use crate::id::Target;
 use crate::job::{Job, Selection, TorrentFile};
 use crate::release::{SearchQuery, SearchResult};
 
-pub const WIRE_VERSION: u32 = 1;
+pub const WIRE_VERSION: u32 = 2;
 /// Version of every JSON document printed with `--json`.
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_FRAME: usize = 32 * 1024 * 1024;
@@ -71,8 +71,10 @@ pub struct GetRequest {
     pub dir: Option<PathBuf>,
     /// Globs or exact paths. Empty means every file.
     pub files: Vec<String>,
-    /// Overrides the per-download size cap.
+    /// `--max-size`, which wins over `setup_max_size`. On an existing download it replaces the cap.
     pub max_size: Option<u64>,
+    /// The max size from `torrential setup`, the cap of a new download without `--max-size`.
+    pub setup_max_size: Option<u64>,
     pub dry_run: bool,
 }
 

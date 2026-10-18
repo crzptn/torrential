@@ -92,7 +92,8 @@ impl torrential_tui::Backend for EngineBackend {
             target: Target::Prefix(reference.to_string()),
             dir: None,
             files: files.unwrap_or_default().iter().map(|path| globset::escape(path)).collect(),
-            max_size: config::preferences(&self.paths)?.and_then(|p| p.max_size),
+            max_size: None,
+            setup_max_size: config::preferences(&self.paths)?.and_then(|p| p.max_size),
             dry_run: false,
         });
         match self.conn()?.call(&request)? {

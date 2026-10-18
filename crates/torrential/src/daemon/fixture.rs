@@ -10,7 +10,7 @@ use torrential_core::{
     Category, Error, ErrorCode, Flag, InfoHash, Release, ReleaseId, Selection, SourceOutcome, TorrentId,
 };
 
-use super::admission::DEFAULT_MAX_SIZE;
+use super::admission::Cap;
 use super::book::{Intent, JobRecord};
 use super::engine_port::{FakeTorrentFile, Swarm, fake_landing};
 use super::search_port::{self, FakeSource};
@@ -351,7 +351,7 @@ pub fn seed(store: &mut Store, downloads: &Path, now: i64) -> Result<(), Error> 
             name: Some(seed.torrent.name.clone()),
             dir: downloads.to_path_buf(),
             selection: Selection::All,
-            max_size: DEFAULT_MAX_SIZE,
+            cap: Cap::new(None, None),
             magnet: None,
             added_at,
             intent: seed.intent,

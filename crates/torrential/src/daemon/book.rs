@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use torrential_core::{Error, InfoHash, Job, JobStatus, PieceMap, Progress, Selection, TorrentId};
 
+use super::admission::Cap;
 use super::engine_port::{Metainfo, Stats};
 use super::files;
 
@@ -88,7 +89,7 @@ pub struct JobRecord {
     pub name: Option<String>,
     pub dir: PathBuf,
     pub selection: Selection,
-    pub max_size: u64,
+    pub cap: Cap,
     /// How to add the torrent before its metadata is known.
     pub magnet: Option<String>,
     pub added_at: i64,
@@ -306,7 +307,7 @@ mod tests {
             name: None,
             dir: PathBuf::from("/d"),
             selection: Selection::All,
-            max_size: 1,
+            cap: Cap { bytes: 1, from_setup: false },
             magnet: None,
             added_at,
             intent,

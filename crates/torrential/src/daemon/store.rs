@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, Release, Selection, TorrentId};
 
+use super::admission::Cap;
 use super::book::{Intent, JobRecord};
 
 /// A database records how many entries it has run, so a shipped entry must never change.
@@ -53,6 +54,7 @@ CREATE TABLE results (
 "#,
     "ALTER TABLE jobs ADD COLUMN piece_map TEXT;",
     "ALTER TABLE jobs ADD COLUMN files_verified TEXT;",
+    "ALTER TABLE jobs ADD COLUMN max_size_from_setup INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// A removed download, remembered briefly so a repeated `rm` reports `already_removed`.
@@ -150,7 +152,7 @@ impl Store {
             .conn
             .prepare(
                 "SELECT j.id, j.info_hash, j.name, j.dir, j.selection, j.max_size, j.magnet, j.intent, j.finished_at, \
-                 j.error, j.added_at, j.verified, j.piece_map, j.files_verified, m.bytes FROM jobs j \
+                 j.error, j.added_at, j.verified, j.piece_map, j.files_verified, m.bytes, j.max_size_from_setup FROM jobs j \
                  LEFT JOIN metainfo m ON m.id = j.id \
                  ORDER BY j.added_at",
             )
@@ -173,6 +175,7 @@ impl Store {
                     r.get::<_, Option<String>>(12)?,
                     r.get::<_, Option<String>>(13)?,
                     r.get::<_, Option<Vec<u8>>>(14)?,
+                    r.get::<_, bool>(15)?,
                 ))
             })
             .map_err(|e| self.fail(e))?;
@@ -194,6 +197,7 @@ impl Store {
                 piece_map,
                 files_verified,
                 bytes,
+                from_setup,
             ) = row.map_err(|e| self.fail(e))?;
             let bad = |what: &str| corrupt(&self.path, &format!("job {id} has an unreadable {what}"));
             let intent = match (intent.as_str(), finished_at, error) {
@@ -211,7 +215,7 @@ impl Store {
                 name,
                 dir: PathBuf::from(std::ffi::OsString::from_vec(dir)),
                 selection: serde_json::from_str::<Selection>(&selection).map_err(|_| bad("selection"))?,
-                max_size: max_size as u64,
+                cap: Cap { bytes: max_size as u64, from_setup },
                 magnet,
                 added_at,
                 intent,
@@ -232,14 +236,15 @@ impl Store {
         self.write(|tx| {
             tx.execute(
                 "INSERT INTO jobs (id, info_hash, name, dir, selection, max_size, magnet, intent, finished_at, error, added_at, verified, \
-                 piece_map, files_verified) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 piece_map, files_verified, max_size_from_setup) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     record.id.to_hex(),
                     json(&record.info_hash),
                     record.name,
                     record.dir.as_os_str().as_bytes(),
                     json(&record.selection),
-                    record.max_size as i64,
+                    record.cap.bytes as i64,
                     record.magnet,
                     intent,
                     finished_at,
@@ -248,6 +253,7 @@ impl Store {
                     record.verified as i64,
                     record.piece_map.map(|m| m.to_string()),
                     record.files_verified.as_ref().map(json),
+                    record.cap.from_setup,
                 ],
             )?;
             insert_aliases(tx, record.id, &record.info_hash)?;
@@ -539,7 +545,7 @@ mod tests {
             name: Some(format!("job {n}")),
             dir: PathBuf::from("/dl"),
             selection: Selection::Patterns(vec!["*.mkv".into()]),
-            max_size: 7,
+            cap: Cap { bytes: 7, from_setup: true },
             magnet: Some("magnet:?xt=urn:btih:x".into()),
             added_at: 100,
             intent: Intent::Running,

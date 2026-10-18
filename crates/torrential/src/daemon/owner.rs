@@ -11,7 +11,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use torrential_core::protocol::{Change, GetOutcome, GetReply};
 use torrential_core::{Error, ErrorCode, HexPrefix, InfoHash, Job, PieceMap, Release, Selection, Target, TorrentId};
 
-use super::admission::{self, DEFAULT_MAX_SIZE, Disk};
+use super::admission::{self, Cap, Disk};
 use super::book::{self, Intent, JobEntry, JobRecord, Observed, Phase, Verify};
 use super::engine_port::{
     Activity, AddSource, AddTorrent, EngineCommand, EngineEvent, EngineHandle, Metainfo, ParseTorrent,
@@ -107,7 +107,9 @@ pub struct GetCommand {
     pub source: Source,
     pub dir: Option<PathBuf>,
     pub files: Vec<String>,
+    /// `--max-size`.
     pub max_size: Option<u64>,
+    pub setup_max_size: Option<u64>,
     pub dry_run: bool,
 }
 
@@ -380,7 +382,7 @@ impl Owner {
     }
 
     fn get(&mut self, get: GetCommand) -> Result<GetReply, Error> {
-        let GetCommand { source, dir, files, max_size, dry_run } = get;
+        let GetCommand { source, dir, files, max_size, setup_max_size, dry_run } = get;
         if !files.is_empty() {
             super::files::compile(&files)?;
         }
@@ -404,11 +406,11 @@ impl Owner {
         };
         let name = metainfo.as_ref().map(|m| m.name.clone()).or_else(|| magnet.as_ref().and_then(|m| m.name.clone()));
         let dir = dir.unwrap_or_else(|| self.config.default_dir.clone());
-        let max_size = max_size.unwrap_or(DEFAULT_MAX_SIZE);
+        let cap = Cap::new(max_size, setup_max_size);
         let plan =
             metainfo.as_deref().map(|m| admission::plan(m, &selection, &dir, None, self.disk.as_ref())).transpose()?;
         if let Some(plan) = &plan {
-            admission::check_size(plan, max_size)?;
+            admission::check_size(plan.selected_size, cap)?;
             if !dry_run {
                 admission::check_conflicts(plan)?;
             }
@@ -420,7 +422,7 @@ impl Owner {
             name,
             dir,
             selection,
-            max_size,
+            cap,
             magnet: magnet.map(|m| m.uri),
             added_at: now(),
             intent: Intent::Running,
@@ -492,7 +494,7 @@ impl Owner {
         };
         let before = job.wanted();
         let plan = admission::plan(&metainfo, &selection, &job.record.dir, before.as_deref(), self.disk.as_ref())?;
-        admission::check_size(&plan, job.record.max_size)?;
+        admission::check_size(plan.selected_size, job.record.cap)?;
         if !dry_run {
             admission::check_conflicts(&plan)?;
         }
@@ -903,9 +905,9 @@ impl Owner {
         job.record.name = Some(metainfo.name.clone());
         job.record.info_hash = metainfo.info_hash;
         job.metainfo = Some(metainfo.clone());
-        let (dir, max_size, selection) = (job.record.dir.clone(), job.record.max_size, job.record.selection.clone());
+        let (dir, cap, selection) = (job.record.dir.clone(), job.record.cap, job.record.selection.clone());
         let admitted = admission::plan(&metainfo, &selection, &dir, None, self.disk.as_ref()).and_then(|plan| {
-            admission::check_size(&plan, max_size)?;
+            admission::check_size(plan.selected_size, cap)?;
             admission::check_conflicts(&plan)?;
             admission::check_disk(plan.space, plan.selected_size, self.others_remaining(&dir, id))?;
             Ok(plan)
