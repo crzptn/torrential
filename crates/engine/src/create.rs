@@ -40,19 +40,11 @@ pub enum TorrentFormat {
 /// Hashes a file, or every file under a directory, into a `.torrent`. The
 /// torrent's name is the path's last component, and files are ordered by path
 /// so the same tree always produces the same info hash.
-pub fn create_torrent(
-    path: &Path,
-    piece_size: PieceSize,
-    format: TorrentFormat,
-) -> Result<Metainfo, EngineError> {
-    let path = path.canonicalize().map_err(|e| {
-        EngineError::new(ErrorKind::InvalidInput, format!("{}: {e}", path.display()))
-    })?;
-    let bytes = ffi::create_torrent(
-        bridge::path_str(&path)?,
-        piece_size.get(),
-        format == TorrentFormat::Hybrid,
-    )
-    .map_err(bridge::error)?;
+pub fn create_torrent(path: &Path, piece_size: PieceSize, format: TorrentFormat) -> Result<Metainfo, EngineError> {
+    let path = path
+        .canonicalize()
+        .map_err(|e| EngineError::new(ErrorKind::InvalidInput, format!("{}: {e}", path.display())))?;
+    let bytes = ffi::create_torrent(bridge::path_str(&path)?, piece_size.get(), format == TorrentFormat::Hybrid)
+        .map_err(bridge::error)?;
     Metainfo::from_bytes(bytes)
 }

@@ -1,9 +1,7 @@
 use std::time::Duration;
 
 use tempfile::TempDir;
-use torrential_engine::{
-    AddTorrent, Alert, SessionStats, TorrentFormat, TorrentSource, UploadPolicy,
-};
+use torrential_engine::{AddTorrent, Alert, SessionStats, TorrentFormat, TorrentSource, UploadPolicy};
 
 use crate::support::{Fixture, Node, loopback, sha256_file, total_size, upload};
 
@@ -29,9 +27,7 @@ fn serve_third_peer(policy: UploadPolicy, name: &str) -> Served {
     let mut add = AddTorrent::new(TorrentSource::Metainfo(torrent.clone()), leecher_dir.path());
     add.peers = vec![seeder.addr()];
     let leecher_id = leecher.add(add);
-    leecher.wait_for("leecher finish", |a| {
-        matches!(a, Alert::TorrentFinished { .. })
-    });
+    leecher.wait_for("leecher finish", |a| matches!(a, Alert::TorrentFinished { .. }));
     drop(seeder);
 
     let mut peer = Node::new(loopback());
@@ -41,15 +37,9 @@ fn serve_third_peer(policy: UploadPolicy, name: &str) -> Served {
     let peer_id = peer.add(add);
     match policy {
         UploadPolicy::Off => {
-            peer.wait_until("connected to the leecher", |s| {
-                s.status(peer_id).unwrap().seeds == 1
-            });
+            peer.wait_until("connected to the leecher", |s| s.status(peer_id).unwrap().seeds == 1);
             peer.idle(Duration::from_secs(3));
-            assert_eq!(
-                peer.status(peer_id).seeds,
-                1,
-                "the leecher stayed connected"
-            );
+            assert_eq!(peer.status(peer_id).seeds, 1, "the leecher stayed connected");
         }
         _ => {
             peer.finish(peer_id);
@@ -64,8 +54,7 @@ fn serve_third_peer(policy: UploadPolicy, name: &str) -> Served {
     }
 
     leecher.session.post_session_stats().unwrap();
-    let Alert::SessionStats(leecher_stats) =
-        leecher.wait_for("session stats", |a| matches!(a, Alert::SessionStats(_)))
+    let Alert::SessionStats(leecher_stats) = leecher.wait_for("session stats", |a| matches!(a, Alert::SessionStats(_)))
     else {
         unreachable!()
     };
@@ -90,11 +79,6 @@ fn upload_off_sends_no_payload_to_a_peer_that_needs_it() {
 fn upload_normal_serves_the_same_peer() {
     let served = serve_third_peer(UploadPolicy::Normal, "normal");
     assert_eq!(served.peer_verified, served.total);
-    assert!(
-        served.leecher_uploaded >= served.total,
-        "uploaded {} of {}",
-        served.leecher_uploaded,
-        served.total
-    );
+    assert!(served.leecher_uploaded >= served.total, "uploaded {} of {}", served.leecher_uploaded, served.total);
     assert!(served.leecher_stats.sent_payload_bytes >= served.total);
 }

@@ -145,13 +145,23 @@ impl SearchQuery {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "outcome")]
 pub enum SourceOutcome {
-    Ok { results: u32 },
-    Cached { results: u32 },
+    Ok {
+        results: u32,
+    },
+    Cached {
+        results: u32,
+    },
     Timeout,
-    Http { status: u16 },
-    Connect { reason: String },
+    Http {
+        status: u16,
+    },
+    Connect {
+        reason: String,
+    },
     /// A response that did not parse.
-    BadResponse { reason: String },
+    BadResponse {
+        reason: String,
+    },
     /// Most rows matched no query word, as when an API returns its latest uploads.
     Irrelevant,
 }
@@ -189,11 +199,8 @@ mod tests {
 
     #[test]
     fn source_reports_flatten_their_outcome() {
-        let report = SourceReport {
-            source: "apibay".into(),
-            outcome: SourceOutcome::Http { status: 503 },
-            elapsed_ms: 412,
-        };
+        let report =
+            SourceReport { source: "apibay".into(), outcome: SourceOutcome::Http { status: 503 }, elapsed_ms: 412 };
         assert_eq!(
             serde_json::to_string(&report).unwrap(),
             r#"{"source":"apibay","outcome":"http","status":503,"elapsed_ms":412}"#

@@ -37,10 +37,14 @@ pub enum JobStatus {
     Downloading,
     Paused,
     /// Every selected piece passed its hash check and was written. Nothing uploads after this.
-    Done { finished_at: i64 },
+    Done {
+        finished_at: i64,
+    },
     /// The engine stopped while the download was active, for example at a reboot.
     Interrupted,
-    Error { error: Error },
+    Error {
+        error: Error,
+    },
 }
 
 impl JobStatus {

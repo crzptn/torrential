@@ -6,8 +6,8 @@ use crate::config::{Config, Dht, UploadPolicy};
 use crate::error::{EngineError, ErrorKind, NativeError};
 use crate::identity::{InfoHash, InfoHashV1, InfoHashV2};
 use crate::torrent::{
-    AddTorrent, FileEntry, FileIndex, FilePriority, FileProgress, FileSelection, Progress,
-    ResumeData, TorrentSource, TorrentState, TorrentStatus,
+    AddTorrent, FileEntry, FileIndex, FilePriority, FileProgress, FileSelection, Progress, ResumeData, TorrentSource,
+    TorrentState, TorrentStatus,
 };
 
 #[cxx::bridge(namespace = "torrential")]
@@ -206,18 +206,13 @@ pub(crate) mod ffi {
         fn add_torrent(self: Pin<&mut Session>, params: &AddParams) -> Result<AddResult>;
         fn pause(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn resume(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
-        fn set_file_priorities(
-            self: Pin<&mut Session>,
-            id: &[u8],
-            priorities: &[PriorityRecord],
-        ) -> Result<()>;
+        fn set_file_priorities(self: Pin<&mut Session>, id: &[u8], priorities: &[PriorityRecord]) -> Result<()>;
         fn force_recheck(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn announce_to_dht(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn save_resume_data(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn save_resume_data_if_progressed(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
         fn remove(self: Pin<&mut Session>, id: &[u8]) -> Result<()>;
-        fn connect_peer(self: Pin<&mut Session>, id: &[u8], address: &str, port: u16)
-        -> Result<()>;
+        fn connect_peer(self: Pin<&mut Session>, id: &[u8], address: &str, port: u16) -> Result<()>;
         fn metainfo(self: &Session, id: &[u8]) -> Result<Vec<u8>>;
         fn info_dictionary(self: &Session, id: &[u8]) -> Result<Vec<u8>>;
         fn files(self: &Session, id: &[u8]) -> Result<Vec<FileRecord>>;
@@ -246,9 +241,7 @@ unsafe impl Send for ffi::Session {}
 /// `FailureKind` discriminant in front of it.
 pub(crate) fn error(e: cxx::Exception) -> EngineError {
     let what = e.what();
-    let Some((repr, message)) = what
-        .split_once(':')
-        .and_then(|(kind, message)| Some((kind.parse().ok()?, message)))
+    let Some((repr, message)) = what.split_once(':').and_then(|(kind, message)| Some((kind.parse().ok()?, message)))
     else {
         return EngineError::new(ErrorKind::Native, what);
     };
@@ -265,23 +258,13 @@ pub(crate) fn info_hash(h: &ffi::Hashes) -> Result<InfoHash, EngineError> {
     match (h.has_v1, h.has_v2) {
         (true, false) => Ok(InfoHash::V1(InfoHashV1::from_bytes(h.v1))),
         (false, true) => Ok(InfoHash::V2(InfoHashV2::from_bytes(h.v2))),
-        (true, true) => Ok(InfoHash::Hybrid {
-            v1: InfoHashV1::from_bytes(h.v1),
-            v2: InfoHashV2::from_bytes(h.v2),
-        }),
-        (false, false) => Err(EngineError::new(
-            ErrorKind::Native,
-            "record has no info hash",
-        )),
+        (true, true) => Ok(InfoHash::Hybrid { v1: InfoHashV1::from_bytes(h.v1), v2: InfoHashV2::from_bytes(h.v2) }),
+        (false, false) => Err(EngineError::new(ErrorKind::Native, "record has no info hash")),
     }
 }
 
 fn native_error(e: ffi::ErrorRecord) -> Option<NativeError> {
-    (e.code != 0).then_some(NativeError {
-        category: e.category,
-        code: e.code,
-        message: e.message,
-    })
+    (e.code != 0).then_some(NativeError { category: e.category, code: e.code, message: e.message })
 }
 
 fn required_error(e: ffi::ErrorRecord) -> NativeError {
@@ -339,21 +322,12 @@ fn priority_from(p: u8) -> FilePriority {
 }
 
 pub(crate) fn path_str(path: &Path) -> Result<&str, EngineError> {
-    path.to_str().ok_or_else(|| {
-        EngineError::new(
-            ErrorKind::InvalidInput,
-            format!("path is not UTF-8: {}", path.display()),
-        )
-    })
+    path.to_str()
+        .ok_or_else(|| EngineError::new(ErrorKind::InvalidInput, format!("path is not UTF-8: {}", path.display())))
 }
 
 pub(crate) fn settings(config: &Config) -> ffi::SessionSettings {
-    let listen_interfaces = config
-        .listen
-        .iter()
-        .map(SocketAddr::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
+    let listen_interfaces = config.listen.iter().map(SocketAddr::to_string).collect::<Vec<_>>().join(",");
     let (dht, dht_bootstrap_nodes) = match &config.dht {
         Dht::Off => (false, String::new()),
         Dht::On { bootstrap_nodes } => (true, bootstrap_nodes.join(",")),
@@ -377,10 +351,7 @@ pub(crate) fn settings(config: &Config) -> ffi::SessionSettings {
         multiple_connections_per_ip: config.connections.multiple_per_ip,
         peer_fingerprint: config.client.peer_id_prefix.clone(),
         user_agent: config.client.user_agent.clone(),
-        state: config
-            .dht_state
-            .as_ref()
-            .map_or_else(Vec::new, |s| s.as_bytes().to_vec()),
+        state: config.dht_state.as_ref().map_or_else(Vec::new, |s| s.as_bytes().to_vec()),
     }
 }
 
@@ -391,16 +362,8 @@ fn setting_int(value: u32) -> i32 {
 pub(crate) fn add_params(add: &AddTorrent) -> Result<ffi::AddParams, EngineError> {
     let (source, magnet, bytes) = match &add.source {
         TorrentSource::Magnet(m) => (ffi::SourceKind::Magnet, m.as_str().to_owned(), Vec::new()),
-        TorrentSource::Metainfo(m) => (
-            ffi::SourceKind::Metainfo,
-            String::new(),
-            m.as_bytes().to_vec(),
-        ),
-        TorrentSource::Resume(r) => (
-            ffi::SourceKind::Resume,
-            String::new(),
-            r.as_bytes().to_vec(),
-        ),
+        TorrentSource::Metainfo(m) => (ffi::SourceKind::Metainfo, String::new(), m.as_bytes().to_vec()),
+        TorrentSource::Resume(r) => (ffi::SourceKind::Resume, String::new(), r.as_bytes().to_vec()),
     };
     let (all_files, selected) = match &add.files {
         FileSelection::All => (true, Vec::new()),
@@ -421,20 +384,13 @@ pub(crate) fn add_params(add: &AddTorrent) -> Result<ffi::AddParams, EngineError
 }
 
 pub(crate) fn endpoint(peer: &SocketAddr) -> ffi::Endpoint {
-    ffi::Endpoint {
-        address: peer.ip().to_string(),
-        port: peer.port(),
-    }
+    ffi::Endpoint { address: peer.ip().to_string(), port: peer.port() }
 }
 
 pub(crate) fn file_entries(records: Vec<ffi::FileRecord>) -> Vec<FileEntry> {
     records
         .into_iter()
-        .map(|r| FileEntry {
-            index: FileIndex::new(r.index),
-            path: PathBuf::from(r.path),
-            size: r.size,
-        })
+        .map(|r| FileEntry { index: FileIndex::new(r.index), path: PathBuf::from(r.path), size: r.size })
         .collect()
 }
 
@@ -479,44 +435,19 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
     use ffi::AlertKind as K;
     let torrent = || info_hash(&r.hashes);
     Ok(match r.kind {
-        K::MetadataReceived => Alert::MetadataReceived {
-            torrent: torrent()?,
-        },
-        K::MetadataFailed => Alert::MetadataFailed {
-            torrent: torrent()?,
-            error: required_error(r.error),
-        },
-        K::TorrentFinished => Alert::TorrentFinished {
-            torrent: torrent()?,
-        },
-        K::TorrentPaused => Alert::TorrentPaused {
-            torrent: torrent()?,
-        },
-        K::TorrentResumed => Alert::TorrentResumed {
-            torrent: torrent()?,
-        },
-        K::TorrentChecked => Alert::TorrentChecked {
-            torrent: torrent()?,
-        },
-        K::StateChanged => Alert::StateChanged {
-            torrent: torrent()?,
-            from: state(r.from)?,
-            to: state(r.to)?,
-        },
+        K::MetadataReceived => Alert::MetadataReceived { torrent: torrent()? },
+        K::MetadataFailed => Alert::MetadataFailed { torrent: torrent()?, error: required_error(r.error) },
+        K::TorrentFinished => Alert::TorrentFinished { torrent: torrent()? },
+        K::TorrentPaused => Alert::TorrentPaused { torrent: torrent()? },
+        K::TorrentResumed => Alert::TorrentResumed { torrent: torrent()? },
+        K::TorrentChecked => Alert::TorrentChecked { torrent: torrent()? },
+        K::StateChanged => Alert::StateChanged { torrent: torrent()?, from: state(r.from)?, to: state(r.to)? },
         K::ResumeDataSaved => {
             let torrent = torrent()?;
-            Alert::ResumeDataSaved {
-                torrent,
-                data: ResumeData::new(r.bytes, torrent),
-            }
+            Alert::ResumeDataSaved { torrent, data: ResumeData::new(r.bytes, torrent) }
         }
-        K::ResumeDataFailed => Alert::ResumeDataFailed {
-            torrent: torrent()?,
-            error: required_error(r.error),
-        },
-        K::ResumeDataUnchanged => Alert::ResumeDataUnchanged {
-            torrent: torrent()?,
-        },
+        K::ResumeDataFailed => Alert::ResumeDataFailed { torrent: torrent()?, error: required_error(r.error) },
+        K::ResumeDataUnchanged => Alert::ResumeDataUnchanged { torrent: torrent()? },
         K::TorrentError => Alert::TorrentError {
             torrent: torrent()?,
             file: (!r.path.is_empty()).then(|| PathBuf::from(&r.path)),
@@ -530,15 +461,10 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
         },
         K::HashFailed => Alert::HashFailed {
             torrent: torrent()?,
-            piece: u32::try_from(r.piece)
-                .map_err(|_| EngineError::new(ErrorKind::Native, "negative piece index"))?,
+            piece: u32::try_from(r.piece).map_err(|_| EngineError::new(ErrorKind::Native, "negative piece index"))?,
         },
-        K::TorrentRemoved => Alert::TorrentRemoved {
-            torrent: torrent()?,
-        },
-        K::FilePrioritiesApplied => Alert::FilePrioritiesApplied {
-            torrent: torrent()?,
-        },
+        K::TorrentRemoved => Alert::TorrentRemoved { torrent: torrent()? },
+        K::FilePrioritiesApplied => Alert::FilePrioritiesApplied { torrent: torrent()? },
         K::ListenSucceeded => Alert::ListenSucceeded {
             address: match ip(&r.address)? {
                 IpAddr::V6(v6) => SocketAddr::V6(SocketAddrV6::new(v6, r.port, 0, r.scope_id)),
@@ -561,10 +487,7 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
 
 fn ip(address: &str) -> Result<IpAddr, EngineError> {
     address.parse().map_err(|_| {
-        EngineError::new(
-            ErrorKind::Native,
-            format!("libtorrent reported an unparsable address {address:?}"),
-        )
+        EngineError::new(ErrorKind::Native, format!("libtorrent reported an unparsable address {address:?}"))
     })
 }
 

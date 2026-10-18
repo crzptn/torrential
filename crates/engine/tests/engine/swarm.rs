@@ -3,13 +3,11 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 use torrential_engine::{
-    AddTorrent, Added, Alert, FileEntry, FileIndex, FileSelection, InfoHash, Magnet, Progress,
-    TorrentFormat, TorrentSource,
+    AddTorrent, Added, Alert, FileEntry, FileIndex, FileSelection, InfoHash, Magnet, Progress, TorrentFormat,
+    TorrentSource,
 };
 
-use crate::support::{
-    Fixture, Node, PIECE, bencode, expected_hashes, info_hash, loopback, magnet, sha256_file,
-};
+use crate::support::{Fixture, Node, PIECE, bencode, expected_hashes, info_hash, loopback, magnet, sha256_file};
 
 const FILES: [(&str, usize); 3] = [("a.bin", 40_000), ("b.bin", 30_000), ("c.bin", 50_000)];
 
@@ -21,11 +19,7 @@ fn magnet_leecher_fetches_metadata_and_only_the_selected_files() {
     assert_eq!(torrent.info_hash(), info_hash(hashes, TorrentFormat::V1));
     assert_eq!(
         torrent.files(),
-        [
-            entry(0, "swarm/a.bin", 40_000),
-            entry(1, "swarm/b.bin", 30_000),
-            entry(2, "swarm/c.bin", 50_000),
-        ]
+        [entry(0, "swarm/a.bin", 40_000), entry(1, "swarm/b.bin", 30_000), entry(2, "swarm/c.bin", 50_000),]
     );
 
     let mut seeder = Node::new(loopback());
@@ -40,10 +34,7 @@ fn magnet_leecher_fetches_metadata_and_only_the_selected_files() {
     let added = leecher.session.add(add.clone()).unwrap();
     assert_eq!(added, Added::New(torrent.info_hash()));
     let id = added.id();
-    assert_eq!(
-        leecher.session.add(add).unwrap(),
-        Added::Existing(torrent.info_hash())
-    );
+    assert_eq!(leecher.session.add(add).unwrap(), Added::Existing(torrent.info_hash()));
 
     leecher.wait_for("metadata", |a| matches!(a, Alert::MetadataReceived { .. }));
     leecher.finish(id);
@@ -62,10 +53,7 @@ fn magnet_leecher_fetches_metadata_and_only_the_selected_files() {
     );
 
     let status = leecher.status(id);
-    assert_eq!(
-        status.info_hash,
-        InfoHash::V1(torrent.info_hash().v1().unwrap())
-    );
+    assert_eq!(status.info_hash, InfoHash::V1(torrent.info_hash().v1().unwrap()));
     let Progress::Known(files) = &status.progress else {
         panic!("metadata is known: {status:?}");
     };
@@ -73,30 +61,16 @@ fn magnet_leecher_fetches_metadata_and_only_the_selected_files() {
     let piece = u64::from(PIECE);
     let b_bytes_in_piece_2 = 3 * piece - 40_000;
     let b_bytes_in_piece_4 = 70_000 - 4 * piece;
-    assert_eq!(
-        verified,
-        [
-            (0, 40_000),
-            (1, b_bytes_in_piece_2 + b_bytes_in_piece_4),
-            (2, 50_000)
-        ]
-    );
+    assert_eq!(verified, [(0, 40_000), (1, b_bytes_in_piece_2 + b_bytes_in_piece_4), (2, 50_000)]);
     assert_eq!(status.progress.selected_bytes(), 90_000);
     assert_eq!(status.progress.verified_selected_bytes(), 90_000);
 
     assert_eq!(leecher.session.files(id).unwrap(), torrent.files());
     let cached = leecher.session.metainfo(id).unwrap();
     assert_eq!(cached.info_hash(), torrent.info_hash());
-    assert_eq!(
-        bencode::dict_value(cached.as_bytes(), b"info"),
-        bencode::dict_value(torrent.as_bytes(), b"info")
-    );
+    assert_eq!(bencode::dict_value(cached.as_bytes(), b"info"), bencode::dict_value(torrent.as_bytes(), b"info"));
 }
 
 fn entry(index: u32, path: &str, size: u64) -> FileEntry {
-    FileEntry {
-        index: FileIndex::new(index),
-        path: PathBuf::from(path),
-        size,
-    }
+    FileEntry { index: FileIndex::new(index), path: PathBuf::from(path), size }
 }

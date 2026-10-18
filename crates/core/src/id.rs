@@ -45,9 +45,7 @@ impl FromStr for TorrentId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Error> {
-        decode_hex::<20>(s)
-            .map(Self)
-            .ok_or_else(|| invalid_ref(s, "a torrent ID is 40 hex characters"))
+        decode_hex::<20>(s).map(Self).ok_or_else(|| invalid_ref(s, "a torrent ID is 40 hex characters"))
     }
 }
 
@@ -109,11 +107,7 @@ struct InfoHashWire {
 
 impl Serialize for InfoHash {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        InfoHashWire {
-            v1: self.v1().map(|h| hex(&h)),
-            v2: self.v2().map(|h| hex(&h)),
-        }
-        .serialize(s)
+        InfoHashWire { v1: self.v1().map(|h| hex(&h)), v2: self.v2().map(|h| hex(&h)) }.serialize(s)
     }
 }
 
@@ -218,11 +212,7 @@ impl FromStr for HexPrefix {
             None => (false, lower),
         };
         let valid = (Self::MIN_LEN..=40).contains(&hex.len()) && hex.bytes().all(|b| b.is_ascii_hexdigit());
-        if valid {
-            Ok(Self { locator, hex })
-        } else {
-            Err(invalid_ref(s, "an ID prefix is 4 to 40 hex characters"))
-        }
+        if valid { Ok(Self { locator, hex }) } else { Err(invalid_ref(s, "an ID prefix is 4 to 40 hex characters")) }
     }
 }
 
@@ -280,7 +270,11 @@ pub fn parse_full_infohash(s: &str) -> Option<InfoHash> {
 }
 
 /// The shortest prefix of `id`, at least `min` characters, that no ID in `others` shares.
-pub fn shortest_unique_prefix<'a>(id: &TorrentId, others: impl IntoIterator<Item = &'a TorrentId>, min: usize) -> String {
+pub fn shortest_unique_prefix<'a>(
+    id: &TorrentId,
+    others: impl IntoIterator<Item = &'a TorrentId>,
+    min: usize,
+) -> String {
     let hex = id.to_hex();
     let longest_shared = others
         .into_iter()

@@ -30,9 +30,7 @@ impl Default for Config {
                 SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 6881),
                 SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 6881),
             ],
-            dht: Dht::On {
-                bootstrap_nodes: vec!["dht.libtorrent.org:25401".to_owned()],
-            },
+            dht: Dht::On { bootstrap_nodes: vec!["dht.libtorrent.org:25401".to_owned()] },
             lsd: true,
             upnp: true,
             natpmp: true,
@@ -78,10 +76,7 @@ pub struct ConnectionLimits {
 
 impl Default for ConnectionLimits {
     fn default() -> Self {
-        ConnectionLimits {
-            max_connections: NonZeroU32::new(200).unwrap(),
-            multiple_per_ip: false,
-        }
+        ConnectionLimits { max_connections: NonZeroU32::new(200).unwrap(), multiple_per_ip: false }
     }
 }
 
@@ -98,10 +93,7 @@ pub struct ClientIdentity {
 impl Default for ClientIdentity {
     fn default() -> Self {
         let version = env!("CARGO_PKG_VERSION");
-        ClientIdentity {
-            peer_id_prefix: azureus_prefix("TO", version),
-            user_agent: format!("torrential/{version}"),
-        }
+        ClientIdentity { peer_id_prefix: azureus_prefix("TO", version), user_agent: format!("torrential/{version}") }
     }
 }
 
@@ -113,9 +105,7 @@ fn azureus_prefix(code: &str, version: &str) -> String {
         0..=9 => char::from(b'0' + n as u8),
         _ => char::from(b'A' + n.min(35) as u8 - 10),
     };
-    let mut parts = version
-        .split(['.', '-', '+'])
-        .map(|p| p.parse::<u32>().unwrap_or(0));
+    let mut parts = version.split(['.', '-', '+']).map(|p| p.parse::<u32>().unwrap_or(0));
     let digits: String = (0..4).map(|_| digit(parts.next().unwrap_or(0))).collect();
     format!("-{code}{digits}-")
 }

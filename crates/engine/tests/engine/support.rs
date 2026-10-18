@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use sha1::Digest as _;
 use tempfile::TempDir;
 use torrential_engine::{
-    AddTorrent, Alert, Config, ConnectionLimits, Dht, InfoHash, Metainfo, PieceSize, Session,
-    TorrentFormat, TorrentId, TorrentSource, TorrentStatus, UploadPolicy, create_torrent,
+    AddTorrent, Alert, Config, ConnectionLimits, Dht, InfoHash, Metainfo, PieceSize, Session, TorrentFormat, TorrentId,
+    TorrentSource, TorrentStatus, UploadPolicy, create_torrent,
 };
 
 pub const PIECE: u32 = 16 * 1024;
@@ -22,10 +22,7 @@ pub fn loopback() -> Config {
         lsd: false,
         upnp: false,
         natpmp: false,
-        connections: ConnectionLimits {
-            multiple_per_ip: true,
-            ..ConnectionLimits::default()
-        },
+        connections: ConnectionLimits { multiple_per_ip: true, ..ConnectionLimits::default() },
         ..Config::default()
     }
 }
@@ -35,10 +32,7 @@ pub fn rate(bytes_per_sec: u32) -> Option<NonZeroU32> {
 }
 
 pub fn upload(policy: UploadPolicy) -> Config {
-    Config {
-        upload: policy,
-        ..loopback()
-    }
+    Config { upload: policy, ..loopback() }
 }
 
 pub struct Node {
@@ -53,15 +47,8 @@ pub struct Node {
 impl Node {
     pub fn new(config: Config) -> Node {
         let session = Session::new(config).expect("session starts");
-        let mut node = Node {
-            session,
-            log: Vec::new(),
-            examined: 0,
-            port: 0,
-        };
-        node.wait_for("listen socket", |a| {
-            matches!(a, Alert::ListenSucceeded { .. })
-        });
+        let mut node = Node { session, log: Vec::new(), examined: 0, port: 0 };
+        node.wait_for("listen socket", |a| matches!(a, Alert::ListenSucceeded { .. }));
         node.port = node.session.listen_port().unwrap().expect("listening");
         node
     }
@@ -75,10 +62,7 @@ impl Node {
     }
 
     pub fn seed(&mut self, metainfo: &Metainfo, save_path: &Path) -> TorrentId {
-        let id = self.add(AddTorrent::new(
-            TorrentSource::Metainfo(metainfo.clone()),
-            save_path,
-        ));
+        let id = self.add(AddTorrent::new(TorrentSource::Metainfo(metainfo.clone()), save_path));
         self.wait_until("seeding", |s| {
             s.status(id).unwrap().progress.verified_selected_bytes() == total_size(metainfo)
         });
@@ -126,9 +110,7 @@ impl Node {
     pub fn finish(&mut self, id: TorrentId) {
         self.wait_for("finish", |a| matches!(a, Alert::TorrentFinished { .. }));
         self.session.pause(id).unwrap();
-        self.wait_for("paused after finishing", |a| {
-            matches!(a, Alert::TorrentPaused { .. })
-        });
+        self.wait_for("paused after finishing", |a| matches!(a, Alert::TorrentPaused { .. }));
     }
 
     pub fn idle(&mut self, window: Duration) {
@@ -164,11 +146,7 @@ impl Fixture {
             fs::write(&path, &bytes).unwrap();
             contents.insert(file.to_owned(), bytes);
         }
-        Fixture {
-            dir,
-            name: name.to_owned(),
-            files: contents,
-        }
+        Fixture { dir, name: name.to_owned(), files: contents }
     }
 
     pub fn save_path(&self) -> &Path {
@@ -176,12 +154,8 @@ impl Fixture {
     }
 
     pub fn torrent(&self, format: TorrentFormat) -> Metainfo {
-        create_torrent(
-            &self.dir.path().join(&self.name),
-            PieceSize::new(PIECE).unwrap(),
-            format,
-        )
-        .expect("torrent created")
+        create_torrent(&self.dir.path().join(&self.name), PieceSize::new(PIECE).unwrap(), format)
+            .expect("torrent created")
     }
 
     pub fn path_in(&self, save_path: &Path, file: &str) -> PathBuf {
@@ -230,10 +204,7 @@ pub fn info_hash(hashes: ([u8; 20], [u8; 32]), format: TorrentFormat) -> InfoHas
     let v1 = torrential_engine::InfoHashV1::from_bytes(hashes.0);
     match format {
         TorrentFormat::V1 => InfoHash::V1(v1),
-        TorrentFormat::Hybrid => InfoHash::Hybrid {
-            v1,
-            v2: torrential_engine::InfoHashV2::from_bytes(hashes.1),
-        },
+        TorrentFormat::Hybrid => InfoHash::Hybrid { v1, v2: torrential_engine::InfoHashV2::from_bytes(hashes.1) },
     }
 }
 

@@ -2,9 +2,7 @@ use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 
 use tempfile::TempDir;
-use torrential_engine::{
-    AddTorrent, Alert, ErrorKind, FileIndex, SelectedPieces, TorrentFormat, TorrentSource,
-};
+use torrential_engine::{AddTorrent, Alert, ErrorKind, FileIndex, SelectedPieces, TorrentFormat, TorrentSource};
 
 use crate::support::{Fixture, Node, PIECE, loopback, sha256_file, snapshot, total_size};
 
@@ -31,34 +29,21 @@ fn recheck_reports_a_damaged_piece_and_downloading_repairs_it() {
     let (mut leecher, download, id) = downloaded(&fixture);
 
     let piece_1_middle = PIECE as usize * 3 / 2;
-    assert!(
-        2 * PIECE as usize <= fixture.files["a.bin"].len(),
-        "piece 1 lies inside a.bin"
-    );
+    assert!(2 * PIECE as usize <= fixture.files["a.bin"].len(), "piece 1 lies inside a.bin");
     let damaged = fixture.path_in(download.path(), "a.bin");
     let mut file = OpenOptions::new().write(true).open(&damaged).unwrap();
     file.seek(SeekFrom::Start(piece_1_middle as u64)).unwrap();
-    file.write_all(&[!fixture.files["a.bin"][piece_1_middle]])
-        .unwrap();
+    file.write_all(&[!fixture.files["a.bin"][piece_1_middle]]).unwrap();
     drop(file);
 
     leecher.session.resume(id).unwrap();
     leecher.session.force_recheck(id).unwrap();
     leecher.wait_for("recheck", |a| matches!(a, Alert::TorrentChecked { .. }));
     let progress = leecher.status(id).progress;
-    assert_eq!(
-        progress.file(FileIndex::new(0)).unwrap().verified,
-        40_000 - u64::from(PIECE)
-    );
+    assert_eq!(progress.file(FileIndex::new(0)).unwrap().verified, 40_000 - u64::from(PIECE));
     assert_eq!(progress.file(FileIndex::new(1)).unwrap().verified, 30_000);
     assert_eq!(progress.verified_selected_bytes(), total - u64::from(PIECE));
-    assert_eq!(
-        leecher.session.selected_pieces(id).unwrap(),
-        SelectedPieces {
-            selected: 5,
-            verified: 4
-        }
-    );
+    assert_eq!(leecher.session.selected_pieces(id).unwrap(), SelectedPieces { selected: 5, verified: 4 });
 
     let mut repair = Node::new(loopback());
     repair.seed(&torrent, fixture.save_path());
@@ -78,15 +63,9 @@ fn remove_keeps_the_files() {
     leecher.session.remove(id).unwrap();
     let removed = leecher.wait_for("removed", |a| matches!(a, Alert::TorrentRemoved { .. }));
     assert_eq!(removed.torrent(), Some(torrent.info_hash()));
-    assert_eq!(
-        leecher.session.status(id).unwrap_err().kind(),
-        ErrorKind::UnknownTorrent
-    );
+    assert_eq!(leecher.session.status(id).unwrap_err().kind(), ErrorKind::UnknownTorrent);
     assert_eq!(snapshot(download.path()), before);
     for file in fixture.files.keys() {
-        assert_eq!(
-            sha256_file(&fixture.path_in(download.path(), file)),
-            Some(fixture.sha256(file))
-        );
+        assert_eq!(sha256_file(&fixture.path_in(download.path(), file)), Some(fixture.sha256(file)));
     }
 }

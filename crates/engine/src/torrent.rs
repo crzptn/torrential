@@ -130,10 +130,7 @@ pub struct ResumeData {
 impl ResumeData {
     pub fn from_bytes(bytes: Vec<u8>) -> Result<ResumeData, EngineError> {
         let parsed = ffi::parse_resume_data(&bytes).map_err(bridge::error)?;
-        Ok(ResumeData {
-            info_hash: bridge::info_hash(&parsed.hashes)?,
-            bytes,
-        })
+        Ok(ResumeData { info_hash: bridge::info_hash(&parsed.hashes)?, bytes })
     }
 
     pub(crate) fn new(bytes: Vec<u8>, info_hash: InfoHash) -> Self {
@@ -155,10 +152,7 @@ impl ResumeData {
 
 impl std::fmt::Debug for ResumeData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResumeData")
-            .field("info_hash", &self.info_hash)
-            .field("bytes", &self.bytes.len())
-            .finish()
+        f.debug_struct("ResumeData").field("info_hash", &self.info_hash).field("bytes", &self.bytes.len()).finish()
     }
 }
 

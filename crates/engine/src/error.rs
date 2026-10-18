@@ -22,10 +22,7 @@ pub enum ErrorKind {
 
 impl EngineError {
     pub(crate) fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        EngineError {
-            kind,
-            message: message.into(),
-        }
+        EngineError { kind, message: message.into() }
     }
 
     pub fn kind(&self) -> ErrorKind {
@@ -45,11 +42,7 @@ impl fmt::Display for EngineError {
             ErrorKind::InvalidInput => "invalid input",
             ErrorKind::Native => "libtorrent error",
         };
-        if self.message.is_empty() {
-            f.write_str(kind)
-        } else {
-            write!(f, "{kind}: {}", self.message)
-        }
+        if self.message.is_empty() { f.write_str(kind) } else { write!(f, "{kind}: {}", self.message) }
     }
 }
 

@@ -1,37 +1,21 @@
 use std::path::PathBuf;
 
 use tempfile::TempDir;
-use torrential_engine::{
-    AddTorrent, Alert, FileEntry, FileIndex, FileSelection, Magnet, TorrentFormat, TorrentSource,
-};
+use torrential_engine::{AddTorrent, Alert, FileEntry, FileIndex, FileSelection, Magnet, TorrentFormat, TorrentSource};
 
-use crate::support::{
-    Fixture, Node, bencode, expected_hashes, info_hash, loopback, magnet, sha256_file,
-};
+use crate::support::{Fixture, Node, bencode, expected_hashes, info_hash, loopback, magnet, sha256_file};
 
 #[test]
 fn hybrid_torrent_downloads_and_reports_both_hashes() {
-    let fixture = Fixture::new(
-        "hybrid",
-        &[("a.bin", 40_000), ("b.bin", 30_000), ("c.bin", 50_000)],
-        17,
-    );
+    let fixture = Fixture::new("hybrid", &[("a.bin", 40_000), ("b.bin", 30_000), ("c.bin", 50_000)], 17);
     let torrent = fixture.torrent(TorrentFormat::Hybrid);
     let hashes = expected_hashes(torrent.as_bytes());
     let expected = info_hash(hashes, TorrentFormat::Hybrid);
     assert_eq!(torrent.info_hash(), expected);
-    let entry = |index, path: &str, size| FileEntry {
-        index: FileIndex::new(index),
-        path: PathBuf::from(path),
-        size,
-    };
+    let entry = |index, path: &str, size| FileEntry { index: FileIndex::new(index), path: PathBuf::from(path), size };
     assert_eq!(
         torrent.files(),
-        [
-            entry(0, "hybrid/a.bin", 40_000),
-            entry(2, "hybrid/b.bin", 30_000),
-            entry(4, "hybrid/c.bin", 50_000),
-        ],
+        [entry(0, "hybrid/a.bin", 40_000), entry(2, "hybrid/b.bin", 30_000), entry(4, "hybrid/c.bin", 50_000),],
         "pad files keep their indices but are not listed"
     );
 
@@ -90,9 +74,6 @@ fn a_hybrid_magnet_has_an_info_dictionary_when_metadata_arrives() {
     let info = leecher.session.info_dictionary(id).unwrap();
     assert_eq!(info.info_hash(), torrent.info_hash());
     assert_eq!(info.files(), torrent.files());
-    assert_eq!(
-        bencode::dict_value(info.as_bytes(), b"info"),
-        bencode::dict_value(torrent.as_bytes(), b"info")
-    );
+    assert_eq!(bencode::dict_value(info.as_bytes(), b"info"), bencode::dict_value(torrent.as_bytes(), b"info"));
     assert_eq!(bencode::dict_value(info.as_bytes(), b"piece layers"), None);
 }

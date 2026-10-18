@@ -21,7 +21,10 @@ pub const MAX_FRAME: usize = 32 * 1024 * 1024;
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "op")]
 pub enum Request {
-    Hello { client_version: String, wire: u32 },
+    Hello {
+        client_version: String,
+        wire: u32,
+    },
     /// With `stream`, the engine sends an `Event::SearchUpdate` frame each time a source answers,
     /// then the final `Response::Search`.
     Search {
@@ -30,16 +33,33 @@ pub enum Request {
         stream: bool,
     },
     /// Lists a torrent's files, fetching metadata if needed, within `timeout_ms`.
-    Files { target: Target, timeout_ms: u32 },
+    Files {
+        target: Target,
+        timeout_ms: u32,
+    },
     Get(GetRequest),
     /// No refs means every download.
-    Status { refs: Vec<String> },
-    Pause { refs: Vec<String> },
-    Resume { refs: Vec<String>, all: bool },
-    Remove { refs: Vec<String> },
-    Verify { reference: String, repair: bool },
+    Status {
+        refs: Vec<String>,
+    },
+    Pause {
+        refs: Vec<String>,
+    },
+    Resume {
+        refs: Vec<String>,
+        all: bool,
+    },
+    Remove {
+        refs: Vec<String>,
+    },
+    Verify {
+        reference: String,
+        repair: bool,
+    },
     /// Streams `Event`s for these downloads, or for all downloads when empty.
-    Watch { refs: Vec<String> },
+    Watch {
+        refs: Vec<String>,
+    },
     /// Asks the engine to save resume data and exit, for example before an upgrade.
     Shutdown,
 }
@@ -130,11 +150,19 @@ pub struct Change {
 #[serde(rename_all = "snake_case", tag = "event")]
 pub enum Event {
     /// The first event of every watch: the current state of each watched download.
-    Snapshot { jobs: Vec<Job> },
-    Job { job: Box<Job> },
-    Removed { id: String },
+    Snapshot {
+        jobs: Vec<Job>,
+    },
+    Job {
+        job: Box<Job>,
+    },
+    Removed {
+        id: String,
+    },
     /// Sent when nothing changed for a while, so watchers know the engine is alive.
-    Heartbeat { at: i64 },
+    Heartbeat {
+        at: i64,
+    },
     /// A streaming search's results so far. `pending` names the sources that have not answered.
     SearchUpdate {
         result: SearchResult,

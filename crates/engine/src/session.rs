@@ -6,9 +6,7 @@ use crate::bridge::{self, ffi};
 use crate::config::{Config, Dht, DhtState};
 use crate::error::{EngineError, ErrorKind};
 use crate::identity::TorrentId;
-use crate::torrent::{
-    AddTorrent, Added, FileEntry, FileIndex, FilePriority, Metainfo, SelectedPieces, TorrentStatus,
-};
+use crate::torrent::{AddTorrent, Added, FileEntry, FileIndex, FilePriority, Metainfo, SelectedPieces, TorrentStatus};
 
 /// One libtorrent session, which serves every torrent.
 ///
@@ -32,10 +30,7 @@ impl Session {
         if let (Dht::On { bootstrap_nodes }, Some(_)) = (&config.dht, &config.dht_state)
             && bootstrap_nodes.is_empty()
         {
-            return Err(EngineError::new(
-                ErrorKind::InvalidInput,
-                "dht_state needs at least one DHT bootstrap node",
-            ));
+            return Err(EngineError::new(ErrorKind::InvalidInput, "dht_state needs at least one DHT bootstrap node"));
         }
         let native = ffi::new_session(&bridge::settings(&config)).map_err(bridge::error)?;
         Ok(Session { native })
@@ -43,17 +38,9 @@ impl Session {
 
     pub fn add(&mut self, torrent: AddTorrent) -> Result<Added, EngineError> {
         let params = bridge::add_params(&torrent)?;
-        let result = self
-            .native
-            .pin_mut()
-            .add_torrent(&params)
-            .map_err(bridge::error)?;
+        let result = self.native.pin_mut().add_torrent(&params).map_err(bridge::error)?;
         let info_hash = bridge::info_hash(&result.hashes)?;
-        Ok(if result.existed {
-            Added::Existing(info_hash)
-        } else {
-            Added::New(info_hash)
-        })
+        Ok(if result.existed { Added::Existing(info_hash) } else { Added::New(info_hash) })
     }
 
     /// `Alert::TorrentPaused` follows once disk writes finish and the files are
@@ -78,15 +65,9 @@ impl Session {
     ) -> Result<(), EngineError> {
         let records: Vec<ffi::PriorityRecord> = priorities
             .iter()
-            .map(|&(index, priority)| ffi::PriorityRecord {
-                index: index.get(),
-                priority: bridge::priority(priority),
-            })
+            .map(|&(index, priority)| ffi::PriorityRecord { index: index.get(), priority: bridge::priority(priority) })
             .collect();
-        let r = self
-            .native
-            .pin_mut()
-            .set_file_priorities(id.as_bytes(), &records);
+        let r = self.native.pin_mut().set_file_priorities(id.as_bytes(), &records);
         r.map_err(|e| with_id(e, id))
     }
 
@@ -120,10 +101,7 @@ impl Session {
     /// data since its last save. Otherwise `Alert::ResumeDataUnchanged`
     /// follows.
     pub fn save_resume_data_if_progressed(&mut self, id: TorrentId) -> Result<(), EngineError> {
-        let r = self
-            .native
-            .pin_mut()
-            .save_resume_data_if_progressed(id.as_bytes());
+        let r = self.native.pin_mut().save_resume_data_if_progressed(id.as_bytes());
         r.map_err(|e| with_id(e, id))
     }
 
@@ -136,20 +114,14 @@ impl Session {
 
     pub fn connect_peer(&mut self, id: TorrentId, peer: SocketAddr) -> Result<(), EngineError> {
         let peer = bridge::endpoint(&peer);
-        let r = self
-            .native
-            .pin_mut()
-            .connect_peer(id.as_bytes(), &peer.address, peer.port);
+        let r = self.native.pin_mut().connect_peer(id.as_bytes(), &peer.address, peer.port);
         r.map_err(|e| with_id(e, id))
     }
 
     /// The info dictionary, plus piece layers for v2 and hybrid torrents, as
     /// a `.torrent` file. Trackers and web seeds are not included.
     pub fn metainfo(&self, id: TorrentId) -> Result<Metainfo, EngineError> {
-        let bytes = self
-            .native
-            .metainfo(id.as_bytes())
-            .map_err(|e| with_id(e, id))?;
+        let bytes = self.native.metainfo(id.as_bytes()).map_err(|e| with_id(e, id))?;
         Metainfo::from_bytes(bytes)
     }
 
@@ -158,49 +130,31 @@ impl Session {
     /// for v2 piece layers only after that, and it accepts a v2 or hybrid
     /// `.torrent` without them.
     pub fn info_dictionary(&self, id: TorrentId) -> Result<Metainfo, EngineError> {
-        let bytes = self
-            .native
-            .info_dictionary(id.as_bytes())
-            .map_err(|e| with_id(e, id))?;
+        let bytes = self.native.info_dictionary(id.as_bytes()).map_err(|e| with_id(e, id))?;
         Metainfo::from_bytes(bytes)
     }
 
     /// Needs metadata.
     pub fn files(&self, id: TorrentId) -> Result<Vec<FileEntry>, EngineError> {
-        let records = self
-            .native
-            .files(id.as_bytes())
-            .map_err(|e| with_id(e, id))?;
+        let records = self.native.files(id.as_bytes()).map_err(|e| with_id(e, id))?;
         Ok(bridge::file_entries(records))
     }
 
     pub fn status(&self, id: TorrentId) -> Result<TorrentStatus, EngineError> {
-        let record = self
-            .native
-            .status(id.as_bytes())
-            .map_err(|e| with_id(e, id))?;
+        let record = self.native.status(id.as_bytes()).map_err(|e| with_id(e, id))?;
         bridge::status(record)
     }
 
     /// Needs metadata. Unlike `status`, this counts whole pieces, so a damaged
     /// piece that spans two files counts once.
     pub fn selected_pieces(&self, id: TorrentId) -> Result<SelectedPieces, EngineError> {
-        let counts = self
-            .native
-            .selected_pieces(id.as_bytes())
-            .map_err(|e| with_id(e, id))?;
-        Ok(SelectedPieces {
-            selected: counts.selected,
-            verified: counts.verified,
-        })
+        let counts = self.native.selected_pieces(id.as_bytes()).map_err(|e| with_id(e, id))?;
+        Ok(SelectedPieces { selected: counts.selected, verified: counts.verified })
     }
 
     /// Asks for session counters. `Alert::SessionStats` delivers them.
     pub fn post_session_stats(&mut self) -> Result<(), EngineError> {
-        self.native
-            .pin_mut()
-            .post_session_stats()
-            .map_err(bridge::error)
+        self.native.pin_mut().post_session_stats().map_err(bridge::error)
     }
 
     /// The DHT routing table and node ids, for `Config::dht_state`.
@@ -222,11 +176,7 @@ impl Session {
     /// libtorrent alerts and alerts about removed torrents are dropped.
     pub fn wait_alerts(&mut self, timeout: Duration) -> Result<Vec<Alert>, EngineError> {
         let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
-        let records = self
-            .native
-            .pin_mut()
-            .wait_alerts(millis)
-            .map_err(bridge::error)?;
+        let records = self.native.pin_mut().wait_alerts(millis).map_err(bridge::error)?;
         records.into_iter().map(bridge::alert).collect()
     }
 }
