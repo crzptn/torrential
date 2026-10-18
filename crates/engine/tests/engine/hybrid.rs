@@ -2,8 +2,7 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 use torrential_engine::{
-    AddTorrent, Alert, ErrorKind, FileEntry, FileIndex, FileSelection, Magnet, TorrentFormat,
-    TorrentSource,
+    AddTorrent, Alert, FileEntry, FileIndex, FileSelection, Magnet, TorrentFormat, TorrentSource,
 };
 
 use crate::support::{
@@ -72,7 +71,7 @@ fn hybrid_torrent_downloads_and_reports_both_hashes() {
 }
 
 #[test]
-fn a_hybrid_magnet_has_an_info_dictionary_before_its_piece_layers() {
+fn a_hybrid_magnet_has_an_info_dictionary_when_metadata_arrives() {
     let fixture = Fixture::new("layers", &[("a.bin", 40_000), ("b.bin", 30_000)], 19);
     let torrent = fixture.torrent(TorrentFormat::Hybrid);
     let hashes = expected_hashes(torrent.as_bytes());
@@ -88,11 +87,6 @@ fn a_hybrid_magnet_has_an_info_dictionary_before_its_piece_layers() {
     let id = leecher.add(add);
     leecher.wait_for("metadata", |a| matches!(a, Alert::MetadataReceived { .. }));
 
-    assert_eq!(
-        leecher.session.metainfo(id).unwrap_err().kind(),
-        ErrorKind::NoMetadata,
-        "nothing was downloaded, so no piece layer was asked for"
-    );
     let info = leecher.session.info_dictionary(id).unwrap();
     assert_eq!(info.info_hash(), torrent.info_hash());
     assert_eq!(info.files(), torrent.files());

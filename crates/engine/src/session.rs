@@ -134,9 +134,9 @@ impl Session {
     }
 
     /// The info dictionary alone, as a `.torrent` file. Unlike `metainfo` it
-    /// is ready as soon as metadata arrives: libtorrent asks peers for v2
-    /// piece layers only while it downloads pieces, and it accepts a v2 or
-    /// hybrid `.torrent` without them.
+    /// is ready when `Alert::MetadataReceived` arrives: libtorrent asks peers
+    /// for v2 piece layers only after that, and it accepts a v2 or hybrid
+    /// `.torrent` without them.
     pub fn info_dictionary(&self, id: TorrentId) -> Result<Metainfo, EngineError> {
         let bytes = self
             .native
