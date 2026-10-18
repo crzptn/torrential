@@ -40,6 +40,16 @@ impl Screen {
         }
     }
 
+    /// The resolution that suits this screen. A phone shows 720p as well as 1080p, in a
+    /// smaller file.
+    pub const fn target(self) -> Resolution {
+        match self {
+            Self::Phone => Resolution::P720,
+            Self::Laptop | Self::Tv => Resolution::P1080,
+            Self::Tv4k => Resolution::P2160,
+        }
+    }
+
     /// 0 for the best resolution on this screen, then one step lower, then higher,
     /// then further lower. A phone takes 720p as readily as 1080p.
     const fn rank(self, resolution: Resolution) -> u8 {
@@ -91,7 +101,7 @@ impl Playback {
 
     /// AV1 is newer than HEVC, so a player that may not handle HEVC may not handle it
     /// either. An unknown codec plays.
-    const fn plays(self, quality: Quality) -> bool {
+    pub const fn plays(self, quality: Quality) -> bool {
         let newer_codec = matches!(quality.codec, Some(Codec::Hevc | Codec::Av1));
         match self {
             Self::HevcHdr => true,
