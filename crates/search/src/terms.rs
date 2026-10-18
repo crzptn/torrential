@@ -93,19 +93,23 @@ impl Terms {
     }
 
     fn matches(&self, name: &str, name_tokens: &[String]) -> Vec<bool> {
-        let set: HashSet<&str> = name_tokens.iter().map(String::as_str).collect();
+        // Joining runs on both sides lets "arch linux" match "archlinux" and
+        // "spiderman" match "Spider-Man".
+        let mut set: HashSet<String> = name_tokens.iter().cloned().collect();
+        for run in 2..=3 {
+            set.extend(name_tokens.windows(run).map(|w| w.concat()));
+        }
         // Scripts written without spaces never split into whole words, so a
         // non-ASCII word matches anywhere in the name.
         let folded = name.to_lowercase();
         let mut hits: Vec<bool> = self
             .words
             .iter()
-            .map(|w| if w.is_ascii() { set.contains(w.as_str()) } else { folded.contains(w.as_str()) })
+            .map(|w| if w.is_ascii() { set.contains(w) } else { folded.contains(w.as_str()) })
             .collect();
-        // Names often join words the query separates: "arch linux" in "archlinux".
         for run in 2..=3 {
             for (start, window) in self.words.windows(run).enumerate() {
-                if set.contains(window.concat().as_str()) {
+                if set.contains(&window.concat()) {
                     hits[start..start + run].fill(true);
                 }
             }
@@ -146,6 +150,14 @@ mod tests {
         assert_eq!(absent, Relevance { matched: 5, year: YearMatch::Absent });
         assert_eq!(other, Relevance { matched: 5, year: YearMatch::Other });
         assert!(same > absent && absent > other);
+    }
+
+    #[test]
+    fn joined_name_words_match_one_query_word() {
+        let terms = Terms::parse("spiderman");
+        assert!(terms.covers("Spider-Man No Way Home 2021"));
+        assert_eq!(Terms::parse("wifi driver").relevance("Wi-Fi Driver Pack").matched, 2);
+        assert!(!terms.covers("Spider Monkey Documentary"));
     }
 
     #[test]
