@@ -386,47 +386,49 @@ fn doctor_reports_whether_the_skill_is_installed() {
 }
 
 #[test]
-fn setup_shows_the_flags_saves_answers_and_records_a_skip() {
+fn setup_shows_the_detected_machine_and_saves_and_clears_overrides() {
     let home = Home::new();
     let config = home.dir.path().join("th/config/config.yaml");
     let file = config.display().to_string();
     let flags =
-        "torrential setup --screen phone|laptop|tv|tv-4k --max-size 2GB|8GB|20GB|none --playback hevc-hdr|hevc|h264";
+        "torrential setup --screen phone|laptop|tv|tv-4k|auto --max-size 8GB|none --playback hevc-hdr|hevc|h264|auto";
+    let mac = "detected: 3024x1964 display with HDR, arm64, English";
 
-    let unset = home.run(&["setup"]);
-    let saved = home.run(&["setup", "--screen", "tv-4k", "--max-size", "8GB", "--playback", "hevc-hdr"]);
-    let changed = home.json(&["setup", "--screen", "laptop", "--json"]);
-    let shown = home.json(&["setup", "--json"]);
-    let skipped = home.run(&["setup", "--skip"]);
+    let shown = home.run(&["setup"]);
+    let saved = home.run(&["setup", "--screen", "tv-4k", "--max-size", "8GB"]);
+    let saved_file = std::fs::read_to_string(&config).unwrap();
+    let json = home.json(&["setup", "--playback", "h264", "--json"]);
+    let cleared = home.run(&["setup", "--screen", "auto", "--max-size", "none", "--playback", "auto"]);
 
     assert_eq!(
-        unset.stdout,
+        shown.stdout,
         format!(
-            "screen:   not set\nmax_size: not set\nplayback: not set\nfile:     {file}\n\
-             # not set; torrential setup --skip records a choice not to answer\nnext:     {flags}\n"
+            "{mac}\nfile:     {file}\n\
+             # ranking for this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English · overrides: none\n\
+             next:     {flags}\n"
         )
     );
     assert_eq!(
         saved.stdout,
         format!(
-            "saved\nscreen:   tv-4k\nmax_size: 8GB\nplayback: hevc-hdr\nfile:     {file}\n\
-             # search ranks for a 4K TV, up to 8 GB, plays HEVC and HDR\n\
-             # get refuses a download over 8 GB unless --max-size allows it\nnext:     torrential search <words>\n"
+            "saved\n{mac}\nfile:     {file}\n\
+             # ranking for this Mac: 2160p screen, up to 8 GB, arm64, English · overrides: screen tv-4k, max_size \
+             8GB\n# get refuses a download over 8 GB unless --max-size allows it\nnext:     torrential search <words>\n"
         )
     );
-    let answers = serde_json::json!({"screen": "laptop", "max_size": 8_000_000_000u64, "playback": "hevc-hdr"});
-    assert_eq!((changed["result"].as_str(), &changed["preferences"]), (Some("saved"), &answers));
+    assert_eq!(saved_file, "preferences:\n  screen: tv-4k\n  max_size: 8GB\n");
     assert_eq!(
-        (shown["result"].as_str(), &shown["preferences"], shown["file"].as_str()),
-        (Some("shown"), &answers, Some(file.as_str()))
+        (&json["result"], &json["profile"]["screen"], &json["profile"]["playback"], &json["profile"]["preferences"]),
+        (
+            &serde_json::json!("saved"),
+            &serde_json::json!({"value": "2160p", "source": "override"}),
+            &serde_json::json!({"value": "h264", "source": "override"}),
+            &serde_json::json!({"screen": "tv-4k", "max_size": 8_000_000_000u64, "playback": "h264"}),
+        )
     );
-    assert_eq!(skipped.code, 0, "{}", skipped.stderr);
-    assert_eq!(std::fs::read_to_string(&config).unwrap(), "preferences: {}\n");
-    assert!(
-        skipped.stdout.contains("\n# skipped; search ranks as it did before and stops suggesting setup\n"),
-        "{}",
-        skipped.stdout
-    );
+    assert_eq!(cleared.code, 0, "{}", cleared.stderr);
+    assert!(cleared.stdout.contains("· overrides: none\n"), "{}", cleared.stdout);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "");
 }
 
 /// A one-file torrent in the JSON form the fake engine reads.

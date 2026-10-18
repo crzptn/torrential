@@ -268,12 +268,12 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
     },
     {
       "name": "setup",
-      "about": "Answer three questions once, so search ranks films and shows for your screen and player",
+      "about": "Show what search ranks for on this machine, or set where you watch instead",
       "arguments": [],
       "flags": [
         {
           "name": "--screen",
-          "help": "What you usually watch on",
+          "help": "Where you watch, when it is not this machine's display. auto goes back to the display",
           "takes_value": true,
           "repeatable": false,
           "value_name": "SCREEN",
@@ -281,33 +281,29 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
             "phone",
             "laptop",
             "tv",
-            "tv-4k"
+            "tv-4k",
+            "auto"
           ]
         },
         {
           "name": "--max-size",
-          "help": "How big one download can be, for example 8GB, or none for no limit",
+          "help": "The largest download get starts without its own --max-size, for example 8GB, or none",
           "takes_value": true,
           "repeatable": false,
           "value_name": "SIZE"
         },
         {
           "name": "--playback",
-          "help": "What your player handles. h264 is the safe answer when unsure",
+          "help": "What your player handles, when it is not this machine's. auto goes back to the display",
           "takes_value": true,
           "repeatable": false,
           "value_name": "PLAYBACK",
           "values": [
             "hevc-hdr",
             "hevc",
-            "h264"
+            "h264",
+            "auto"
           ]
-        },
-        {
-          "name": "--skip",
-          "help": "Record that you would rather not answer, so nobody asks again",
-          "takes_value": false,
-          "repeatable": false
         }
       ]
     },

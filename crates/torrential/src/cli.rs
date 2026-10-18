@@ -55,9 +55,9 @@ pub enum Command {
     Rm(RefsArgs),
     /// Re-hash the data on disk and report damaged pieces
     Verify(VerifyArgs),
-    /// Answer three questions once, so search ranks films and shows for your screen and player
+    /// Show what search ranks for on this machine, or set where you watch instead
     #[command(
-        after_help = "Examples:\n  torrential setup\n  torrential setup --screen tv-4k --max-size 8GB --playback hevc-hdr\n  torrential setup --skip"
+        after_help = "Examples:\n  torrential setup\n  torrential setup --screen tv-4k\n  torrential setup --screen auto --max-size none"
     )]
     Setup(SetupArgs),
     /// Diagnose sandbox, disk, state, engine, config, and sources
@@ -117,25 +117,23 @@ pub struct SearchArgs {
     pub fresh: bool,
 }
 
+/// Each flag overrides what torrential detected, and leaves the others as they were.
 #[derive(Args, Debug)]
 pub struct SetupArgs {
-    /// What you usually watch on
+    /// Where you watch, when it is not this machine's display. auto goes back to the display
     #[arg(long, value_enum)]
     pub screen: Option<ScreenArg>,
-    /// How big one download can be, for example 8GB, or none for no limit
+    /// The largest download get starts without its own --max-size, for example 8GB, or none
     #[arg(long, value_name = "SIZE", value_parser = parse_limit)]
     pub max_size: Option<Limit>,
-    /// What your player handles. h264 is the safe answer when unsure
+    /// What your player handles, when it is not this machine's. auto goes back to the display
     #[arg(long, value_enum)]
     pub playback: Option<PlaybackArg>,
-    /// Record that you would rather not answer, so nobody asks again
-    #[arg(long, conflicts_with_all = ["screen", "max_size", "playback"])]
-    pub skip: bool,
 }
 
 /// Every setup flag with every value it takes, for a person or an agent to fill in.
 pub const SETUP_FLAGS: &str =
-    "torrential setup --screen phone|laptop|tv|tv-4k --max-size 2GB|8GB|20GB|none --playback hevc-hdr|hevc|h264";
+    "torrential setup --screen phone|laptop|tv|tv-4k|auto --max-size 8GB|none --playback hevc-hdr|hevc|h264|auto";
 
 /// A size cap. `None` is `--max-size none`, no cap.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -285,7 +283,7 @@ impl From<CategoryArg> for Category {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 pub enum ScreenArg {
-    /// A phone or tablet: 1080p, and 720p as readily
+    /// A phone or tablet: 720p
     Phone,
     /// A laptop or monitor: 1080p
     Laptop,
@@ -294,15 +292,19 @@ pub enum ScreenArg {
     /// A 4K TV: 2160p
     #[value(name = "tv-4k")]
     Tv4k,
+    /// This machine's largest display
+    Auto,
 }
 
-impl From<ScreenArg> for Screen {
-    fn from(arg: ScreenArg) -> Self {
-        match arg {
-            ScreenArg::Phone => Screen::Phone,
-            ScreenArg::Laptop => Screen::Laptop,
-            ScreenArg::Tv => Screen::Tv,
-            ScreenArg::Tv4k => Screen::Tv4k,
+impl ScreenArg {
+    /// `None` for `auto`, which keeps no preference.
+    pub fn screen(self) -> Option<Screen> {
+        match self {
+            Self::Phone => Some(Screen::Phone),
+            Self::Laptop => Some(Screen::Laptop),
+            Self::Tv => Some(Screen::Tv),
+            Self::Tv4k => Some(Screen::Tv4k),
+            Self::Auto => None,
         }
     }
 }
@@ -316,14 +318,18 @@ pub enum PlaybackArg {
     Hevc,
     /// H.264 (x264) only, which every player handles
     H264,
+    /// HEVC, and HDR when this machine's display shows it
+    Auto,
 }
 
-impl From<PlaybackArg> for Playback {
-    fn from(arg: PlaybackArg) -> Self {
-        match arg {
-            PlaybackArg::HevcHdr => Playback::HevcHdr,
-            PlaybackArg::Hevc => Playback::Hevc,
-            PlaybackArg::H264 => Playback::H264,
+impl PlaybackArg {
+    /// `None` for `auto`, which keeps no preference.
+    pub fn playback(self) -> Option<Playback> {
+        match self {
+            Self::HevcHdr => Some(Playback::HevcHdr),
+            Self::Hevc => Some(Playback::Hevc),
+            Self::H264 => Some(Playback::H264),
+            Self::Auto => None,
         }
     }
 }
@@ -401,14 +407,17 @@ mod tests {
     }
 
     #[test]
-    fn setup_flags_name_the_values_the_config_stores() {
-        let screens = ScreenArg::value_variants().iter().map(|v| v.to_possible_value().unwrap().get_name().to_string());
-        let stored = ScreenArg::value_variants().iter().map(|v| Screen::from(*v).as_str().to_string());
-        assert_eq!(screens.collect::<Vec<_>>(), stored.collect::<Vec<_>>());
-        let players =
-            PlaybackArg::value_variants().iter().map(|v| v.to_possible_value().unwrap().get_name().to_string());
-        let stored = PlaybackArg::value_variants().iter().map(|v| Playback::from(*v).as_str().to_string());
-        assert_eq!(players.collect::<Vec<_>>(), stored.collect::<Vec<_>>());
+    fn setup_flags_name_the_values_the_config_stores_and_auto_stores_none() {
+        let flag = |value: Option<clap::builder::PossibleValue>| value.unwrap().get_name().to_string();
+        let screens = ScreenArg::value_variants()
+            .iter()
+            .map(|v| (flag(v.to_possible_value()), v.screen().map_or("auto", Screen::as_str).to_string()));
+        let players = PlaybackArg::value_variants()
+            .iter()
+            .map(|v| (flag(v.to_possible_value()), v.playback().map_or("auto", Playback::as_str).to_string()));
+        for (flag, stored) in screens.chain(players) {
+            assert_eq!(flag, stored);
+        }
     }
 
     #[test]
@@ -423,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn setup_takes_a_size_or_none_and_skip_stands_alone() {
+    fn setup_takes_a_size_or_none() {
         let max_size = |value: &str| match Cli::try_parse_from(["torrential", "setup", "--max-size", value]) {
             Ok(Cli { command: Some(Command::Setup(args)), .. }) => Ok(args.max_size),
             Ok(_) => panic!("expected setup"),
@@ -432,8 +441,6 @@ mod tests {
         assert_eq!(max_size("8GB"), Ok(Some(Limit(Some(8_000_000_000)))));
         assert_eq!(max_size("none"), Ok(Some(Limit(None))));
         assert_eq!(max_size("big"), Err(clap::error::ErrorKind::ValueValidation));
-        let both = Cli::try_parse_from(["torrential", "setup", "--skip", "--screen", "tv"]).unwrap_err();
-        assert_eq!(both.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

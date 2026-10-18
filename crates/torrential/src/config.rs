@@ -1,7 +1,8 @@
 //! `config.yaml` in the config folder: where downloads go, which sources search
-//! asks, and the answers to `torrential setup`. The engine reads it when it starts,
-//! and clients read the answers before each search and download. A file that does not
-//! parse is an error that names the line, never a silent fallback to the defaults.
+//! asks, and the preferences `torrential setup` saves to override what torrential
+//! detects about the machine. The engine reads it when it starts, and clients read the
+//! preferences before each search and download. A file that does not parse is an error
+//! that names the line, never a silent fallback to the defaults.
 //!
 //! ```yaml
 //! downloads:
@@ -40,8 +41,7 @@ pub struct Config {
     pub search: SearchConfig,
     /// The file these settings came from. `None` when there is none and the defaults apply.
     pub file: Option<PathBuf>,
-    /// `None` when the file has no `preferences` block, so nobody has answered yet.
-    pub preferences: Option<Preferences>,
+    pub preferences: Preferences,
 }
 
 #[derive(Deserialize, Default)]
@@ -49,20 +49,20 @@ pub struct Config {
 struct File {
     downloads: Downloads,
     sources: Sources,
-    preferences: Option<Answers>,
+    preferences: Option<Overrides>,
 }
 
 /// The file as a client reads it. The other sections are the engine's to check, and can
 /// name variables that only the engine's environment sets.
 #[derive(Deserialize, Default)]
 #[serde(default)]
-struct AnswersOnly {
-    preferences: Option<Answers>,
+struct PreferencesOnly {
+    preferences: Option<Overrides>,
 }
 
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
-struct Answers {
+struct Overrides {
     screen: Option<Screen>,
     /// A size such as `8GB`, or `none`.
     max_size: Option<Spanned<String>>,
@@ -123,19 +123,20 @@ pub fn file(paths: &Paths) -> Result<PathBuf, Error> {
     Ok(read(paths)?.map_or_else(|| path(paths), |(path, _)| path))
 }
 
-/// The answers to `torrential setup`, read fresh, since the engine reads the file only
-/// when it starts.
-pub fn preferences(paths: &Paths) -> Result<Option<Preferences>, Error> {
-    let Some((path, text)) = read(paths)? else { return Ok(None) };
+/// The preferences `torrential setup` saved, read fresh, since the engine reads the file
+/// only when it starts.
+pub fn preferences(paths: &Paths) -> Result<Preferences, Error> {
+    let Some((path, text)) = read(paths)? else { return Ok(Preferences::default()) };
     read_preferences(&text).map_err(|(line, message)| invalid(&path, line, &message))
 }
 
-/// Writes `preferences` as the file's top-level `preferences` block. Every other line,
-/// comments included, stays as it was. Returns the file and whether it changed.
+/// Writes `preferences` as the file's top-level `preferences` block, or removes the block
+/// when they are empty. Every other line, comments included, stays as it was. Returns the
+/// file and whether it changed.
 pub fn save_preferences(paths: &Paths, preferences: &Preferences, writes: &Writes) -> Result<(PathBuf, bool), Error> {
     let (path, text) = read(paths)?.unwrap_or_else(|| (path(paths), String::new()));
-    let edited = with_block(&text, &block(preferences));
-    if read_preferences(&edited).ok().flatten() != Some(*preferences) {
+    let edited = if preferences.is_empty() { without_block(&text) } else { with_block(&text, &block(preferences)) };
+    if read_preferences(&edited).ok() != Some(*preferences) {
         return Err(invalid(&path, None, "setup cannot rewrite the preferences block in this file"));
     }
     if edited == text {
@@ -150,12 +151,12 @@ pub fn save_preferences(paths: &Paths, preferences: &Preferences, writes: &Write
     Ok((path, true))
 }
 
-fn read_preferences(text: &str) -> Result<Option<Preferences>, Problem> {
-    let file: AnswersOnly = serde_saphyr::from_str(text).map_err(|e| problem(&e))?;
-    file.preferences.map(Answers::read).transpose()
+fn read_preferences(text: &str) -> Result<Preferences, Problem> {
+    let file: PreferencesOnly = serde_saphyr::from_str(text).map_err(|e| problem(&e))?;
+    file.preferences.unwrap_or_default().read()
 }
 
-impl Answers {
+impl Overrides {
     fn read(self) -> Result<Preferences, Problem> {
         let max_size = match self.max_size {
             Some(Spanned { value, referenced, .. }) if value.trim() != "none" => {
@@ -170,8 +171,7 @@ impl Answers {
     }
 }
 
-/// The block `setup` writes. Unanswered questions are left out, and `{}` records that the
-/// user chose not to answer.
+/// The block `setup` writes, with only the preferences that are set.
 fn block(preferences: &Preferences) -> String {
     let lines: Vec<String> = [
         preferences.screen.map(|s| format!("  screen: {}", s.as_str())),
@@ -181,16 +181,46 @@ fn block(preferences: &Preferences) -> String {
     .into_iter()
     .flatten()
     .collect();
-    if lines.is_empty() { "preferences: {}\n".to_string() } else { format!("preferences:\n{}\n", lines.join("\n")) }
+    format!("preferences:\n{}\n", lines.join("\n"))
 }
 
-/// `text` with `block` in place of its top-level `preferences` block, or after its last
-/// line. The old block is its key line and the indented and blank lines after it, less
-/// trailing blank lines, so a comment at the left margin stays with what follows it.
+/// Where the top-level `preferences` block starts and ends in `lines`: its key line and the
+/// indented and blank lines after it, less trailing blank lines, so a comment at the left
+/// margin stays with what follows it.
+fn block_lines(lines: &[&str]) -> Option<(usize, usize)> {
+    let is_key = |line: &&str| line.strip_prefix("preferences").is_some_and(|rest| rest.starts_with(':'));
+    let start = lines.iter().position(is_key)?;
+    let mut end = start + 1;
+    while end < lines.len() && (lines[end].starts_with([' ', '\t']) || lines[end].trim().is_empty()) {
+        end += 1;
+    }
+    while end > start + 1 && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    Some((start, end))
+}
+
+/// `text` without its `preferences` block, and without the blank line that set it apart.
+fn without_block(text: &str) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let Some((start, mut end)) = block_lines(&lines) else { return text.to_string() };
+    while end < lines.len() && lines[end].trim().is_empty() {
+        end += 1;
+    }
+    let mut before = lines[..start].concat();
+    if end == lines.len() {
+        before.truncate(before.trim_end().len());
+        if !before.is_empty() {
+            before.push('\n');
+        }
+    }
+    before + &lines[end..].concat()
+}
+
+/// `text` with `block` in place of its top-level `preferences` block, or after its last line.
 fn with_block(text: &str, block: &str) -> String {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let is_key = |line: &&str| line.strip_prefix("preferences").is_some_and(|rest| rest.starts_with(':'));
-    let Some(start) = lines.iter().position(is_key) else {
+    let Some((start, end)) = block_lines(&lines) else {
         let mut out = text.to_string();
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
@@ -201,13 +231,6 @@ fn with_block(text: &str, block: &str) -> String {
         out.push_str(block);
         return out;
     };
-    let mut end = start + 1;
-    while end < lines.len() && (lines[end].starts_with([' ', '\t']) || lines[end].trim().is_empty()) {
-        end += 1;
-    }
-    while end > start + 1 && lines[end - 1].trim().is_empty() {
-        end -= 1;
-    }
     [lines[..start].concat(), block.to_string(), lines[end..].concat()].concat()
 }
 
@@ -276,7 +299,7 @@ fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
         })
         .collect::<Result<_, _>>()?;
     let search = SearchConfig { torznab, disabled: file.sources.disabled, ..SearchConfig::default() };
-    let preferences = file.preferences.map(Answers::read).transpose()?;
+    let preferences = file.preferences.unwrap_or_default().read()?;
     Ok(Config { downloads, search, file: None, preferences })
 }
 
@@ -396,20 +419,20 @@ sources:
     }
 
     #[test]
-    fn reads_preferences_and_tells_unanswered_from_skipped() {
+    fn reads_preferences_and_an_absent_or_empty_block_as_none() {
         let all = "preferences:\n  screen: tv-4k\n  max_size: 8GB\n  playback: hevc-hdr\n";
         let read = |text: &str| parse(text, &env()).unwrap().preferences;
         assert_eq!(
             read(all),
-            Some(Preferences {
+            Preferences {
                 screen: Some(Screen::Tv4k),
                 max_size: Some(8_000_000_000),
                 playback: Some(Playback::HevcHdr)
-            })
+            }
         );
-        assert_eq!(read("preferences: {}\n"), Some(Preferences::default()));
-        assert_eq!(read("preferences:\n  max_size: none\n"), Some(Preferences::default()));
-        assert_eq!(read("sources:\n  disabled: [nyaa]\n"), None);
+        for none in ["preferences: {}\n", "preferences:\n", "preferences:\n  max_size: none\n", "sources: {}\n"] {
+            assert_eq!(read(none), Preferences::default(), "{none}");
+        }
     }
 
     #[test]
@@ -482,8 +505,8 @@ sources:
             "# where films go\ndownloads:\n  dir: ~/films # big disk\n\npreferences:\n  screen: laptop\n  \
              max_size: 2GB\n  playback: h264\n\n# indexers\nsources:\n  disabled: [nyaa]\n"
         );
-        assert_eq!(preferences(&folder.paths).unwrap(), Some(LAPTOP));
-        assert!(!folder.save(LAPTOP), "saving the same answers again changes nothing");
+        assert_eq!(preferences(&folder.paths).unwrap(), LAPTOP);
+        assert!(!folder.save(LAPTOP), "saving the same preferences again changes nothing");
     }
 
     #[test]
@@ -501,14 +524,25 @@ sources:
     }
 
     #[test]
-    fn skipping_setup_writes_an_empty_block() {
-        let folder = Folder::new();
-        folder.write("preferences: {screen: tv}\ndownloads:\n  dir: /films\n");
-
-        folder.save(Preferences::default());
-
-        assert_eq!(folder.text(), "preferences: {}\ndownloads:\n  dir: /films\n");
-        assert_eq!(preferences(&folder.paths).unwrap(), Some(Preferences::default()));
+    fn clearing_every_preference_removes_the_block_and_its_blank_line() {
+        let cases = [
+            ("preferences: {screen: tv}\ndownloads:\n  dir: /films\n", "downloads:\n  dir: /films\n"),
+            (
+                "downloads:\n  dir: /films\n\npreferences:\n  screen: tv\n\n# indexers\nsources: {}\n",
+                "downloads:\n  dir: /films\n\n# indexers\nsources: {}\n",
+            ),
+            ("downloads:\n  dir: /films\n\npreferences:\n  screen: tv\n", "downloads:\n  dir: /films\n"),
+            ("preferences:\n  screen: tv\n", ""),
+        ];
+        for (text, cleared) in cases {
+            let folder = Folder::new();
+            folder.write(text);
+            assert!(folder.save(Preferences::default()), "{text}");
+            assert_eq!(folder.text(), cleared, "{text}");
+            assert_eq!(preferences(&folder.paths).unwrap(), Preferences::default());
+        }
+        let missing = Folder::new();
+        assert!(!missing.save(Preferences::default()), "clearing a config that does not exist writes nothing");
     }
 
     #[test]
@@ -519,10 +553,13 @@ sources:
         std::fs::write(&dotfiles, "sources:\n  disabled: [nyaa]\n").unwrap();
         std::os::unix::fs::symlink(&dotfiles, path(&folder.paths)).unwrap();
 
-        folder.save(Preferences::default());
+        folder.save(LAPTOP);
 
         assert!(path(&folder.paths).symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_to_string(&dotfiles).unwrap(), "sources:\n  disabled: [nyaa]\n\npreferences: {}\n");
+        assert_eq!(
+            std::fs::read_to_string(&dotfiles).unwrap(),
+            "sources:\n  disabled: [nyaa]\n\npreferences:\n  screen: laptop\n  max_size: 2GB\n  playback: h264\n"
+        );
     }
 
     #[test]

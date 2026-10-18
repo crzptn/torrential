@@ -60,7 +60,7 @@ impl torrential_tui::Backend for EngineBackend {
         query: SearchQuery,
         partial: &mut dyn FnMut(SearchResult, Vec<String>),
     ) -> Result<SearchResult, Error> {
-        let preferences = config::preferences(&self.paths)?.unwrap_or_default();
+        let preferences = config::preferences(&self.paths)?;
         let query = SearchQuery { profile: Profile { preferences, ..Profile::default() }, ..query };
         let within = Duration::from_millis(query.timeout_ms.into()) + Duration::from_secs(10);
         let mut conn = self.conn()?;
@@ -94,7 +94,7 @@ impl torrential_tui::Backend for EngineBackend {
             dir: None,
             files: files.unwrap_or_default().iter().map(|path| globset::escape(path)).collect(),
             max_size: None,
-            setup_max_size: config::preferences(&self.paths)?.and_then(|p| p.max_size),
+            setup_max_size: config::preferences(&self.paths)?.max_size,
             dry_run: false,
         });
         match self.conn()?.call(&request)? {

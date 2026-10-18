@@ -4,9 +4,9 @@ use std::time::Duration;
 use torrential_core::id::shortest_unique_prefix;
 use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
-use torrential_core::units::{format_limit, format_size, size_text};
+use torrential_core::units::{format_limit, format_size};
 use torrential_core::{
-    Arch, Category, ErrorCode, Job, JobStatus, Preferences, Profile, Release, ReleaseId, SearchResult, Selection,
+    Arch, Category, ErrorCode, Job, JobStatus, Machine, Profile, Release, ReleaseId, SearchResult, Selection,
     SourceOutcome, TorrentId,
 };
 
@@ -644,39 +644,33 @@ pub fn doctor(checks: &[Check], fix: Option<String>) -> Doc {
     }
 }
 
-/// What `torrential setup` saved or found. `result` is `saved`, `unchanged`, or `shown`.
-pub fn setup(preferences: Option<&Preferences>, file: &Path, result: &str) -> Doc {
-    let value = |answer: Option<String>, open: &str| match (preferences, answer) {
-        (None, _) => Cell::styled("not set", Token::Muted),
-        (Some(_), Some(answer)) => Cell::new(answer),
-        (Some(_), None) => Cell::styled(open, Token::Muted),
-    };
-    let answers = preferences.copied().unwrap_or_default();
-    let fields = vec![
-        ("screen", value(answers.screen.map(|s| s.as_str().to_string()), "any")),
-        ("max_size", value(answers.max_size.map(size_text), "none")),
-        ("playback", value(answers.playback.map(|p| p.as_str().to_string()), "any")),
-        ("file", Cell::new(file.display().to_string())),
-    ];
+/// What `torrential setup` detected, saved, or found. `result` is `saved`, `unchanged`, or
+/// `shown`.
+pub fn setup(profile: &Profile, file: &Path, result: &str) -> Doc {
+    let detected = profile.detected.as_ref().map_or_else(|| "nothing".to_string(), machine);
+    let fields = vec![("detected", Cell::new(detected)), ("file", Cell::new(file.display().to_string()))];
     let title = match result {
         "shown" => Vec::new(),
         word => vec![Cell::styled(word, Token::Mint)],
     };
-    let summary = match preferences {
-        None => vec!["not set; torrential setup --skip records a choice not to answer".to_string()],
-        Some(p) if p.is_empty() => {
-            vec!["skipped; search ranks as it did before and stops suggesting setup".to_string()]
-        }
-        Some(p) => {
-            let mut lines = vec![format!("search ranks for {}", p.describe())];
-            if let Some(max) = p.max_size {
-                lines.push(format!("get refuses a download over {} unless --max-size allows it", format_limit(max)));
-            }
-            lines
-        }
-    };
+    let overrides = profile.overrides().unwrap_or_else(|| "none".to_string());
+    let mut summary = vec![format!("ranking for {} · overrides: {overrides}", profile.describe())];
+    if let Some(max) = profile.preferences.max_size {
+        summary.push(format!("get refuses a download over {} unless --max-size allows it", format_limit(max)));
+    }
     let next = if result == "shown" { crate::cli::SETUP_FLAGS } else { "torrential search <words>" };
     Doc { body: Body::Fields { title, fields }, summary, next: Some(next.to_string()) }
+}
+
+/// `3024x1964 display with HDR, arm64, English`.
+fn machine(machine: &Machine) -> String {
+    let display = match machine.display {
+        Some(d) => format!("{}x{} display{}", d.width, d.height, if d.hdr { " with HDR" } else { "" }),
+        None => "no display".to_string(),
+    };
+    let arch = machine.arch.map(|a| a.as_str().to_string());
+    let language = machine.language.as_ref().map(|l| l.name().to_string());
+    [Some(display), arch, language].into_iter().flatten().collect::<Vec<_>>().join(", ")
 }
 
 fn skill_state_cell(state: State) -> Cell {

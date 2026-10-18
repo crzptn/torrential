@@ -145,7 +145,7 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
     }
 }
 
-fn search(mut conn: Conn, args: SearchArgs, preferences: Option<Preferences>, mode: Mode) -> Result<u8, Error> {
+fn search(mut conn: Conn, args: SearchArgs, preferences: Preferences, mode: Mode) -> Result<u8, Error> {
     let query = SearchQuery {
         text: args.words.join(" "),
         sources: args.source,
@@ -157,7 +157,7 @@ fn search(mut conn: Conn, args: SearchArgs, preferences: Option<Preferences>, mo
         timeout_ms: args.timeout.as_millis().min(u128::from(u32::MAX)) as u32,
         adult: args.adult,
         fresh: args.fresh,
-        profile: Profile { preferences: preferences.unwrap_or_default(), ..Profile::default() },
+        profile: Profile { preferences, ..Profile::default() },
     };
     let within = args.timeout + Duration::from_secs(10);
     match answer(conn.call_within(&Request::Search { query, stream: false }, within)?)? {
@@ -176,7 +176,7 @@ fn get(mut conn: Conn, args: GetArgs, mode: Mode, cwd: &Path, env: &Env) -> Resu
     }
     let dir = args.dir.map(|d| absolute(&d, cwd, env));
     let dry_run = args.dry_run;
-    let setup_max_size = crate::config::preferences(&Paths::from_process(env)?)?.and_then(|p| p.max_size);
+    let setup_max_size = crate::config::preferences(&Paths::from_process(env)?)?.max_size;
     let request = Request::Get(GetRequest {
         target,
         dir: dir.clone(),
@@ -440,11 +440,9 @@ fn doctor(env: &Env, mode: Mode, network: bool) -> u8 {
         Err(error) => checks.push(check("skill", CheckStatus::Fail, error.message)),
     }
     let profile = match (&settings, crate::machine::detect(env)) {
-        (Ok(settings), Ok(machine)) => views::profile_check(&Profile {
-            detected: Some(machine),
-            preferences: settings.preferences.unwrap_or_default(),
-            room: None,
-        }),
+        (Ok(settings), Ok(machine)) => {
+            views::profile_check(&Profile { detected: Some(machine), preferences: settings.preferences, room: None })
+        }
         (Err(_), _) => check("profile", CheckStatus::Skipped, "the config has an error".into()),
         (_, Err(error)) => check("profile", CheckStatus::Fail, error.message),
     };
