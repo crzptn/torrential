@@ -9,7 +9,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use torrential_core::units::{count, format_duration};
-use torrential_core::{Eighths, Flag, Job, JobStatus, Release, ReleaseId, Slice, SourceOutcome, TorrentFile};
+use torrential_core::{
+    Codec, Eighths, Flag, Job, JobStatus, Quality, Release, ReleaseId, Resolution, Slice, SourceOutcome, TorrentFile,
+};
 
 use crate::format::{self, age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
 use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
@@ -370,19 +372,25 @@ fn download_grid(right: u16) -> Grid {
     Grid { rule: percent - 6 - rule_cells, rule_cells, percent, tail, right }
 }
 
-/// The result grid: name, one flag, then size, seeds, and age, each right-aligned. The fields
-/// hold where each column starts (`flag`) or ends (the rest).
+/// The result grid: name, one flag, the quality's first word, then size, seeds, and age, each
+/// right-aligned. The fields hold where each column starts (`flag`, `quality`) or ends (the rest).
 struct Columns {
     flag: u16,
+    quality: Option<u16>,
     size: u16,
     seeds: u16,
     age: u16,
 }
 
-fn result_columns(right: u16) -> Columns {
+/// The quality column is there only when a listed release has a quality and names keep 20
+/// cells beside it, so a search for disk images, or a narrow window, keeps the room for names.
+fn result_columns(right: u16, with_quality: bool) -> Columns {
     let seeds = right - 6;
     let size = seeds - 7;
-    Columns { flag: size - 18, size, seeds, age: right }
+    let quality = size - 15;
+    let names = (quality - 10).saturating_sub(CONTENT + 2);
+    let quality = (with_quality && names >= 20).then_some(quality);
+    Columns { flag: quality.unwrap_or(size - 8) - 10, quality, size, seeds, age: right }
 }
 
 /// Where a file row's name must end: two cells before the size column.
@@ -402,6 +410,7 @@ fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
     let mut group: Vec<Option<&'static str>> = vec![None; usize::from(total)];
     let mut last: Option<&'static str> = None;
     let right = screen.right;
+    let columns = result_columns(right, state.results().iter().any(|r| quality_word(r.quality()).is_some()));
     for p in &placed {
         let y = p.top;
         match p.block {
@@ -432,18 +441,18 @@ fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
             Block::Gap => last = None,
             Block::Heads => {
                 last = Some("found");
-                heads(&mut sheet, state, &result_columns(right), y);
+                heads(&mut sheet, state, &columns, y);
             }
             Block::Result(id) => {
                 if let Some(release) = state.release(id) {
-                    result_row(&mut sheet, state, release, &result_columns(right), y);
+                    result_row(&mut sheet, state, release, &columns, y);
                 }
             }
             Block::ResultDetail(id) => {
                 if state.focus == Focus::Files {
                     last = Some("files");
                 }
-                result_detail(&mut sheet, state, id, &result_columns(right), y, p.height);
+                result_detail(&mut sheet, state, id, &columns, y, p.height);
             }
             Block::Empty => empty(&mut sheet, state, right, y),
         }
@@ -621,6 +630,13 @@ fn flag_words(flag: Flag) -> &'static str {
     }
 }
 
+/// What a row has room for of a release's quality: the resolution, else the codec, else `hdr`.
+/// The details spell out the rest.
+fn quality_word(quality: Quality) -> Option<&'static str> {
+    let codec = quality.codec.map(Codec::as_str);
+    quality.resolution.map(Resolution::as_str).or(codec).or(quality.hdr.then_some("hdr"))
+}
+
 fn result_row(buf: &mut Buffer, state: &State, release: &Release, c: &Columns, y: u16) {
     let is_selected = selected(state, Item::Result(release.id));
     if is_selected && state.focus == Focus::List {
@@ -636,6 +652,9 @@ fn result_row(buf: &mut Buffer, state: &State, release: &Release, c: &Columns, y
             _ => pick(TEXT),
         };
         put(buf, c.flag, y, 8, flag.as_str(), style);
+    }
+    if let (Some(x), Some(word)) = (c.quality, quality_word(release.quality())) {
+        put(buf, x, y, 5, word, pick(TEXT));
     }
     put_right(buf, c.size, y, &release.size.map_or("–".into(), size), pick(TEXT));
     let seeds_style = match release.seeders {
@@ -679,6 +698,10 @@ fn result_detail(buf: &mut Buffer, state: &State, id: ReleaseId, c: &Columns, y:
     let Some(release) = state.release(id) else { return };
     let mut facts: Vec<String> = release.sources.clone();
     facts.extend(release.flags.iter().map(|f| flag_words(*f).to_string()));
+    let quality = release.quality().to_string();
+    if !quality.is_empty() {
+        facts.push(quality);
+    }
     match files {
         Some(Files::Ready(tree)) => {
             facts.push(count(tree.files.len(), "file"));
@@ -688,7 +711,7 @@ fn result_detail(buf: &mut Buffer, state: &State, id: ReleaseId, c: &Columns, y:
     }
     let used = put(buf, DETAIL, y, room, &facts.join(" · "), fg(PENCIL));
     if let Some(Files::Failed(error)) = files {
-        put(buf, CONTENT + used + 3, y, room.saturating_sub(used + 3), &error.message, fg(ERROR));
+        put(buf, DETAIL + used + 3, y, room.saturating_sub(used + 3), &error.message, fg(ERROR));
     }
 }
 

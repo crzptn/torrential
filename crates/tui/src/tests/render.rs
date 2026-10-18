@@ -297,8 +297,60 @@ fn a_typing_user_sees_that_f1_opens_the_keys() {
 #[test]
 fn a_cut_name_keeps_its_end() {
     let screen = shot(&searched((80, 24)));
-    assert!(screen.contains("Night of the…Dead (1968) [DVD]"), "{screen}");
-    assert!(screen.contains("Night.of.the…1080p.BluRay.x264"), "{screen}");
+    assert!(screen.contains("Night of…(1968) [DVD]"), "{screen}");
+    assert!(screen.contains("Night.of.the…BluRay.x264"), "{screen}");
+}
+
+#[test]
+fn a_row_shows_the_resolution_and_its_details_spell_out_the_quality() {
+    let mut state = searched((100, 30));
+    press(&mut state, "jj");
+    let buf = render(&state);
+    let (_, y) = find(&buf, "BluRay.x264");
+    assert!(line(&buf, y).ends_with("BluRay.x264      trusted   1080p   7.8 GiB    214    3y"), "{}", line(&buf, y));
+    assert_eq!(line(&buf, y + 1), "            │   knaben · trusted uploader · 1080p h264");
+    let (_, y) = find(&buf, "CAM.x264");
+    assert!(
+        line(&buf, y).ends_with("CAM.x264        cam       h264    1.4 GiB     41   2mo"),
+        "the codec when no resolution"
+    );
+    let (_, y) = find(&buf, "(1968) colorized");
+    assert!(line(&buf, y).ends_with("colorized     pd                734 MiB      –    6y"), "{}", line(&buf, y));
+}
+
+#[test]
+fn a_file_list_error_sits_three_cells_after_the_facts() {
+    let mut state = searched((100, 30));
+    let error = Error::new(ErrorCode::MetadataTimeout, "no peer sent the file list");
+    state.update(Msg::Files { item: Item::Result(result_id("4c1e9a")), result: Err(error) });
+    let buf = render(&state);
+    let (_, y) = find(&buf, "no peer sent");
+    assert_eq!(line(&buf, y), "            │   archive.org · public domain   no peer sent the file list");
+}
+
+#[test]
+fn a_narrow_window_keeps_the_room_for_names() {
+    let buf = render(&searched((60, 16)));
+    let (_, y) = find(&buf, "3.4 GiB");
+    assert_eq!(line(&buf, y), "            │ Night…[DVD]  pd         3.4 GiB      –   12y");
+}
+
+#[test]
+fn a_search_without_qualities_keeps_the_room_for_names() {
+    let mut state = with_downloads((100, 30));
+    press(&mut state, "/");
+    press(&mut state, "ubuntu");
+    state.update(key(KeyCode::Enter));
+    let iso =
+        release("6a1f00", "ubuntu-24.04.1-desktop-amd64.iso", "knaben", &[Flag::Official], Some(950), 6_100 * MIB, 400);
+    state.update(Msg::SearchDone { search: 1, result: Ok(result(vec![iso], final_sources())) });
+    let buf = render(&state);
+    let (_, y) = find(&buf, "ubuntu-24.04.1");
+    assert!(
+        line(&buf, y).ends_with("amd64.iso                     official   6.0 GiB    950    1y"),
+        "{}",
+        line(&buf, y)
+    );
 }
 
 #[test]
@@ -343,7 +395,7 @@ fn the_selected_row_is_bright_and_bold_with_the_mark_beside_it() {
     let (x, y) = find(&buf, "Night of the Living Dead (1968) [DVD]");
     assert_eq!((buf[(x, y)].fg, buf[(x, y)].modifier.contains(Modifier::BOLD)), (theme::INK, true));
     assert_eq!((buf[(MARK, y)].symbol(), buf[(MARK, y)].fg), ("●", theme::ACTION));
-    let (x, y) = find(&buf, "Night.of.the.Living.Dead.1968.1080p");
+    let (x, y) = find(&buf, "Night.of.the…Dead.1968.1080p");
     assert_eq!((buf[(x, y)].fg, buf[(MARK, y)].symbol()), (theme::TEXT, "│"));
 }
 
