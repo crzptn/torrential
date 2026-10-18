@@ -144,6 +144,37 @@ The engine reads the file when it starts. To apply an edit, run `torrential daem
 
 `TORRENTIAL_HOME` moves the config, state, cache, and engine socket into one folder, so the config file is `$TORRENTIAL_HOME/config/config.toml`. It does not move downloads.
 
+## How the engine works
+
+### Downloads outlive the command
+
+The first command that needs the engine starts it in the background. Commands talk to it over a Unix socket and return. The engine keeps downloading after the command, the agent's turn, or the session ends. It runs up to three downloads at once and queues the rest. When nothing is downloading or checking and no command is connected, it exits after 120 seconds. `torrential daemon status` shows the engine and its log, and `torrential daemon stop` saves its state and stops it.
+
+### It never seeds
+
+Upload is off from the moment a download starts. The engine keeps every peer choked and refuses every request for a piece. A finished download stops, and its files stay where they are.
+
+### Resume after a reboot
+
+The engine saves resume data every 5 minutes and when you pause a download. Downloads that were running when the engine stopped show `interrupted` when it starts again. That happens after `torrential daemon stop`, a crash, or a reboot. Run `torrential resume --all` to continue every paused, interrupted, or failed download. That includes downloads you paused yourself.
+
+### Start the engine at login
+
+`torrential daemon install` registers the engine as a login service, a launchd agent on macOS or a systemd user unit on Linux. That engine resumes downloads when it starts and does not exit when idle. `torrential daemon uninstall` removes the service. The service file sets only `TORRENTIAL_HOME`, so it does not pass on an `api_key_env` variable from your shell.
+
+## Read the output from a script
+
+When stdout is not a terminal, or an agent's environment variable such as `CLAUDECODE` is set, output is plain text:
+
+- Lists are tab-separated with one header row.
+- Lines that start with `#` are summaries.
+- The last line usually starts with `next:` and holds the command to run next.
+- Errors go to stderr as `error[<code>]: <message>`, followed by `hint:` and what to do.
+
+Add `--json` to any command for JSON on stdout, with `"schema":1` in every object. In JSON mode, errors also go to stdout. `wait --json` prints one object per line. Sizes are bytes, rates are bytes per second, and times are Unix seconds.
+
+Exit code 0 means success. Exit code 8 means `wait` returned while the download still runs. Off a terminal, `wait` returns after 100 seconds unless you pass `--timeout`. `torrential schema` prints every command, flag, exit code, and error code as JSON.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
