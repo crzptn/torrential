@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use torrential_core::error::Details;
 use torrential_core::{ErrorCode, Flag, HexPrefix, SearchQuery, SourceOutcome};
-use torrential_search::{ResultCache, Search, SearchConfig};
+use torrential_search::{ResultCache, Search, SearchConfig, TorznabConfig};
 
 #[derive(Clone)]
 struct Reply {
@@ -306,6 +306,33 @@ async fn a_shared_cache_does_not_answer_for_another_endpoint() {
 
     assert_eq!(outcomes(&moved), [("apibay".into(), SourceOutcome::Ok { results: 100 })]);
     assert_eq!(mirror.hits("/apibay/"), 1);
+}
+
+#[tokio::test]
+async fn torznab_keys_stay_out_of_results_but_resolve_for_the_engine() {
+    let server = Server::start(vec![("/torznab/api", vec![ok(fixture("torznab/jackett-ubuntu.xml"))])]).await;
+    let config = SearchConfig {
+        torznab: vec![TorznabConfig {
+            name: "jackett".into(),
+            url: format!("{}/torznab/api", server.base),
+            api_key: Some("k3y".into()),
+        }],
+        ..SearchConfig::default()
+    };
+    let cache = ResultCache::new();
+    let search = Search::new(&config, cache.clone()).unwrap();
+
+    let result = search.search(&query("ubuntu", &["jackett"])).await.unwrap();
+
+    assert_eq!(result.releases.len(), 2);
+    assert!(!format!("{result:?}").contains("k3y"));
+    assert!(!serde_json::to_string(&result).unwrap().contains("k3y"));
+    let locator = result.releases.iter().find(|r| r.id.to_ref().starts_with('u')).unwrap();
+    let resolved = cache.find(&locator.id.to_ref().parse().unwrap());
+    assert_eq!(
+        resolved[0].torrent_url.as_deref(),
+        Some("http://127.0.0.1:9117/dl/privatehd/?jackett_apikey=k3y&path=def&file=ubuntu")
+    );
 }
 
 #[tokio::test]

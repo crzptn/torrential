@@ -149,8 +149,8 @@ impl Search {
             }
         });
         let runs = join_all(lookups).await;
-        let result = assemble(query, &terms, &runs, millis(started.elapsed()))?;
-        self.inner.cache.remember(&result.releases);
+        let (result, linked) = assemble(query, &terms, &runs, millis(started.elapsed()))?;
+        self.inner.cache.remember(&linked);
         Ok(result)
     }
 

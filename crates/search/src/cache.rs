@@ -46,6 +46,10 @@ impl ResultCache {
 
     /// Releases from recent searches whose ID starts with `prefix`, newest first.
     /// More than one match means the prefix is ambiguous.
+    ///
+    /// Unlike a `SearchResult`, these keep links from private sources, which can
+    /// carry a Torznab API key or a tracker passkey: they are for downloading,
+    /// not for printing.
     pub fn find(&self, prefix: &HexPrefix) -> Vec<Release> {
         let state = self.lock();
         let mut found: Vec<&(u64, Release)> = state.recent.values().filter(|(_, r)| prefix.matches(&r.id)).collect();

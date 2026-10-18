@@ -41,7 +41,7 @@ fn failed(source: &Arc<SourceMeta>, failure: Failure) -> Run {
 }
 
 fn search(query: &SearchQuery, runs: &[Run]) -> SearchResult {
-    assemble(query, &Terms::parse(&query.text), runs, 1200).unwrap()
+    assemble(query, &Terms::parse(&query.text), runs, 1200).unwrap().0
 }
 
 fn names(result: &SearchResult) -> Vec<&str> {
@@ -132,31 +132,55 @@ fn a_v2_listing_joins_the_hybrid_listing_of_the_same_torrent() {
 }
 
 #[test]
-fn private_trackers_stay_with_their_own_listing() {
+fn private_links_stay_out_of_results_and_with_their_own_listing() {
     let torznab = source("tracker", 8, false, false);
     let mut public = row(&h(0x33), "Debian 13 netinst");
     public.trackers = vec!["udp://public.example:6969/announce".into()];
     let mut private = row(&h(0x33), "Debian 13 netinst");
     private.trackers = vec!["https://private.example/announce?passkey=secret".into()];
-    let mut private_only = row(&h(0x44), "Debian 13 DVD");
+    let mut private_only = Observation::new(
+        Identity::Hash {
+            hash: infohash(&h(0x44)).unwrap(),
+            torrent_url: Some("http://127.0.0.1:9117/dl/x/?jackett_apikey=k3y".into()),
+        },
+        "Debian 13 DVD",
+    )
+    .unwrap();
     private_only.trackers = vec!["https://private.example/announce?passkey=secret".into()];
+    let q = SearchQuery::new("debian 13");
 
-    let result = search(
-        &SearchQuery::new("debian 13"),
+    let (shown, linked) = assemble(
+        &q,
+        &Terms::parse(&q.text),
         &[fresh(&knaben(), vec![public]), fresh(&torznab, vec![private, private_only])],
-    );
+        0,
+    )
+    .unwrap();
 
-    let magnets: Vec<&str> = result.releases.iter().map(|r| r.magnet.as_deref().unwrap()).collect();
+    let links = |releases: &[Release]| -> Vec<(Option<String>, Option<String>)> {
+        releases.iter().map(|r| (r.magnet.clone(), r.torrent_url.clone())).collect()
+    };
+    let public_magnet = format!(
+        "magnet:?xt=urn:btih:{}&dn=Debian%2013%20netinst&tr=udp%3A%2F%2Fpublic.example%3A6969%2Fannounce",
+        h(0x33)
+    );
     assert_eq!(
-        magnets,
+        links(&shown.releases),
         [
-            format!(
-                "magnet:?xt=urn:btih:{}&dn=Debian%2013%20netinst&tr=udp%3A%2F%2Fpublic.example%3A6969%2Fannounce",
-                h(0x33)
-            ),
-            format!(
-                "magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD&tr=https%3A%2F%2Fprivate.example%2Fannounce%3Fpasskey%3Dsecret",
-                h(0x44)
+            (Some(public_magnet.clone()), None),
+            (Some(format!("magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD", h(0x44))), None)
+        ]
+    );
+    assert_eq!(
+        links(&linked),
+        [
+            (Some(public_magnet), None),
+            (
+                Some(format!(
+                    "magnet:?xt=urn:btih:{}&dn=Debian%2013%20DVD&tr=https%3A%2F%2Fprivate.example%2Fannounce%3Fpasskey%3Dsecret",
+                    h(0x44)
+                )),
+                Some("http://127.0.0.1:9117/dl/x/?jackett_apikey=k3y".into())
             ),
         ]
     );
@@ -167,13 +191,14 @@ fn locator_rows_get_a_stable_u_ref() {
     let url = "http://127.0.0.1:9117/dl/privatehd/?path=def";
     let locator = || Observation::new(Identity::Locator { torrent_url: url.into() }, "Ubuntu 26.04 LTS").unwrap();
     let torznab = source("tracker", 8, false, false);
-    let first = search(&SearchQuery::new("ubuntu"), &[fresh(&torznab, vec![locator()])]);
-    let again = search(&SearchQuery::new("ubuntu"), &[fresh(&torznab, vec![locator(), locator()])]);
+    let q = SearchQuery::new("ubuntu");
+    let (first, linked) = assemble(&q, &Terms::parse(&q.text), &[fresh(&torznab, vec![locator()])], 0).unwrap();
+    let again = search(&q, &[fresh(&torznab, vec![locator(), locator()])]);
     let digest: [u8; 20] = Sha1::digest(url.as_bytes()).into();
     assert_eq!(first.releases[0].id, ReleaseId::Locator(LocatorId::from_bytes(digest)));
     assert!(first.releases[0].id.to_ref().starts_with('u'));
-    assert_eq!(first.releases[0].torrent_url.as_deref(), Some(url));
-    assert_eq!(first.releases[0].magnet, None);
+    assert_eq!((first.releases[0].torrent_url.as_deref(), first.releases[0].magnet.as_deref()), (None, None));
+    assert_eq!(linked[0].torrent_url.as_deref(), Some(url));
     assert_eq!(again.releases, first.releases);
 }
 
@@ -418,7 +443,7 @@ fn a_thousand_shuffles_give_one_order() {
     let runs_from = |groups: &[(Arc<SourceMeta>, Vec<Observation>)]| -> Vec<Run> {
         groups.iter().map(|(s, rows)| fresh(s, rows.clone())).collect()
     };
-    let expected = assemble(&query, &terms, &runs_from(&base), 0).unwrap();
+    let (expected, expected_linked) = assemble(&query, &terms, &runs_from(&base), 0).unwrap();
     assert_eq!(expected.releases.len(), 25);
     // The hybrid's group joins its v2 listing and keeps its longest listing name.
     let hybrid = expected.releases.iter().find(|r| r.id.to_ref() == h(0x01)).unwrap();
@@ -433,8 +458,9 @@ fn a_thousand_shuffles_give_one_order() {
         for (_, rows) in &mut groups {
             rng.shuffle(rows);
         }
-        let shuffled = assemble(&query, &terms, &runs_from(&groups), 0).unwrap();
+        let (shuffled, linked) = assemble(&query, &terms, &runs_from(&groups), 0).unwrap();
         assert_eq!(shuffled.releases, expected.releases);
+        assert_eq!(linked, expected_linked);
         assert_eq!(shuffled.sources, expected.sources);
     }
 }

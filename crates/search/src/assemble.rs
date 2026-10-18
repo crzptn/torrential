@@ -41,13 +41,14 @@ pub(crate) fn vet(terms: &Terms, rows: Vec<Observation>) -> Result<Vec<Observati
 }
 
 /// Fails with `providers_unavailable` when no source answered. An answer with no
-/// rows is still an answer.
+/// rows is still an answer. Also returns the shown releases with every link, for
+/// resolving their IDs later.
 pub(crate) fn assemble(
     query: &SearchQuery,
     terms: &Terms,
     runs: &[Run],
     elapsed_ms: u32,
-) -> Result<SearchResult, Error> {
+) -> Result<(SearchResult, Vec<Release>), Error> {
     let mut runs: Vec<&Run> = runs.iter().collect();
     runs.sort_by_key(|r| r.source.authority);
     let sources: Vec<SourceReport> = runs.iter().map(|r| report(r)).collect();
@@ -65,14 +66,9 @@ pub(crate) fn assemble(
     rank(&mut kept, query.sort);
     let total = u32::try_from(kept.len()).unwrap_or(u32::MAX);
     kept.truncate(query.limit.into());
-    Ok(SearchResult {
-        query: query.clone(),
-        releases: kept.into_iter().map(|c| c.release).collect(),
-        total,
-        hidden_adult,
-        sources,
-        elapsed_ms,
-    })
+    let releases = kept.iter().map(Candidate::shown).collect();
+    let result = SearchResult { query: query.clone(), releases, total, hidden_adult, sources, elapsed_ms };
+    Ok((result, kept.into_iter().map(|c| c.release).collect()))
 }
 
 fn report(run: &Run) -> SourceReport {
@@ -94,9 +90,30 @@ fn all_failed(sources: Vec<SourceReport>) -> Error {
 
 /// A merged release, with what ranking needs that `Release` does not carry.
 pub(crate) struct Candidate {
+    /// Every link, for the engine to download from.
     pub release: Release,
+    hash: Option<InfoHash>,
+    /// The `.torrent` URL came from a private source and may carry an API key.
+    private_url: bool,
+    /// The trackers came from a private source and carry the user's passkey.
+    private_trackers: bool,
     relevance: Relevance,
     lawful: bool,
+}
+
+impl Candidate {
+    /// The release as a search result shows it, without links that came only from
+    /// private sources. Agents and people refer to it by ID instead.
+    fn shown(&self) -> Release {
+        let mut release = self.release.clone();
+        if self.private_url {
+            release.torrent_url = None;
+        }
+        if self.private_trackers {
+            release.magnet = self.hash.map(|h| build_magnet(&h, &release.name, &[]));
+        }
+        release
+    }
 }
 
 type Sighting<'a> = (&'a SourceMeta, &'a Observation);
@@ -166,8 +183,12 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
         group.iter().filter(|(s, _)| s.public || !any_public).flat_map(|(_, o)| &o.trackers).collect();
     let trackers: Vec<String> = trackers.into_iter().take(MAX_TRACKERS).cloned().collect();
     let hash = combined_hash(group);
+    let link = group.iter().filter_map(|(s, o)| o.torrent_url().map(|url| (s.authority, !s.public, url))).min();
     let relevance = group.iter().map(|(_, o)| terms.relevance(o.name())).max().unwrap_or(terms.relevance(""));
     Candidate {
+        hash,
+        private_url: link.is_some_and(|(_, private, _)| private),
+        private_trackers: !any_public && !trackers.is_empty(),
         release: Release {
             id,
             magnet: hash.map(|h| build_magnet(&h, &name, &trackers)),
@@ -179,7 +200,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
             category,
             flags,
             sources: authorities.into_iter().map(|(_, name)| name.to_string()).collect(),
-            torrent_url: first(group, |o| o.torrent_url().map(str::to_string)),
+            torrent_url: link.map(|(.., url)| url.to_string()),
             info_url: first(group, |o| o.info_url.clone()),
         },
         relevance,
