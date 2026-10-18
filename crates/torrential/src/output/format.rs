@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use torrential_core::Progress;
+pub use torrential_core::units::count;
 use torrential_core::units::{format_duration, format_rate, format_size};
 
 pub const UNKNOWN: &str = "?";
@@ -19,11 +20,6 @@ pub fn percent(progress: &Progress) -> String {
             format!("{}.{}%", tenths / 10, tenths % 10)
         }
     }
-}
-
-/// `1 file`, `2 files`. Every noun counted in output is regular.
-pub fn count(n: usize, noun: &str) -> String {
-    if n == 1 { format!("1 {noun}") } else { format!("{n} {noun}s") }
 }
 
 pub fn rate(bytes_per_sec: u64) -> String {
@@ -91,13 +87,6 @@ mod tests {
         assert_eq!(percent(&p(9_999, Some(10_000))), "99.9%");
         assert_eq!(percent(&p(10_000, Some(10_000))), "100%");
         assert_eq!(percent(&p(0, None)), "-");
-    }
-
-    #[test]
-    fn counts_agree_with_their_number() {
-        assert_eq!(count(0, "file"), "0 files");
-        assert_eq!(count(1, "file"), "1 file");
-        assert_eq!(count(2, "damaged piece"), "2 damaged pieces");
     }
 
     #[test]

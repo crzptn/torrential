@@ -1,4 +1,4 @@
-//! Sizes and durations as people type and read them.
+//! Sizes, durations, and counts as people type and read them.
 
 use std::time::Duration;
 
@@ -129,6 +129,11 @@ pub fn format_duration(d: Duration) -> String {
     }
 }
 
+/// `1 file`, `2 files`. Every noun counted in output is regular.
+pub fn count(n: usize, noun: &str) -> String {
+    if n == 1 { format!("1 {noun}") } else { format!("{n} {noun}s") }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +180,12 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(16 * 60 + 5)), "16m");
         assert_eq!(format_duration(Duration::from_secs(2 * 3600 + 11 * 60)), "2h11m");
         assert_eq!(format_duration(Duration::from_secs(3 * 86_400 + 4 * 3600)), "3d4h");
+    }
+
+    #[test]
+    fn counts_agree_with_their_number() {
+        assert_eq!(count(0, "file"), "0 files");
+        assert_eq!(count(1, "file"), "1 file");
+        assert_eq!(count(2, "damaged piece"), "2 damaged pieces");
     }
 }
