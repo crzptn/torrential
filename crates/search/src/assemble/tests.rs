@@ -448,6 +448,37 @@ fn a_tagged_trailer_ranks_after_the_film_on_a_screen() {
 }
 
 #[test]
+fn a_file_too_small_for_its_tag_ranks_as_untagged_on_a_screen() {
+    let laptop = Preferences { screen: Some(Screen::Laptop), ..Preferences::default() };
+    let ranked = |text: &str, rows: Vec<Observation>| {
+        let q = SearchQuery { preferences: Some(laptop), ..SearchQuery::new(text) };
+        names(&search(&q, &[fresh(&knaben(), rows)])).iter().map(|n| n.to_string()).collect::<Vec<_>>()
+    };
+    let sized = |byte, name, size| with(row(&h(byte), name), Some(40), Some(size), None);
+    // From the recorded archive.org results for the film.
+    let clip = sized(0x22, "Night of the Living Dead |1968| WebRip US (HD 1080p)", 8_690_000);
+    let film = sized(0x23, "Night of the Living Dead (1968)", GB);
+    assert_eq!(
+        ranked("night of the living dead 1968", vec![clip, film]),
+        ["Night of the Living Dead (1968)", "Night of the Living Dead |1968| WebRip US (HD 1080p)"]
+    );
+    // The smallest whole x265 episodes that knaben listed in October 2026 keep their tags.
+    let episodes = vec![
+        sized(0x24, "Bobs Burgers S16E03", 300_000_000),
+        sized(0x25, "Bobs Burgers S16E03 1080p HEVC x265-MeGusta", 112_500_000),
+        sized(0x26, "Bobs Burgers S16E03 720p WEB x265-MiNX", 81_400_000),
+    ];
+    assert_eq!(
+        ranked("bobs burgers s16e03", episodes),
+        [
+            "Bobs Burgers S16E03 1080p HEVC x265-MeGusta",
+            "Bobs Burgers S16E03 720p WEB x265-MiNX",
+            "Bobs Burgers S16E03"
+        ]
+    );
+}
+
+#[test]
 fn alternate_sorts_keep_the_same_tie_breaks() {
     let sorted = |sort| {
         let mut q = SearchQuery::new("night of the living dead 1968");

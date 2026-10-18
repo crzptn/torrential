@@ -1,4 +1,4 @@
-use torrential_core::Category;
+use torrential_core::{Category, Resolution};
 
 use crate::terms::Terms;
 
@@ -59,6 +59,19 @@ pub(crate) fn is_extra(name: &str, terms: &Terms) -> bool {
     name.split(|c: char| !c.is_alphanumeric())
         .map(str::to_lowercase)
         .any(|t| EXTRAS.contains(&t.as_str()) && !terms.words().contains(&t))
+}
+
+/// Too small to hold a whole film or episode at its resolution, like an 8 MB clip tagged
+/// 1080p, so the tag says nothing about a copy of the film either. The floors sit below the
+/// smallest whole episodes found on knaben and apibay in October 2026, x265 TV episodes of
+/// 81 MB at 720p, 71 MB at 1080p, and 1.2 GB at 2160p.
+pub(crate) fn is_too_small(size: Option<u64>, resolution: Resolution) -> bool {
+    let floor = match resolution {
+        Resolution::Sd => 0,
+        Resolution::P720 | Resolution::P1080 => 50_000_000,
+        Resolution::P2160 => 500_000_000,
+    };
+    size.is_some_and(|size| size < floor)
 }
 
 pub(crate) fn is_adult(name: &str) -> bool {

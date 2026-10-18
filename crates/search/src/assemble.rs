@@ -8,8 +8,8 @@ use std::sync::Arc;
 use sha1::{Digest, Sha1};
 use torrential_core::error::Details;
 use torrential_core::{
-    Error, ErrorCode, Flag, InfoHash, LocatorId, Preferences, Quality, Release, ReleaseId, SearchQuery, SearchResult,
-    Sort, SourceReport, TorrentId,
+    Error, ErrorCode, Flag, InfoHash, LocatorId, Preferences, Quality, Release, ReleaseId, Resolution, SearchQuery,
+    SearchResult, Sort, SourceReport, TorrentId,
 };
 
 use crate::classify;
@@ -116,8 +116,9 @@ pub(crate) struct Candidate {
     lawful: bool,
     /// Read from the shown name, so ranking and output agree.
     quality: Quality,
-    /// A trailer or sample, whose resolution ranks as unknown.
-    extra: bool,
+    /// The resolution ranking goes by: the name's, unless the release is a trailer or sample
+    /// or too small to hold the film at it.
+    resolution: Option<Resolution>,
 }
 
 impl Candidate {
@@ -206,7 +207,9 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
     let relevance = group.iter().map(|(_, o)| terms.relevance(o.name())).max().unwrap_or(terms.relevance(""));
     let extra_words = terms.extra_words(&name);
     let quality = Quality::parse(&name);
-    let extra = classify::is_extra(&name, terms);
+    let size = first(group, |o| o.size);
+    let resolution =
+        quality.resolution.filter(|r| !classify::is_extra(&name, terms) && !classify::is_too_small(size, *r));
     Candidate {
         hash,
         private_url: link.is_some_and(|(_, private, _)| private),
@@ -215,7 +218,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
             id,
             magnet: hash.map(|h| build_magnet(&h, &name, &trackers)),
             name,
-            size: first(group, |o| o.size),
+            size,
             seeders: peers.map(|p| p.seeders),
             leechers: peers.and_then(|p| p.leechers),
             published: first(group, |o| o.published),
@@ -230,7 +233,7 @@ fn combine(id: ReleaseId, group: &[Sighting<'_>], terms: &Terms) -> Candidate {
         downloads: group.iter().filter_map(|(_, o)| o.downloads).max(),
         lawful: group.iter().any(|(s, _)| s.lawful),
         quality,
-        extra,
+        resolution,
     }
 }
 
@@ -272,14 +275,15 @@ fn filter(candidates: Vec<Candidate>, q: &SearchQuery) -> (Vec<Candidate>, u32) 
 
 /// One total order. `relevance` sorts by query relevance, then releases that fit the
 /// user's preferences, then official and lawful sources, then the resolution closest
-/// to the user's screen, with a trailer's resolution unknown, then seeders, then names
-/// with fewer words beyond the query, then downloads, then newer names, then ID.
-/// Without preferences every release fits and every resolution is as close. A bigger
-/// file is no closer a match, so size never breaks a tie. The other sorts put their key
-/// first and fall back to that order. Unknown values sort last.
+/// to the user's screen, with the resolution of a trailer or of a file too small to hold
+/// the film unknown, then seeders, then names with fewer words beyond the query, then
+/// downloads, then newer names, then ID. Without preferences every release fits and every
+/// resolution is as close. Above that floor a bigger file is no closer a match, so size
+/// never breaks a tie. The other sorts put their key first and fall back to that order.
+/// Unknown values sort last.
 fn rank(candidates: &mut [Candidate], sort: Sort, preferences: Preferences) {
     let fits = |c: &Candidate| preferences.fits(c.release.size, c.quality);
-    let closeness = |c: &Candidate| preferences.closeness(c.quality.resolution.filter(|_| !c.extra));
+    let closeness = |c: &Candidate| preferences.closeness(c.resolution);
     candidates.sort_by(|a, b| {
         let (ra, rb) = (&a.release, &b.release);
         let primary = match sort {

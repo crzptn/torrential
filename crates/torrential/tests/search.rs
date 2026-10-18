@@ -538,17 +538,17 @@ fn setup_answers_rank_a_film_search_and_say_so() {
             "# preferences: not set · torrential setup",
         ]
     );
-    // Trailers tagged 1080p and 720p stay below the film.
+    // Trailers tagged 1080p and 720p stay below the film, and so does an 8.3 MiB file tagged 1080p.
     assert_eq!(
         shown(&after),
         [
             "SIZE | QUALITY | NAME",
-            "8.3 MiB | 1080p | Night of the Living Dead |1968| WebRip US (HD 1080p)",
             "1.0 GiB | 720p | Night Of The Living Dead 720p 1968",
             "1.1 GiB | - | Night of the Living Dead (1968)",
             "1.1 GiB | - | Night of the Living Dead (1968)",
             "528.0 MiB | - | Night of the Living Dead (1968)",
             "1.8 GiB | - | Night of the Living Dead (1968)",
+            "742.1 MiB | - | Night Of The Living Dead ( 1968)",
             "# ranked for a laptop or monitor, up to 2 GB, avoids HEVC and HDR",
         ]
     );
