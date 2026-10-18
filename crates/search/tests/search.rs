@@ -16,17 +16,20 @@ use torrential_search::{ResultCache, Search, SearchConfig};
 struct Reply {
     status: u16,
     body: Vec<u8>,
+    /// Before the response starts.
     delay: Duration,
+    /// Between the headers and the body.
+    stall: Duration,
     /// Without a Content-Length the client learns the size only while reading.
     content_length: bool,
 }
 
 fn ok(body: Vec<u8>) -> Reply {
-    Reply { status: 200, body, delay: Duration::ZERO, content_length: true }
+    Reply { status: 200, body, delay: Duration::ZERO, stall: Duration::ZERO, content_length: true }
 }
 
 fn status(code: u16) -> Reply {
-    Reply { status: code, body: b"no".to_vec(), delay: Duration::ZERO, content_length: true }
+    Reply { status: code, body: b"no".to_vec(), delay: Duration::ZERO, stall: Duration::ZERO, content_length: true }
 }
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -74,6 +77,8 @@ impl Server {
                     }
                     response.push_str("\r\n");
                     let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.flush().await;
+                    tokio::time::sleep(reply.stall).await;
                     let _ = socket.write_all(&reply.body).await;
                     let _ = socket.shutdown().await;
                 });
@@ -182,6 +187,30 @@ async fn retries_once_after_a_5xx_but_not_after_a_4xx() {
         [("knaben".into(), SourceOutcome::Http { status: 404 }), ("apibay".into(), SourceOutcome::Ok { results: 100 })]
     );
     assert_eq!((server.hits("/apibay/"), server.hits("/knaben/")), (2, 1));
+}
+
+#[tokio::test]
+async fn a_slow_answer_that_has_started_keeps_the_whole_deadline() {
+    let slow = Reply { stall: Duration::from_millis(2200), ..ok(fixture("apibay/q.php-ubuntu.json")) };
+    let server = Server::start(vec![("/apibay/", vec![slow])]).await;
+    let search = Search::new(&server.config(&["apibay"]), ResultCache::new()).unwrap();
+
+    let result = search.search(&query("ubuntu", &["apibay"])).await.unwrap();
+
+    assert_eq!(outcomes(&result), [("apibay".into(), SourceOutcome::Ok { results: 100 })]);
+    assert_eq!(server.hits("/apibay/"), 1);
+}
+
+#[tokio::test]
+async fn a_response_that_never_starts_is_retried_once() {
+    let stalled = Reply { delay: Duration::from_secs(10), ..ok(Vec::new()) };
+    let server = Server::start(vec![("/apibay/", vec![stalled, ok(fixture("apibay/q.php-ubuntu.json"))])]).await;
+    let search = Search::new(&server.config(&["apibay"]), ResultCache::new()).unwrap();
+
+    let result = search.search(&query("ubuntu", &["apibay"])).await.unwrap();
+
+    assert_eq!(outcomes(&result), [("apibay".into(), SourceOutcome::Ok { results: 100 })]);
+    assert_eq!(server.hits("/apibay/"), 2);
 }
 
 #[tokio::test]

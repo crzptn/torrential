@@ -46,19 +46,20 @@ impl Http {
     }
 
     /// GETs `url`, giving up at `deadline`. A timeout or a 5xx is retried once when
-    /// time remains: the first attempt gets three fifths of the time left so that a
-    /// stalled connection still leaves room for the retry.
+    /// time remains. The first attempt must start its response within three fifths
+    /// of the time left, so a stalled connection still leaves room for the retry; a
+    /// response that has started may use the whole deadline.
     pub async fn get(&self, url: &Url, cap: usize, deadline: Instant) -> Result<Vec<u8>, FetchError> {
         const RETRY_PAUSE: Duration = Duration::from_millis(200);
         const MIN_RETRY: Duration = Duration::from_millis(600);
-        let first_deadline = Instant::now() + deadline.saturating_duration_since(Instant::now()) * 3 / 5;
-        let first = self.attempt(url, cap, first_deadline).await;
+        let respond_by = Instant::now() + deadline.saturating_duration_since(Instant::now()) * 3 / 5;
+        let first = self.attempt(url, cap, respond_by, deadline).await;
         let body = match first {
             Err(e) if e.retryable() && deadline.saturating_duration_since(Instant::now()) > MIN_RETRY => {
                 if matches!(e, FetchError::Status(_)) {
                     tokio::time::sleep(RETRY_PAUSE).await;
                 }
-                self.attempt(url, cap, deadline).await
+                self.attempt(url, cap, deadline, deadline).await
             }
             other => other,
         }?;
@@ -75,16 +76,23 @@ impl Http {
             .unwrap_or_default()
     }
 
-    async fn attempt(&self, url: &Url, cap: usize, deadline: Instant) -> Result<Vec<u8>, FetchError> {
-        let fetch = async {
-            let mut response = self.client.get(url.clone()).send().await.map_err(classify)?;
-            let status = response.status();
-            if !status.is_success() {
-                return Err(FetchError::Status(status.as_u16()));
-            }
-            if response.content_length().is_some_and(|len| len > cap as u64) {
-                return Err(FetchError::TooLarge(cap));
-            }
+    async fn attempt(
+        &self,
+        url: &Url,
+        cap: usize,
+        respond_by: Instant,
+        deadline: Instant,
+    ) -> Result<Vec<u8>, FetchError> {
+        let send = self.client.get(url.clone()).send();
+        let mut response = timeout_at(respond_by, send).await.map_err(|_| FetchError::Timeout)?.map_err(classify)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(FetchError::Status(status.as_u16()));
+        }
+        if response.content_length().is_some_and(|len| len > cap as u64) {
+            return Err(FetchError::TooLarge(cap));
+        }
+        let read = async {
             let mut body = Vec::new();
             while let Some(chunk) = response.chunk().await.map_err(classify)? {
                 if body.len() + chunk.len() > cap {
@@ -94,7 +102,7 @@ impl Http {
             }
             Ok(body)
         };
-        timeout_at(deadline, fetch).await.unwrap_or(Err(FetchError::Timeout))
+        timeout_at(deadline, read).await.unwrap_or(Err(FetchError::Timeout))
     }
 }
 
