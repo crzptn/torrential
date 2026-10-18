@@ -43,10 +43,13 @@ fn magnet_leecher_fetches_metadata_and_only_the_selected_files() {
     let added = leecher.session.add(add.clone()).unwrap();
     assert_eq!(added, Added::New(torrent.info_hash()));
     let id = added.id();
-    assert_eq!(leecher.session.add(add).unwrap(), Added::Existing(torrent.info_hash()));
+    assert_eq!(
+        leecher.session.add(add).unwrap(),
+        Added::Existing(torrent.info_hash())
+    );
 
     leecher.wait_for("metadata", |a| matches!(a, Alert::MetadataReceived { .. }));
-    leecher.wait_for("finish", |a| matches!(a, Alert::TorrentFinished { .. }));
+    leecher.finish(id);
 
     for file in ["a.bin", "c.bin"] {
         assert_eq!(
@@ -62,7 +65,10 @@ fn magnet_leecher_fetches_metadata_and_only_the_selected_files() {
     );
 
     let status = leecher.status(id);
-    assert_eq!(status.info_hash, InfoHash::V1(torrent.info_hash().v1().unwrap()));
+    assert_eq!(
+        status.info_hash,
+        InfoHash::V1(torrent.info_hash().v1().unwrap())
+    );
     let Progress::Known(files) = &status.progress else {
         panic!("metadata is known: {status:?}");
     };

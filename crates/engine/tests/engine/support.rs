@@ -48,6 +48,10 @@ pub fn upload(policy: UploadPolicy) -> Config {
 pub struct Node {
     pub session: Session,
     pub log: Vec<Alert>,
+    /// Alerts before this index have been matched or passed over by
+    /// `wait_for`. One read can return several alerts, and a later wait must
+    /// still see the ones after the match.
+    waited: usize,
     port: u16,
 }
 
@@ -57,9 +61,12 @@ impl Node {
         let mut node = Node {
             session,
             log: Vec::new(),
+            waited: 0,
             port: 0,
         };
-        node.wait_for("listen socket", |a| matches!(a, Alert::ListenSucceeded { .. }));
+        node.wait_for("listen socket", |a| {
+            matches!(a, Alert::ListenSucceeded { .. })
+        });
         node.port = node.session.listen_port().unwrap().expect("listening");
         node
     }
@@ -89,21 +96,26 @@ impl Node {
         self.session.status(id).expect("status")
     }
 
-    fn pump(&mut self, timeout: Duration) -> Vec<Alert> {
+    fn pump(&mut self, timeout: Duration) {
         let alerts = self.session.wait_alerts(timeout).expect("alerts");
-        self.log.extend(alerts.iter().cloned());
-        alerts
+        self.log.extend(alerts);
     }
 
-    /// Reads alerts until one matches, and returns it.
+    /// Returns the first alert after the previous match that matches,
+    /// reading more alerts until one does.
     pub fn wait_for(&mut self, what: &str, mut matches: impl FnMut(&Alert) -> bool) -> Alert {
         let deadline = Instant::now() + TIMEOUT;
-        while Instant::now() < deadline {
-            if let Some(found) = self.pump(Duration::from_millis(100)).into_iter().find(&mut matches) {
-                return found;
+        loop {
+            if let Some(offset) = self.log[self.waited..].iter().position(&mut matches) {
+                self.waited += offset + 1;
+                return self.log[self.waited - 1].clone();
             }
+            self.waited = self.log.len();
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for {what}; alerts seen: {:#?}", self.log);
+            }
+            self.pump(Duration::from_millis(100));
         }
-        panic!("timed out waiting for {what}; alerts seen: {:#?}", self.log);
     }
 
     /// Polls the session, reading alerts in between, until `done` holds.
@@ -116,6 +128,17 @@ impl Node {
             self.pump(Duration::from_millis(50));
         }
         panic!("timed out waiting for {what}; alerts seen: {:#?}", self.log);
+    }
+
+    /// Waits for the torrent to finish, then pauses it. `TorrentFinished`
+    /// arrives once the pieces pass their hash checks, which can be before
+    /// libtorrent has written them; `TorrentPaused` follows the writes.
+    pub fn finish(&mut self, id: TorrentId) {
+        self.wait_for("finish", |a| matches!(a, Alert::TorrentFinished { .. }));
+        self.session.pause(id).unwrap();
+        self.wait_for("paused after finishing", |a| {
+            matches!(a, Alert::TorrentPaused { .. })
+        });
     }
 
     /// Reads alerts for `window` without waiting on anything.
@@ -275,4 +298,24 @@ pub mod bencode {
             _ => None,
         }
     }
+}
+
+/// Length, modification time, and SHA-256 of every file under `dir`, so a
+/// test can tell whether anything on disk changed.
+pub fn snapshot(dir: &Path) -> BTreeMap<PathBuf, (u64, std::time::SystemTime, [u8; 32])> {
+    let mut files = BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::metadata(&path).unwrap();
+            if meta.is_dir() {
+                pending.push(path);
+            } else {
+                let hash = sha256(&fs::read(&path).unwrap());
+                files.insert(path, (meta.len(), meta.modified().unwrap(), hash));
+            }
+        }
+    }
+    files
 }

@@ -32,7 +32,9 @@ fn serve_third_peer(policy: UploadPolicy, name: &str) -> Served {
     let mut add = AddTorrent::new(TorrentSource::Metainfo(torrent.clone()), leecher_dir.path());
     add.peers = vec![seeder.addr()];
     let leecher_id = leecher.add(add);
-    leecher.wait_for("leecher finish", |a| matches!(a, Alert::TorrentFinished { .. }));
+    leecher.wait_for("leecher finish", |a| {
+        matches!(a, Alert::TorrentFinished { .. })
+    });
     drop(seeder);
 
     let mut peer = Node::new(loopback());
@@ -42,12 +44,18 @@ fn serve_third_peer(policy: UploadPolicy, name: &str) -> Served {
     let peer_id = peer.add(add);
     match policy {
         UploadPolicy::Off => {
-            peer.wait_until("connected to the leecher", |s| s.status(peer_id).unwrap().seeds == 1);
+            peer.wait_until("connected to the leecher", |s| {
+                s.status(peer_id).unwrap().seeds == 1
+            });
             peer.idle(Duration::from_secs(3));
-            assert_eq!(peer.status(peer_id).seeds, 1, "the leecher stayed connected");
+            assert_eq!(
+                peer.status(peer_id).seeds,
+                1,
+                "the leecher stayed connected"
+            );
         }
         _ => {
-            peer.wait_for("peer finish", |a| matches!(a, Alert::TorrentFinished { .. }));
+            peer.finish(peer_id);
             for file in fixture.files.keys() {
                 assert_eq!(
                     sha256_file(&fixture.path_in(peer_dir.path(), file)),

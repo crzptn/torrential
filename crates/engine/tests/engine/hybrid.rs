@@ -1,0 +1,71 @@
+use std::path::PathBuf;
+
+use tempfile::TempDir;
+use torrential_engine::{
+    AddTorrent, Alert, FileEntry, FileIndex, Magnet, TorrentFormat, TorrentSource,
+};
+
+use crate::support::{
+    Fixture, Node, bencode, expected_hashes, info_hash, loopback, magnet, sha256_file,
+};
+
+#[test]
+fn hybrid_torrent_downloads_and_reports_both_hashes() {
+    let fixture = Fixture::new(
+        "hybrid",
+        &[("a.bin", 40_000), ("b.bin", 30_000), ("c.bin", 50_000)],
+        17,
+    );
+    let torrent = fixture.torrent(TorrentFormat::Hybrid);
+    let hashes = expected_hashes(torrent.as_bytes());
+    let expected = info_hash(hashes, TorrentFormat::Hybrid);
+    assert_eq!(torrent.info_hash(), expected);
+    let entry = |index, path: &str, size| FileEntry {
+        index: FileIndex::new(index),
+        path: PathBuf::from(path),
+        size,
+    };
+    assert_eq!(
+        torrent.files(),
+        [
+            entry(0, "hybrid/a.bin", 40_000),
+            entry(2, "hybrid/b.bin", 30_000),
+            entry(4, "hybrid/c.bin", 50_000),
+        ],
+        "pad files keep their indices but are not listed"
+    );
+
+    let mut seeder = Node::new(loopback());
+    seeder.seed(&torrent, fixture.save_path());
+
+    let mut leecher = Node::new(loopback());
+    let download = TempDir::new().unwrap();
+    let magnet = Magnet::parse(&magnet(Some(hashes.0), Some(hashes.1))).unwrap();
+    assert_eq!(magnet.info_hash(), expected);
+    let mut add = AddTorrent::new(TorrentSource::Magnet(magnet), download.path());
+    add.peers = vec![seeder.addr()];
+    let id = leecher.add(add);
+
+    let metadata = leecher.wait_for("metadata", |a| matches!(a, Alert::MetadataReceived { .. }));
+    assert_eq!(metadata.torrent(), Some(expected));
+    leecher.finish(id);
+    assert_eq!(leecher.status(id).info_hash, expected);
+    for file in fixture.files.keys() {
+        assert_eq!(
+            sha256_file(&fixture.path_in(download.path(), file)),
+            Some(fixture.sha256(file)),
+            "{file} matches the original"
+        );
+    }
+
+    let cached = leecher.session.metainfo(id).unwrap();
+    assert_eq!(cached.info_hash(), expected);
+    for key in [&b"info"[..], b"piece layers"] {
+        assert_eq!(
+            bencode::dict_value(cached.as_bytes(), key),
+            bencode::dict_value(torrent.as_bytes(), key),
+            "{} matches the original torrent",
+            String::from_utf8_lossy(key)
+        );
+    }
+}
