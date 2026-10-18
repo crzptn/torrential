@@ -70,7 +70,6 @@ class _RusageV4(ctypes.Structure):
 
 
 def usage(pid):
-    """CPU seconds, wakeups, and memory of a live process, or None once it is gone."""
     r = _RusageV4()
     if libc.proc_pid_rusage(pid, 4, ctypes.byref(r)) != 0:
         return None
@@ -85,8 +84,6 @@ def usage(pid):
 
 
 class Sampler(threading.Thread):
-    """Polls a process's usage, keeping the largest RSS and footprint seen."""
-
     def __init__(self, pid, every=0.25):
         super().__init__(daemon=True)
         self.pid, self.every = pid, every
@@ -127,8 +124,6 @@ class Recorder:
 
 
 class Home:
-    """A scratch TORRENTIAL_HOME whose downloads go under it too."""
-
     def __init__(self, bin, out, name):
         self.bin = bin
         self.root = Path(out) / name
@@ -140,12 +135,10 @@ class Home:
         self.env = dict(os.environ, TORRENTIAL_HOME=str(self.root))
 
     def run(self, *args, timeout=600):
-        """Wall milliseconds, exit code, and stdout."""
         wall_ms, rc, out, _ = self.measure(*args, timeout=timeout)
         return wall_ms, rc, out
 
     def measure(self, *args, timeout=600):
-        """Like run, plus the client's CPU milliseconds and peak RSS in MiB from wait4."""
         started = time.perf_counter()
         child = subprocess.Popen(
             [self.bin, *args], env=self.env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
@@ -184,7 +177,6 @@ class Home:
 
 
 def percentile(values, p):
-    """Nearest rank: the smallest value with at least p percent of runs at or below it."""
     ordered = sorted(values)
     return ordered[max(0, math.ceil(p / 100 * len(ordered)) - 1)]
 
@@ -270,7 +262,6 @@ def suite_cold(a, record):
 
 
 def cold_parts(home):
-    """Times the launcher, the engine's socket, and the first answer separately."""
     sock = home.root / "run" / "engine.sock"
     started = time.perf_counter()
     launcher = subprocess.run(
@@ -357,7 +348,6 @@ def suite_search(a, record):
                 "search-cache-hit",
                 run=i,
                 wall_ms=round(hit_ms, 2),
-                # A source that failed just now may still answer from an earlier search's cache entry.
                 ok=rc == 0 and set(s["source"] for s in hit_sources) - set(cached) <= set(failed),
                 cached_sources=len(cached),
                 refetched=[s["source"] for s in hit_sources if s["outcome"] != "cached"],
@@ -376,7 +366,6 @@ WORDS = [
 
 
 def suite_search_words(a, record):
-    """A search for words this engine has not searched yet, so no answer is cached, without --fresh."""
     home = Home(a.bin, a.out, "search-words")
     try:
         for i in range(a.start, a.start + a.runs):
@@ -394,7 +383,6 @@ def suite_search_words(a, record):
                 wall_ms=round(wall_ms, 1),
                 engine_elapsed_ms=result.get("elapsed_ms"),
                 ensure_engine_ms=round(ensure_ms, 1),
-                # A cached source would mean the words were not new to this engine.
                 ok=rc == 0 and len(result.get("releases", [])) > 0 and all(s["outcome"] != "cached" for s in sources),
                 failed_sources=[s["source"] for s in sources if s["outcome"] != "ok"],
                 slowest=slowest.get("source"),
@@ -460,7 +448,6 @@ def suite_rest(a, record):
 
 
 def suite_tui_download(a, record):
-    """The TUI in a 100x30 tmux pane while the real engine downloads --torrent."""
     for i in range(a.runs):
         home = Home(a.bin, a.out, f"tui-dl{i}")
         session = f"bench-tui-{os.getpid()}-{i}"
@@ -627,7 +614,6 @@ def suite_download(a, record):
         "h": http_once,
     }
     for i in range(a.start, a.start + a.runs):
-        # Each round starts one side later, so no side always runs first.
         k = i % len(a.order) if a.rotate else 0
         for side in a.order[k:] + a.order[:k]:
             sides[side](a, i, record)
@@ -706,7 +692,6 @@ def suite_summary(a, _record):
 
 
 def ramp(row):
-    """Seconds to the first 100 MiB, and MiB/s between 20% and 80% of the file."""
     series = row.get("series") or []
     size = row["mib_per_s"] * row["wall_s"] * MIB
     at = lambda done: next((t for t, got, *_ in series if got >= done), None)
@@ -716,7 +701,6 @@ def ramp(row):
 
 
 def rank_sum_p(xs, ys):
-    """Exact two-sided Mann-Whitney U p-value, by enumerating every split of the pooled runs."""
     pooled = xs + ys
     observed = sum((a > b) + 0.5 * (a == b) for a in xs for b in ys)
     mean = len(xs) * len(ys) / 2
