@@ -214,7 +214,7 @@ impl JobEntry {
         let verified = self.verified();
         let s = if transferring { self.stats } else { Stats::default() };
         let eta = match size {
-            Some(size) if s.down_rate > 0 && self.rate_settled => {
+            Some(size) if s.down_rate > 0 && self.rate_settled && self.unsourced_since.is_none() => {
                 Some(size.saturating_sub(verified).div_ceil(s.down_rate))
             }
             _ => None,
@@ -261,7 +261,7 @@ pub fn to_start<'a>(jobs: impl Iterator<Item = &'a JobEntry>, max_active: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::engine_port::MetaFile;
+    use crate::daemon::engine_port::{MetaFile, Missing};
     use torrential_core::ErrorCode;
 
     #[test]
@@ -330,6 +330,9 @@ mod tests {
             etas.push(job.view().progress.eta);
         }
         assert_eq!(etas, [None, None, Some(60), None, None, Some(60)]);
+        let missing = Some(Missing { pieces: 2, unavailable: 2 });
+        job.sample(Stats { down_rate: 10 << 20, missing, ..Stats::default() }, start + Duration::from_secs(23));
+        assert_eq!(job.view().progress.eta, None, "bytes arrive, but no source has the pieces still missing");
     }
 
     #[test]
