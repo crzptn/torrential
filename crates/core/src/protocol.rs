@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::id::Target;
-use crate::job::{Job, TorrentFile};
+use crate::job::{Job, Selection, TorrentFile};
 use crate::release::{SearchQuery, SearchResult};
 
 pub const WIRE_VERSION: u32 = 1;
@@ -80,6 +80,9 @@ pub struct GetReply {
     pub job: Job,
     /// Present for `--dry-run`, and when files are already known.
     pub plan: Option<DownloadPlan>,
+    /// For `updated`: the file selection before this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_selection: Option<Selection>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
