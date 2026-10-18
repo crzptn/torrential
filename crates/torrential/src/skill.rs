@@ -4,7 +4,8 @@
 //! `.claude/skills/torrential`. A sidecar file beside `SKILL.md` records what torrential wrote, so
 //! `SKILL.md` stays exactly the shipped text.
 
-use std::io;
+use std::io::{self, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -434,11 +435,28 @@ fn replace_with_link(link: &Path, writes: &Writes) -> Result<(), Error> {
     write_link(link, writes)
 }
 
+/// The new file keeps the mode of the one it replaces, so a private config stays private.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let kept = std::fs::metadata(path).ok().map(|m| m.permissions());
     let partial = temporary(path);
-    std::fs::write(&partial, bytes).and_then(|()| std::fs::rename(&partial, path)).inspect_err(|_| {
-        let _ = std::fs::remove_file(&partial);
-    })
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    if let Some(permissions) = &kept {
+        options.mode(permissions.mode());
+    }
+    options
+        .open(&partial)
+        .and_then(|mut file| {
+            // The umask may have narrowed the mode `open` asked for.
+            if let Some(permissions) = kept {
+                file.set_permissions(permissions)?;
+            }
+            file.write_all(bytes)
+        })
+        .and_then(|()| std::fs::rename(&partial, path))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&partial);
+        })
 }
 
 fn temporary(path: &Path) -> PathBuf {

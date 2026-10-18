@@ -563,6 +563,20 @@ sources:
     }
 
     #[test]
+    fn setup_keeps_the_config_file_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = Folder::new();
+        folder.write("sources:\n  disabled: [nyaa]\n");
+        let config = path(&folder.paths);
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        folder.save(LAPTOP);
+
+        let mode = std::fs::metadata(&config).unwrap().permissions().mode() & 0o777;
+        assert_eq!((format!("{mode:o}"), preferences(&folder.paths).unwrap()), ("600".to_string(), LAPTOP));
+    }
+
+    #[test]
     fn names_that_yaml_1_1_reads_as_booleans_stay_strings() {
         let text = "sources:\n  disabled: [no, off, yes]\n  torznab:\n    - name: no\n      url: http://x/api\n";
         let config = parse(text, &env()).unwrap();
