@@ -1,8 +1,3 @@
-//! What `TORRENTIAL_TEST_ENGINE=fake` holds, so the CLI and TUI can be tried without a network:
-//! a catalog whose sources answer over 1.5 seconds, the torrents behind it, and, in a new
-//! state folder, downloads in several states. Everything is fixed except times, which are
-//! relative to `now`, so ages and dates read the same on every run.
-
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -20,7 +15,6 @@ const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
 const DAY: i64 = 86_400;
 
-/// A 40-character ID that starts with the 6 characters people see.
 fn id(short: &str) -> InfoHash {
     let hex = format!("{short}{}", "5d3b8e2f1c4a".repeat(3));
     let id: TorrentId = hex[..40].parse().expect("fixture IDs are hex");
@@ -203,8 +197,6 @@ fn torrent_url(torrent: &FakeTorrentFile) -> String {
     format!("https://archive.org/download/{0}/{0}_archive.torrent", torrent.name)
 }
 
-/// The fake search: the archlinux and ubuntu releases the CLI tests use, the night catalog,
-/// and six sources, two of which fail.
 pub fn search(now: i64) -> search_port::Fake {
     let mut catalog = search_port::fake_catalog();
     catalog[0].sources = vec!["archlinux.org".into()];
@@ -244,7 +236,6 @@ pub fn search(now: i64) -> search_port::Fake {
     search_port::Fake::scripted(catalog, script, torrents)
 }
 
-/// Peers for the magnet-only results. Any other magnet becomes one file sized by its `xl`.
 pub fn swarm(rate: u64) -> Swarm {
     let swarm = Swarm::inventive(rate);
     for listing in night() {
@@ -260,7 +251,6 @@ struct Seed {
     added_days_ago: i64,
 }
 
-/// Downloads for a new fake installation: one running, one failed, one paused, two done.
 pub fn seed(store: &mut Store, downloads: &Path, now: i64) -> Result<(), Error> {
     let stopped =
         Error::new(ErrorCode::StorageError, "cannot write openwebtext-2019/urlsf_subset07.tar: permission denied")
@@ -376,7 +366,6 @@ mod tests {
     use crate::daemon::engine_port::parse_fake;
     use torrential_core::{PieceMap, Slice};
 
-    /// The share of the selected runs that the map draws as filled.
     fn filled(map: PieceMap) -> f64 {
         let wanted: Vec<u8> = map
             .slices()

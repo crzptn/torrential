@@ -1,6 +1,3 @@
-//! The seam between the engine process and the search service. Searches run in the
-//! connection's own task, never in the owner, so a slow source cannot delay a pause.
-
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -15,39 +12,25 @@ pub use torrential_search::{Progress, SavedLink};
 use torrential_search::{ResultCache, Search, SearchConfig};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-/// The profile to rank for, asked each time results change.
 pub type RankFor<'a> = &'a (dyn Fn() -> Profile + Send + Sync);
 
 pub trait SearchPort: Send + Sync {
-    /// Ranked results. Fails with `providers_unavailable` only when every source failed.
     fn search<'a>(&'a self, query: SearchQuery, rank_for: RankFor<'a>) -> BoxFuture<'a, Result<SearchResult, Error>>;
-    /// Like [`SearchPort::search`], and sends the results so far each time a source answers.
     fn search_stream<'a>(
         &'a self,
         query: SearchQuery,
         rank_for: RankFor<'a>,
         progress: mpsc::UnboundedSender<Progress>,
     ) -> BoxFuture<'a, Result<SearchResult, Error>>;
-    /// The bytes of a `.torrent` file a search result links to.
     fn fetch_torrent(&self, url: String) -> BoxFuture<'_, Result<Vec<u8>, Error>>;
-    /// `None` for a torrent that does not download from archive.org. See [`Search::mirrors`].
     fn mirrors(&self, name: &str, web_seeds: &[String]) -> Option<BoxFuture<'static, Result<Vec<String>, Error>>>;
-    /// Releases from recent searches whose ID starts with `prefix`, newest first. They keep the
-    /// links from private sources, which can carry an API key, so they are for downloading and
-    /// never for printing.
     fn find(&self, prefix: &HexPrefix) -> Vec<Release>;
-    /// The `.torrent` link to download a release [`SearchPort::find`] returned from. See
-    /// [`Search::torrent_url`].
     fn torrent_url(&self, release: &Release) -> Result<Option<String>, Error>;
-    /// A recent release's private `.torrent` link without its API key, for the next engine process.
     fn saved_link(&self, id: &ReleaseId) -> Option<SavedLink>;
-    /// Remembers what an earlier engine process saved, newest first. Called once, at start.
     fn restore(&self, saved: Vec<(Release, Option<SavedLink>)>);
-    /// When the newest cached answer expires. `None` while no answer is cached.
     fn answers_expire(&self) -> Option<Instant>;
 }
 
-/// The real search, with the one result cache the engine process owns.
 pub struct Live {
     search: Search,
     cache: ResultCache,
@@ -118,12 +101,9 @@ struct FakeState {
     torrents: BTreeMap<String, Vec<u8>>,
     delay: Duration,
     script: Vec<FakeSource>,
-    /// What searches returned, newest first.
     recent: Vec<Release>,
 }
 
-/// One source of the fake search. It answers `after` a streaming search starts: with the
-/// catalog releases it lists first, or with `failure`.
 #[derive(Clone, Debug)]
 pub struct FakeSource {
     pub name: String,
@@ -142,7 +122,6 @@ impl FakeSource {
 }
 
 impl Fake {
-    /// A fake with one source, `fake`, that answers at once.
     #[cfg(test)]
     pub fn new(catalog: Vec<Release>) -> Self {
         Self::scripted(catalog, vec![FakeSource::answers("fake", 0)], BTreeMap::new())
@@ -176,7 +155,6 @@ impl Fake {
     }
 }
 
-/// What fake mode finds: magnets whose `xl` gives the fake engine a size to download.
 pub fn fake_catalog() -> Vec<Release> {
     let release = |hex: &str, name: &str, size: u64, seeders: u32| Release {
         id: torrential_core::ReleaseId::Torrent(hex.parse().expect("catalog IDs are valid")),
@@ -198,8 +176,6 @@ pub fn fake_catalog() -> Vec<Release> {
     ]
 }
 
-/// The result once the `answered` sources have answered. Catalog order is the ranking, and
-/// the query carries `profile`.
 fn compose(
     catalog: &[Release],
     answered: &[FakeSource],

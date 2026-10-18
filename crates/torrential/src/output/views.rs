@@ -22,7 +22,6 @@ pub fn short_ids(ids: &[TorrentId]) -> Vec<String> {
     ids.iter().map(|id| shortest_unique_prefix(id, ids, SHORT_ID)).collect()
 }
 
-/// Locator IDs keep their `u` and are shortened among locators only.
 pub fn release_ids(releases: &[Release]) -> Vec<String> {
     let as_torrent = |hex: &str| hex.parse::<TorrentId>().expect("release IDs are 40 hex characters");
     let torrents: Vec<TorrentId> = releases
@@ -70,7 +69,6 @@ pub fn source_outcome(outcome: &SourceOutcome) -> String {
 pub fn search(result: &SearchResult, now: i64) -> Doc {
     let ids = release_ids(&result.releases);
     let qualities: Vec<String> = result.releases.iter().map(|r| r.quality().to_string()).collect();
-    // Names of ISOs and datasets carry no quality tags, so their list leaves the column out.
     let tagged = qualities.iter().any(|q| !q.is_empty());
     let rows = result
         .releases
@@ -144,8 +142,6 @@ pub fn search(result: &SearchResult, now: i64) -> Doc {
     Doc { body: Body::Table { header, rows }, summary, next: Some(next.to_string()) }
 }
 
-/// `this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English`, and the preferences that
-/// override detection when there are any.
 pub fn ranked_for(profile: &Profile) -> String {
     match profile.overrides() {
         Some(overrides) => format!("{} · overrides: {overrides}", profile.describe()),
@@ -153,7 +149,6 @@ pub fn ranked_for(profile: &Profile) -> String {
     }
 }
 
-/// The doctor's profile row.
 pub fn profile_check(profile: &Profile) -> Check {
     Check { check: "profile".into(), status: CheckStatus::Ok, detail: ranked_for(profile) }
 }
@@ -228,7 +223,6 @@ pub fn selection(selection: &Selection) -> String {
     }
 }
 
-/// `dir` is the `--dir` the user passed, which a suggested rerun repeats.
 pub fn get(reply: &GetReply, dir: Option<&Path>) -> Doc {
     let job = &reply.job;
     let id = short_ids(&[job.id]).remove(0);
@@ -312,7 +306,6 @@ pub fn state_cell(status: &JobStatus) -> Cell {
     Cell::styled(status.name(), token)
 }
 
-/// `resume` refuses a download over its cap, and its error's hint names the `get` that raises it.
 fn next_for_stopped(status: &JobStatus, id: &str) -> Option<String> {
     match status {
         JobStatus::Error { error } if error.code == ErrorCode::TooLarge => None,
@@ -636,8 +629,6 @@ pub fn doctor(checks: &[Check], fix: Option<String>) -> Doc {
     }
 }
 
-/// What `torrential setup` detected, saved, or found. `result` is `saved`, `unchanged`, or
-/// `shown`.
 pub fn setup(profile: &Profile, file: &Path, result: &str) -> Doc {
     let detected = profile.detected.as_ref().map_or_else(|| "nothing".to_string(), machine);
     let fields = vec![("detected", Cell::new(detected)), ("file", Cell::new(file.display().to_string()))];
@@ -654,7 +645,6 @@ pub fn setup(profile: &Profile, file: &Path, result: &str) -> Doc {
     Doc { body: Body::Fields { title, fields }, summary, next: Some(next.to_string()) }
 }
 
-/// `3024x1964 display with HDR, arm64, English`.
 fn machine(machine: &Machine) -> String {
     let display = match machine.display {
         Some(d) => format!("{}x{} display{}", d.width, d.height, if d.hdr { " with HDR" } else { "" }),
@@ -674,7 +664,6 @@ fn skill_state_cell(state: State) -> Cell {
     Cell::styled(state.name(), token)
 }
 
-/// `install` is the command that brings every listed copy up to date.
 pub fn skill_status(installed: &[Installed], version: &str, install: &str) -> Doc {
     let rows = installed
         .iter()
@@ -718,7 +707,6 @@ pub fn skill_changes(changes: &[SkillChange]) -> Doc {
     Doc { body: Body::Table { header: vec!["TARGET", "RESULT", "PATH"], rows }, summary: Vec::new(), next: None }
 }
 
-/// The doctor's skill row, and the command that fixes it when one does without losing edits.
 pub fn skill_check(installed: &[Installed]) -> (Check, Option<String>) {
     let states: Vec<State> = installed.iter().map(|i| i.state).collect();
     let detail = installed.iter().map(|i| format!("{} {}", i.target.name(), i.state.name())).collect::<Vec<_>>();

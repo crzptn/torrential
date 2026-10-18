@@ -1,6 +1,3 @@
-//! The real binary and libtorrent against a seeder this test runs on 127.0.0.1, with discovery
-//! off. `TORRENTIAL_TEST_PEERS` hands the engine the seeder's address, the way a tracker would.
-
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
@@ -24,11 +21,8 @@ const RECONNECT: &str = "4m";
 
 struct Home {
     dir: tempfile::TempDir,
-    /// The seeders' addresses, comma-separated.
     peers: String,
-    /// `None` keeps the engine's own interval, which no test outlasts.
     save_resume_every: Option<&'static str>,
-    /// `None` keeps the engine's own limit, which no test outlasts.
     stall_after: Option<&'static str>,
 }
 
@@ -107,10 +101,8 @@ impl Home {
         self.ok(&["daemon", "status"])["pid"].as_i64().expect("the engine runs") as i32
     }
 
-    /// SIGKILL, so the engine saves nothing on the way out.
     fn kill_engine(&self) {
         let pid = self.pid();
-        // SAFETY: kill only sends a signal, and this pid is the engine this test started.
         unsafe { libc::kill(pid, libc::SIGKILL) };
         let deadline = Instant::now() + Duration::from_secs(5);
         // SAFETY: signal 0 only checks that the process exists.
@@ -200,13 +192,11 @@ impl Fixture {
         home.downloads().join(self.name).join(file)
     }
 
-    /// Whether the download of `file` holds exactly the seeded bytes.
     fn intact(&self, home: &Home, file: &str) -> bool {
         std::fs::read(self.downloaded(home, file)).is_ok_and(|b| sha256(&b) == sha256(&self.files[file]))
     }
 }
 
-/// A libtorrent session in this process that seeds one torrent.
 struct Seeder {
     session: lt::Session,
     id: lt::TorrentId,
@@ -218,13 +208,11 @@ impl Seeder {
         Self::serving(fixture, rate, fixture.total())
     }
 
-    /// A seeder whose copy has no `file`, so it has every piece but those holding that file's bytes.
     fn lacking(fixture: &Fixture, file: &str, has: u64) -> Self {
         std::fs::remove_file(fixture.dir.path().join(fixture.name).join(file)).unwrap();
         Self::serving(fixture, None, has)
     }
 
-    /// Starts once the seeder has verified `has` bytes on disk.
     fn serving(fixture: &Fixture, rate: Option<NonZeroU32>, has: u64) -> Self {
         let config = lt::Config {
             listen: vec![SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)],
@@ -286,7 +274,6 @@ fn state(job: &Value) -> &str {
     job["state"].as_str().unwrap()
 }
 
-/// Size, modification time, and contents of every file under `dir`.
 fn snapshot(dir: &Path) -> BTreeMap<PathBuf, (u64, std::time::SystemTime, [u8; 32])> {
     let mut files = BTreeMap::new();
     let mut pending = vec![dir.to_path_buf()];
@@ -475,7 +462,6 @@ fn a_killed_engine_trusts_its_last_periodic_save_instead_of_hashing_the_files() 
 #[test]
 fn a_download_whose_seeder_lacks_the_rest_stops_with_no_source_and_keeps_what_it_verified() {
     let fixture = Fixture::new("big", &BIG, 10);
-    // a.bin's pieces but the one it shares with b.bin.
     let a_alone = 73 * u64::from(PIECE);
     let seeder = Seeder::lacking(&fixture, "b.bin", a_alone);
     let mut home = Home::new(&seeder);
@@ -492,7 +478,6 @@ fn a_download_whose_seeder_lacks_the_rest_stops_with_no_source_and_keeps_what_it
     assert_eq!(verified(&home.job(&fixture.id())), a_alone, "what it verified outlived the engine");
 }
 
-/// A path's mode until dropped.
 struct Locked {
     path: PathBuf,
     restore: u32,
@@ -501,7 +486,6 @@ struct Locked {
 impl Locked {
     /// `None` as root, which reads and writes past any mode.
     fn new(path: PathBuf, mode: u32) -> Option<Self> {
-        // SAFETY: geteuid only reads this process's user id.
         if unsafe { libc::geteuid() } == 0 {
             return None;
         }

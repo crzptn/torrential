@@ -1,5 +1,3 @@
-//! The command definition. Help, completions, and `torrential schema` all come from it.
-
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -131,11 +129,9 @@ pub struct SetupArgs {
     pub playback: Option<PlaybackArg>,
 }
 
-/// Every setup flag with every value it takes, for a person or an agent to fill in.
 pub const SETUP_FLAGS: &str =
     "torrential setup --screen phone|laptop|tv|tv-4k|auto --max-size 8GB|none --playback hevc-hdr|hevc|h264|auto";
 
-/// A size cap. `None` is `--max-size none`, no cap.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Limit(pub Option<u64>);
 
@@ -297,7 +293,6 @@ pub enum ScreenArg {
 }
 
 impl ScreenArg {
-    /// `None` for `auto`, which keeps no preference.
     pub fn screen(self) -> Option<Screen> {
         match self {
             Self::Phone => Some(Screen::Phone),
@@ -323,7 +318,6 @@ pub enum PlaybackArg {
 }
 
 impl PlaybackArg {
-    /// `None` for `auto`, which keeps no preference.
     pub fn playback(self) -> Option<Playback> {
         match self {
             Self::HevcHdr => Some(Playback::HevcHdr),

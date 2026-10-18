@@ -1,7 +1,3 @@
-//! Connections to the engine socket. Each connection is its own task: it resolves
-//! references, fetches `.torrent` files, and runs searches itself, and asks the owner only
-//! for decisions about the job book.
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,9 +18,7 @@ use super::search_port::{Progress, SearchPort};
 use crate::machine::Detector;
 use crate::wire;
 
-/// The largest `.torrent` file torrential reads.
 const MAX_TORRENT_BYTES: u64 = 16 * 1024 * 1024;
-/// How long `files` and `get --dry-run` wait for peers to send a magnet's file list.
 pub const METADATA_WAIT: Duration = Duration::from_secs(60);
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
@@ -57,7 +51,6 @@ pub struct Ctx {
     pub version: String,
 }
 
-/// `Hello`, `Watch`, and a streaming `Search` belong to [`connection`], which owns the stream.
 pub async fn handle(ctx: &Ctx, request: Request) -> Response {
     let owner = &ctx.owner;
     let result = match request {
@@ -102,9 +95,6 @@ async fn search(ctx: &Ctx, query: SearchQuery) -> Result<SearchResult, Error> {
     Ok(result)
 }
 
-/// Sanitizes names, and saves the releases as shown, with their private links less the API key,
-/// so a later engine process still resolves their IDs. This process resolves them through the
-/// search port.
 fn record(ctx: &Ctx, result: &mut SearchResult) {
     for release in &mut result.releases {
         release.name = sanitize(&release.name);
@@ -176,7 +166,6 @@ async fn resolve(ctx: &Ctx, target: Target, command: &'static str) -> Result<Sou
             let results = ctx.search.find(&prefix);
             resolve_prefix(ctx, prefix, results, command).await
         }
-        // A search result's links can find a torrent that its bare hash would wait for on the DHT.
         Target::InfoHash(hash) => {
             let prefix = hash.id().to_hex().parse()?;
             match ctx.search.find(&prefix) {
@@ -204,7 +193,6 @@ async fn resolve_prefix(
     }
 }
 
-/// A search result's `.torrent` gives the file list at once, so it wins over the magnet when it downloads.
 async fn release_source(ctx: &Ctx, release: Release, cached: Option<Arc<Metainfo>>) -> Result<Source, Error> {
     if let Some(metainfo) = cached {
         return Ok(Source::Torrent { metainfo: (*metainfo).clone(), origin: Origin::Cache });
@@ -213,8 +201,6 @@ async fn release_source(ctx: &Ctx, release: Release, cached: Option<Arc<Metainfo
     if let Some(url) = ctx.search.torrent_url(&release)? {
         match fetch(ctx, url).await {
             Ok(metainfo) => return Ok(Source::Torrent { metainfo, origin: Origin::Url }),
-            // A magnet without trackers, like archive.org's, finds peers only through the DHT, and
-            // waiting on it would hide why the fetch failed.
             Err(error) if !magnet.as_ref().is_some_and(Magnet::has_trackers) => return Err(error),
             Err(error) => super::log(&format!("{} falls back to its magnet: {}", release.id.to_ref(), error.message)),
         }

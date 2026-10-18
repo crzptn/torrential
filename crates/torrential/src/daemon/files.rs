@@ -24,7 +24,6 @@ pub fn wanted(metainfo: &Metainfo, selection: &Selection) -> Result<Vec<bool>, E
         Selection::Patterns(patterns) => patterns,
     };
     let set = compile(patterns)?;
-    // People and the TUI pick from `torrential files`, which shows each path sanitized.
     let wanted: Vec<bool> =
         metainfo.files.iter().map(|f| set.is_match(&f.path) || set.is_match(sanitize(&f.path))).collect();
     if wanted.contains(&true) {
@@ -40,7 +39,6 @@ pub fn targets(metainfo: &Metainfo, dir: &Path, wanted: &[bool]) -> Vec<PathBuf>
     metainfo.files.iter().zip(wanted).filter(|(_, w)| **w).map(|(f, _)| dir.join(relative(metainfo, f))).collect()
 }
 
-/// Where the engine writes `file`, under the download folder.
 pub fn relative(metainfo: &Metainfo, file: &MetaFile) -> PathBuf {
     if metainfo.single_file { PathBuf::from(&metainfo.name) } else { Path::new(&metainfo.name).join(&file.path) }
 }
@@ -58,7 +56,6 @@ fn extension(path: &str) -> Option<String> {
     Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase())
 }
 
-/// Marks programs and scripts in a torrent whose bytes are mostly media, a common malware disguise.
 pub fn risks(metainfo: &Metainfo) -> Vec<Option<FileRisk>> {
     let is = |list: &[&str], path: &str| extension(path).is_some_and(|e| list.contains(&e.as_str()));
     let media: u64 = metainfo.files.iter().filter(|f| is(&MEDIA, &f.path)).map(|f| f.size).sum();

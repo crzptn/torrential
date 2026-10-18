@@ -1,7 +1,3 @@
-//! The real engine process with live search, against a local HTTP server that serves the
-//! search crate's recorded responses. Nothing leaves the machine: every enabled source points
-//! at the server, libtorrent stays on loopback, and the torrents it adds name no tracker.
-
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -38,7 +34,6 @@ fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-/// A one-file torrent that names no tracker.
 fn torrent(name: &str) -> Vec<u8> {
     let (length, piece) = (1usize << 20, 1usize << 18);
     let pieces = vec![0x5a; 20 * length / piece];
@@ -52,8 +47,6 @@ fn torrent(name: &str) -> Vec<u8> {
 
 type Routes = Vec<(&'static str, Vec<Reply>)>;
 
-/// Answers each path prefix with its replies in order, repeating the last one, and logs
-/// every request path.
 struct Server {
     base: String,
     paths: Arc<Mutex<Vec<String>>>,
@@ -107,9 +100,6 @@ fn answer(mut stream: TcpStream, routes: &Routes, log: &Mutex<Vec<String>>, coun
     let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(&reply.body));
 }
 
-/// One isolated installation whose config disables every built-in source but `enabled`,
-/// which point at the server, and adds `sources` to its `sources` section. Dropping it
-/// stops its engine.
 struct Home {
     dir: tempfile::TempDir,
     vars: Vec<(&'static str, String)>,
@@ -127,7 +117,6 @@ impl Run {
     }
 }
 
-/// This MacBook Pro: a 3024x1964 XDR panel, arm64, and English.
 const MAC: &str =
     r#"{"os": "macos", "display": {"width": 3024, "height": 1964, "hdr": true}, "arch": "arm64", "language": "en"}"#;
 
@@ -211,7 +200,6 @@ fn search_ranks_what_the_sources_answered() {
     let json = home.run(&["search", "ubuntu", "--limit", "3", "--json"]).json();
 
     assert_eq!(plain.code, 0, "{}", plain.stderr);
-    // Every column but AGE, which counts from today.
     let table: Vec<String> = plain
         .stdout
         .lines()
@@ -240,7 +228,6 @@ fn search_ranks_what_the_sources_answered() {
     assert_eq!(result["total"], 158);
     let sources: Vec<String> =
         result["sources"].as_array().unwrap().iter().map(|s| format!("{} {}", s["source"], s["outcome"])).collect();
-    // The engine process kept both answers from the first search.
     assert_eq!(sources, [r#""knaben" "cached""#, r#""apibay" "cached""#]);
     assert_eq!((server.asked("/knaben/").len(), server.asked("/apibay/").len()), (1, 1));
 }
@@ -321,7 +308,6 @@ fn get_on_a_search_result_downloads_into_the_configured_folder() {
     let job = &status["jobs"][0];
     assert_eq!((job["id"].as_str(), job["dir"].as_str()), (Some(id), isos.to_str()));
     assert_eq!(job["name"], "debian-13.7.0-arm64-netinst.iso");
-    // Hashed once by the search, and fetched again for the download.
     assert_eq!(server.asked(NETINST).len(), 2);
 }
 
@@ -468,7 +454,6 @@ fn a_private_locator_resolves_after_a_restart_with_the_key_from_the_environment(
     );
 }
 
-/// Every file under `dir`.
 fn walk(dir: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(dir)
         .unwrap()
@@ -649,7 +634,6 @@ fn files_on_an_archive_org_result_reads_its_torrent_url_not_the_bare_magnet() {
         (Some("torrent_url"), Some("night_of_the_living_dead_dvd"))
     );
     assert_eq!(server.asked(item).len(), 1);
-    // Rather than a minute waiting for DHT peers that a magnet without trackers may never find.
     assert_eq!(unreachable.code, 5, "{}", unreachable.stderr);
     assert!(
         unreachable.stderr.starts_with("error[fetch_failed]: could not fetch the .torrent file: http 503\n"),
@@ -669,7 +653,6 @@ fn the_machine_and_preferences_rank_a_film_search_and_say_so() {
     });
     let home = Home::new(&server, &["archive.org"], "");
     let search = ["search", "night", "of", "the", "living", "dead", "1968", "--category", "video", "--limit", "6"];
-    // The SIZE, QUALITY when shown, and NAME columns, then the summary lines after the first.
     let shown = |run: &Run| -> Vec<String> {
         assert_eq!(run.code, 0, "{}", run.stderr);
         let lines: Vec<&str> = run.stdout.lines().collect();
@@ -688,8 +671,6 @@ fn the_machine_and_preferences_rank_a_film_search_and_say_so() {
     assert_eq!(home.run(&["setup", "--screen", "laptop", "--max-size", "2GB", "--playback", "h264"]).code, 0);
     let after = home.run(&search);
 
-    // The Spanish dub ranks below the other 1080p releases for an English Mac, and an 8.3 MiB
-    // file tagged 1080p is too small to be the film, so it leaves the top.
     assert_eq!(
         shown(&before),
         [
@@ -703,7 +684,6 @@ fn the_machine_and_preferences_rank_a_film_search_and_say_so() {
             "# ranked for this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English",
         ]
     );
-    // Trailers tagged 1080p and 720p stay below the film, and so does an 8.3 MiB file tagged 1080p.
     assert_eq!(
         shown(&after),
         [

@@ -1,7 +1,3 @@
-//! The owner task: the only holder of the job book and the only SQLite writer. Connection
-//! tasks and the engine thread reach it through messages, and it never awaits I/O, so a
-//! slow search or fetch cannot delay a pause.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,18 +21,12 @@ use super::store::{Store, Tombstone};
 #[derive(Clone, Debug)]
 pub struct OwnerConfig {
     pub default_dir: PathBuf,
-    /// Metadata probes add torrents here. They want no files, so nothing is written.
     pub probe_dir: PathBuf,
     pub max_active: usize,
-    /// `None` never exits when idle, for a service-managed engine.
     pub idle_timeout: Option<Duration>,
     pub resume_on_start: bool,
-    /// How often running downloads save resume data, so a crash costs this much progress, not a hash of every file.
     pub save_resume_every: Duration,
-    /// How long a download's connected peers and web seeds may lack every piece it still needs
-    /// before it stops with `no_source`.
     pub stall_after: Duration,
-    /// How long pause and shutdown wait for the engine to confirm that writes stopped.
     pub writes_stop_within: Duration,
 }
 
@@ -88,13 +78,9 @@ pub struct DownloadFiles {
     pub verified: FileBytes,
 }
 
-/// Each file's verified bytes.
 #[derive(Clone, Debug)]
 pub enum FileBytes {
-    /// From a finished download's sizes, or the last save. Empty before the first save.
     Known(Vec<u64>),
-    /// The engine has the download, so it counts them now. The last save's count answers if the
-    /// download leaves the engine before it is asked.
     Engine { saved: Vec<u64> },
 }
 
@@ -108,7 +94,6 @@ pub struct GetCommand {
     pub source: Source,
     pub dir: Option<PathBuf>,
     pub files: Vec<String>,
-    /// `--max-size`.
     pub max_size: Option<u64>,
     pub setup_max_size: Option<u64>,
     pub dry_run: bool,
@@ -160,9 +145,7 @@ pub struct Owner {
     store: Store,
     jobs: BTreeMap<TorrentId, JobEntry>,
     tombstones: Vec<Tombstone>,
-    /// Torrents in the engine only to fetch their file list for `files`.
     probes: BTreeSet<TorrentId>,
-    /// Torrents asked to leave the engine, which cannot be added again until they have.
     draining: BTreeSet<TorrentId>,
     metadata_waiters: Vec<MetadataWaiter>,
     pauses: Vec<PendingPause>,
@@ -175,8 +158,6 @@ pub struct Owner {
     config: OwnerConfig,
     connections: usize,
     idle_since: Instant,
-    /// When the newest cached search answer expires. An idle engine stays up until then, so a
-    /// repeat search finds it.
     keep_until: Option<Instant>,
     resume_saved_at: Instant,
 }
@@ -357,7 +338,6 @@ impl Owner {
         self.store.alias_owners(hash).ok()?.into_iter().find(|id| self.jobs.contains_key(id))
     }
 
-    /// `results` are the recent search results the prefix matches, with their private links.
     fn resolve_any(&self, prefix: &HexPrefix, results: &[Release], command: &'static str) -> Result<Resolved, Error> {
         let jobs: Vec<(TorrentId, Option<&str>)> =
             self.jobs.values().map(|j| (j.id(), j.record.name.as_deref())).collect();
@@ -378,8 +358,6 @@ impl Owner {
         (self.parse)(&bytes).ok().map(Arc::new)
     }
 
-    /// Saves search results as shown, with their private links less the API key, for the next
-    /// engine process to restore.
     fn record_results(&mut self, saved: Vec<(Release, Option<SavedLink>)>) {
         let _ = self.store.record_results(&saved, now());
     }
@@ -467,8 +445,6 @@ impl Owner {
         Ok(GetReply { outcome, job: job.view(), plan: plan.map(|p| p.public()), previous_selection: None })
     }
 
-    /// `max_size` is `--max-size`, which replaces the download's cap. A download stopped for
-    /// `too_large` runs again once its selection fits.
     fn get_existing(
         &mut self,
         id: TorrentId,
@@ -478,7 +454,6 @@ impl Owner {
         dry_run: bool,
     ) -> Result<GetReply, Error> {
         let cap = max_size.map_or(self.jobs[&id].record.cap, |bytes| Cap { bytes, from_setup: false });
-        // Without a file list there is nothing to check the cap against, and the file list checks it.
         if !dry_run && self.jobs[&id].metainfo.is_none() && cap != self.jobs[&id].record.cap {
             self.store.set_cap(id, cap)?;
             self.jobs.get_mut(&id).expect("found above").record.cap = cap;
@@ -517,7 +492,6 @@ impl Owner {
             let job = self.jobs[&id].view();
             return Ok(GetReply { outcome: GetOutcome::Updated, job, plan: None, previous_selection: previous });
         };
-        // A download stopped for its size never claimed its files, so they all count as new.
         let before = if too_large { None } else { job.wanted() };
         let plan = admission::plan(&metainfo, &selection, &job.record.dir, before.as_deref(), self.disk.as_ref())?;
         admission::check_size(plan.selected_size, cap, None)?;
@@ -674,7 +648,6 @@ impl Owner {
                     "paused"
                 }
             };
-            // Whichever pause or stop began it, this one also returns only once writes stop.
             if self.jobs[&id].observed == Observed::InEngine(Phase::Pausing) {
                 waiting.insert(id);
             }
@@ -699,7 +672,6 @@ impl Owner {
             matches!(j.record.intent, Intent::Paused | Intent::Failed { .. })
                 || (j.record.intent == Intent::Running && j.observed == Observed::Parked)
         };
-        // A download over its cap stays stopped until `get` raises the cap or picks fewer files.
         let fits = |j: &JobEntry| {
             j.selected_size().map_or(Ok(()), |size| admission::check_size(size, j.record.cap, Some(j.id())))
         };
@@ -916,7 +888,6 @@ impl Owner {
                     self.draining.insert(id);
                     self.reply_metadata_waiters(id, Err(error));
                 } else if self.jobs.get(&id).is_some_and(|j| j.observed.in_engine()) {
-                    // A failure for a download out of the engine answers a command sent before it left.
                     self.fail(id, error);
                 }
             }
@@ -973,7 +944,6 @@ impl Owner {
         }
     }
 
-    /// Two downloads turned out to be one hybrid torrent. The one that claimed the hash first stays.
     fn drop_duplicate(&mut self, id: TorrentId, original: TorrentId) {
         let _ = self.store.remove_duplicate(id);
         if let Some(job) = self.jobs.remove(&id)
@@ -996,13 +966,6 @@ impl Owner {
         }
     }
 
-    /// A download that may hold pieces verified since its last save pauses and saves before it
-    /// leaves the engine, so they stay. Others leave at once and keep the last save:
-    /// - one fetching its file list or checking its files, which has nothing new, and whose save
-    ///   mid-check would keep only the pieces checked so far;
-    /// - one stopped by a disk error, since libtorrent counts a piece that passed its hash check
-    ///   even when writing it failed;
-    /// - one whose save fails, since saving again could fail forever. Its first error stays.
     fn fail(&mut self, id: TorrentId, error: Error) {
         let Some(job) = self.jobs.get_mut(&id) else { return };
         job.verify = None;
@@ -1044,7 +1007,6 @@ impl Owner {
         self.publish(id);
     }
 
-    /// Fails a download whose sources have lacked every piece it still needs for `stall_after`.
     fn stop_unsourced(&mut self, id: TorrentId) {
         let job = &self.jobs[&id];
         let pieces = job.stats.missing.map_or(0, |m| m.pieces) as usize;
@@ -1115,8 +1077,6 @@ impl Owner {
         files: Option<Vec<u64>>,
     ) {
         let job = self.jobs.get(&id);
-        // A periodic save asked for before a pause can arrive after it began. Only the save that
-        // follows stopped writes is the last one.
         let last = job.is_none_or(|j| {
             matches!(j.observed, Observed::InEngine(Phase::Paused | Phase::Finishing { writes_stopped: true }))
         });
@@ -1124,13 +1084,10 @@ impl Owner {
             stopping.waiting.remove(&id);
         }
         let Some(job) = job else { return };
-        // The engine's count and map when the data was taken. The last stats can be older than the data.
         let verified = verified.unwrap_or_else(|| job.verified());
         let piece_map = piece_map.or_else(|| job.piece_map());
         let files = files.or_else(|| job.record.files_verified.clone());
         let finishing = job.observed == Observed::InEngine(Phase::Finishing { writes_stopped: true });
-        // The engine counted the selection it held when it saved. A selection changed since the
-        // engine finished can hold files it never fetched, so only a count of all of it is done.
         if finishing && job.selected_size() == Some(verified) {
             let finished_at = now();
             if let Err(error) = self.store.finish(id, finished_at, &data, verified) {
@@ -1154,7 +1111,6 @@ impl Owner {
             job.record.files_verified = files;
         }
         if finishing {
-            // Paused and running, so the scheduler resumes it for the rest.
             job.observed = Observed::InEngine(Phase::Paused);
         } else if job.held_for_save() {
             job.observed = Observed::Absent;
@@ -1168,7 +1124,6 @@ impl Owner {
     fn checked(&mut self, id: TorrentId, damaged: u32, verified: u64, piece_map: Option<PieceMap>, files: Vec<u64>) {
         let Some(job) = self.jobs.get_mut(&id) else { return };
         let Some(mode) = job.verify.take() else { return };
-        // The check replaces what the last save recorded, so progress and the next restart start from it.
         job.record.verified = verified;
         job.stats.verified = verified;
         job.record.piece_map = piece_map;
@@ -1177,8 +1132,6 @@ impl Owner {
         self.engine.send(EngineCommand::SaveResume(id));
         let short = id.to_hex()[..6].to_string();
         let intent = job.record.intent.clone();
-        // Damage contradicts the stored resume data, so the check's count replaces it in one write,
-        // and until the engine saves again the next add hashes the files instead of trusting it.
         let files = job.record.files_verified.clone().unwrap_or_default();
         let record = |store: &mut Store, intent: Option<&Intent>| {
             let _ = store.record_check(id, intent, verified, piece_map, &files);
@@ -1216,7 +1169,6 @@ impl Owner {
                 job.observed = Observed::InEngine(Phase::Downloading);
                 self.engine.send(EngineCommand::Resume(id));
             }
-            // Pieces that never arrived count as damaged too, so the error that stopped it stays.
             (Intent::Failed { .. }, _, Verify::Report) => {
                 record(&mut self.store, None);
                 job.observed = Observed::InEngine(Phase::Paused);
@@ -1287,9 +1239,6 @@ impl Owner {
         self.publish(id);
     }
 
-    /// What a download's files looked like when it was admitted can change before the engine
-    /// writes them, so this runs again whenever the engine adds or resumes it. `command` runs it
-    /// again once the user has cleared the way.
     fn check_writes(&self, id: TorrentId, command: &str) -> Result<(), Error> {
         let job = &self.jobs[&id];
         let (Some(metainfo), Some(wanted)) = (job.metainfo.as_deref(), job.wanted()) else { return Ok(()) };
@@ -1298,9 +1247,6 @@ impl Owner {
         self.check_claims(id, metainfo, dir, &wanted, Some(&retry))
     }
 
-    /// A download claims its selected files from admission until it is removed, so no two
-    /// downloads write one file, even before either has created it. One stopped by an error gives
-    /// up its claim, and claims its files again when it starts.
     fn check_claims(
         &self,
         id: TorrentId,
@@ -1425,7 +1371,6 @@ impl Owner {
     }
 }
 
-/// macOS and Windows filesystems ignore case, so `Pack/a.bin` and `pack/a.bin` are one file.
 fn claim_key(path: &Path) -> String {
     path.to_string_lossy().to_lowercase()
 }

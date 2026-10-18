@@ -115,7 +115,6 @@ impl State {
 
 type Events = mpsc::Receiver<Result<Event, Error>>;
 
-/// Reads engine events on a thread, so the main loop can wake for heartbeats and deadlines.
 fn events(conn: Conn, request: &Request) -> Result<(Vec<Job>, Events), Error> {
     let mut conn = conn;
     conn.send(request)?;
@@ -221,7 +220,6 @@ pub fn run(
     }
 }
 
-/// Live progress bars on stderr for a person at a terminal. Ctrl-C stops watching only.
 pub fn attach(conn: Conn, refs: Vec<String>, until: Until, timeout: Option<Duration>) -> Result<u8, Error> {
     let started = Instant::now();
     let (jobs, rx) = events(conn, &Request::Watch { refs })?;

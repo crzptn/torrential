@@ -1,10 +1,3 @@
-//! The seam between the engine process and the torrent engine. [`super::libtorrent`]
-//! implements [`EnginePort`] over `torrential-engine`, and [`Fake`] simulates a swarm for
-//! tests.
-//!
-//! The port runs on its own thread (see [`spawn`]). Every outcome, including a failed
-//! call, comes back to the owner as an [`EngineEvent`].
-
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
@@ -14,24 +7,18 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use torrential_core::{Error, ErrorCode, InfoHash, PieceMap, Slice, TorrentId};
 
-/// A torrent's file list. Only [`Metainfo::new`] builds one, so every path in it stays
-/// inside the torrent's folder. A port that receives a hostile file list reports the
-/// constructor's error as [`EngineEvent::Failed`].
 #[derive(Clone, PartialEq, Debug)]
 pub struct Metainfo {
     pub info_hash: InfoHash,
     pub name: String,
     pub files: Vec<MetaFile>,
-    /// One file stored at `<dir>/<name>`, rather than a folder `<dir>/<name>/`.
     pub single_file: bool,
-    /// The `.torrent` bytes, kept so a restart can add the torrent without asking peers.
     pub bytes: Vec<u8>,
     checked: (),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MetaFile {
-    /// Relative to the torrent's folder, with `/` separators.
     pub path: String,
     pub size: u64,
 }
@@ -69,10 +56,7 @@ pub enum AddSource {
 pub struct AddTorrent {
     pub id: TorrentId,
     pub source: AddSource,
-    /// The download folder. The engine writes into `<save_path>/<name>`.
     pub save_path: PathBuf,
-    /// One flag per file. `None` fetches no payload: for a magnet whose file list is
-    /// not known yet, or a metadata probe.
     pub wanted: Option<Vec<bool>>,
     pub resume_data: Option<Vec<u8>>,
     pub paused: bool,
@@ -87,11 +71,8 @@ pub enum Activity {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Stats {
-    /// Wanted bytes in pieces that passed their hash check.
     pub verified: u64,
-    /// `None` until the engine has the file list and the owner's selection.
     pub piece_map: Option<PieceMap>,
-    /// `None` until the engine has the file list and the owner's selection.
     pub missing: Option<Missing>,
     pub down_rate: u64,
     pub up_rate: u64,
@@ -99,11 +80,9 @@ pub struct Stats {
     pub seeds: u32,
 }
 
-/// Wanted pieces that have not passed their hash check.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Missing {
     pub pieces: u32,
-    /// Those that no connected peer or web seed has.
     pub unavailable: u32,
 }
 
@@ -121,39 +100,30 @@ pub enum EngineEvent {
         id: TorrentId,
         stats: Stats,
     },
-    /// Every wanted piece passed its hash check.
     Finished {
         id: TorrentId,
     },
-    /// Writes stopped and files are closed. A `Stats` with the final count comes first.
     Paused {
         id: TorrentId,
     },
     ResumeData {
         id: TorrentId,
         data: Vec<u8>,
-        /// Wanted bytes verified when the data was taken, if the engine could count them.
         verified: Option<u64>,
-        /// The piece map when the data was taken, if the engine could sample it.
         piece_map: Option<PieceMap>,
-        /// Verified bytes in each file when the data was taken, counted with `verified`.
         files: Option<Vec<u64>>,
     },
-    /// A recheck finished. Counts wanted pieces that failed it, and wanted bytes that passed.
     Checked {
         id: TorrentId,
         damaged_pieces: u32,
         verified: u64,
         piece_map: Option<PieceMap>,
-        /// Verified bytes in each file, counted with `verified`.
         files: Vec<u64>,
     },
-    /// A command failed, or the torrent stopped with an error such as a full disk.
     Failed {
         id: TorrentId,
         error: Error,
     },
-    /// The torrent left the engine. Adding the same torrent again before this fails.
     Removed {
         id: TorrentId,
     },
@@ -166,13 +136,9 @@ pub trait EnginePort: Send {
     fn resume(&mut self, id: TorrentId) -> Result<(), Error>;
     fn recheck(&mut self, id: TorrentId) -> Result<(), Error>;
     fn save_resume_data(&mut self, id: TorrentId) -> Result<(), Error>;
-    /// Saves only if the torrent downloaded or checked data since its last save. Otherwise no event follows.
     fn save_resume_data_if_progressed(&mut self, id: TorrentId) -> Result<(), Error>;
-    /// Removes the torrent and keeps its files.
     fn remove(&mut self, id: TorrentId) -> Result<(), Error>;
-    /// Verified bytes per file.
     fn file_progress(&mut self, id: TorrentId) -> Result<Vec<u64>, Error>;
-    /// Waits up to `max_wait` for events.
     fn poll(&mut self, max_wait: Duration) -> Vec<EngineEvent>;
 }
 
@@ -188,7 +154,6 @@ pub enum EngineCommand {
     FileProgress(TorrentId, oneshot::Sender<Result<Vec<u64>, Error>>),
 }
 
-/// Sends commands to the engine thread. Dropping every handle stops the thread.
 #[derive(Clone)]
 pub struct EngineHandle {
     commands: mpsc::Sender<EngineCommand>,
@@ -196,7 +161,6 @@ pub struct EngineHandle {
 
 impl EngineHandle {
     pub fn send(&self, command: EngineCommand) {
-        // A closed channel means the engine thread is gone, which only happens at exit.
         let _ = self.commands.send(command);
     }
 
@@ -207,7 +171,6 @@ impl EngineHandle {
     }
 }
 
-/// How long the thread waits on the engine between command checks, which bounds command latency.
 const POLL: Duration = Duration::from_millis(50);
 
 pub fn spawn(
@@ -259,7 +222,6 @@ fn apply(port: &mut dyn EnginePort, command: EngineCommand) -> Option<EngineEven
     result.err().map(|error| EngineEvent::Failed { id, error })
 }
 
-/// The `.torrent` format the fake engine reads: JSON instead of bencode.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct FakeTorrentFile {
     pub info_hash: InfoHash,
@@ -291,13 +253,10 @@ pub struct Swarm(Arc<Mutex<SwarmState>>);
 #[derive(Default)]
 struct SwarmState {
     published: BTreeMap<TorrentId, FakeTorrentFile>,
-    /// Without a published torrent, a magnet's `dn` and `xl` describe a one-file torrent.
     invent_from_magnets: bool,
     rate: u64,
     damaged: BTreeMap<TorrentId, u32>,
-    /// The last wanted pieces each torrent would land, which no peer has.
     unavailable: BTreeMap<TorrentId, u32>,
-    /// Why saving each torrent's resume data fails, and how many saves it has refused.
     unsaved: BTreeMap<TorrentId, (Error, u32)>,
 }
 
@@ -328,7 +287,6 @@ impl Swarm {
         self.0.lock().unwrap().damaged.insert(id, pieces);
     }
 
-    /// No peer has the last `pieces` wanted pieces of `id`, until this is called again.
     #[cfg(test)]
     pub fn withhold(&self, id: TorrentId, pieces: u32) {
         self.0.lock().unwrap().unavailable.insert(id, pieces);
@@ -365,9 +323,7 @@ struct FakeTorrent {
     magnet: Option<String>,
     metainfo: Option<Metainfo>,
     wanted: Option<Vec<bool>>,
-    /// Wanted bytes the swarm has sent. They verify in whole pieces, as [`fake_landing`] lands them.
     arrived: f64,
-    /// `arrived` at the last resume data.
     saved: f64,
     paused: bool,
     finished: bool,
@@ -486,7 +442,6 @@ impl EnginePort for Fake {
         t.arrived = (t.arrived - f64::from(damaged) * piece as f64).max(0.0);
         t.stop_downloading();
         let landing = t.landing();
-        // Like libtorrent, a wanted piece that never arrived counts as damaged.
         let damaged_pieces = landing.as_ref().map_or(0, |l| l.missing.pieces);
         let (verified, piece_map) = landing.as_ref().map_or((0, None), |l| (l.verified, l.piece_map));
         let files = landing.map(|l| l.files).unwrap_or_default();
@@ -572,17 +527,12 @@ impl EnginePort for Fake {
     }
 }
 
-/// The fake engine's torrents have about this many pieces, whatever their size.
 const FAKE_PIECES: u64 = 1024;
-/// Pieces arrive in runs this long, a quarter of a slice, at shuffled places.
 const FAKE_RUN: usize = 4;
 
-/// Where a fake torrent's data has landed.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Landing {
-    /// Bytes of wanted files in landed pieces.
     pub verified: u64,
-    /// Bytes of each file in landed pieces, wanted or not.
     pub files: Vec<u64>,
     pub piece_map: Option<PieceMap>,
     pub missing: Missing,
@@ -592,11 +542,6 @@ fn fake_piece_size(total: u64) -> u64 {
     total.div_ceil(FAKE_PIECES)
 }
 
-/// Lands `arrived` wanted bytes as whole pieces, the way a real engine verifies them. Runs of
-/// pieces land in an order shuffled by the info hash, the way a swarm scatters them, so a slice
-/// only ever fills and the same bytes always land the same pieces. The map and the files are
-/// counted from the same pieces, so they agree. The last `unavailable` wanted pieces in that
-/// order have no source and never land.
 pub fn fake_landing(metainfo: &Metainfo, wanted: &[bool], arrived: u64, unavailable: u32) -> Landing {
     let total = metainfo.total();
     let mut files = vec![0; metainfo.files.len()];
@@ -643,7 +588,6 @@ pub fn fake_landing(metainfo: &Metainfo, wanted: &[bool], arrived: u64, unavaila
     Landing { verified: arrived - left, files, piece_map: Some(piece_map), missing }
 }
 
-/// Each file's bytes in each piece it touches, as `(file, piece, bytes)`.
 fn overlaps(metainfo: &Metainfo, piece: u64) -> impl Iterator<Item = (usize, usize, u64)> + '_ {
     let mut start = 0;
     metainfo.files.iter().enumerate().flat_map(move |(file, f)| {
@@ -654,9 +598,6 @@ fn overlaps(metainfo: &Metainfo, piece: u64) -> impl Iterator<Item = (usize, usi
     })
 }
 
-/// Why a fake download's file bytes disagree with its verified count or its map, if they do. A
-/// slice says something only about a file it lies inside: a full slice's bytes landed in that
-/// file, an empty one's did not, and a partly filled one holds a landed piece and a missing one.
 #[cfg(test)]
 pub fn disagreement(
     metainfo: &Metainfo,
@@ -708,7 +649,6 @@ pub fn disagreement(
     })
 }
 
-/// SplitMix64, so the shuffle needs no random-number crate.
 fn splitmix(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
     let mut z = *state;

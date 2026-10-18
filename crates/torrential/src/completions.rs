@@ -1,6 +1,3 @@
-//! Shell completions. The shell calls `COMPLETE=<shell> torrential`, so completions always
-//! match the installed binary, and download IDs come from a running engine.
-
 use clap_complete::engine::CompletionCandidate;
 use torrential_core::protocol::{Request, Response};
 
@@ -10,7 +7,6 @@ use crate::env::Env;
 use crate::output::views::short_ids;
 use crate::paths::Paths;
 
-/// Download IDs with their names. Never starts an engine: completion must stay instant.
 pub fn complete_download_ids() -> Vec<CompletionCandidate> {
     let env = Env::from_process();
     let Ok(paths) = Paths::from_process(&env) else { return Vec::new() };

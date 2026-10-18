@@ -1,6 +1,3 @@
-//! `torrential setup`: shows what search ranks for on this machine, and saves preferences
-//! that override what torrential detected, for someone who watches somewhere else.
-
 use serde::Serialize;
 use torrential_core::units::size_text;
 use torrential_core::{Error, Preferences, Profile};
@@ -14,13 +11,11 @@ use crate::skill::Writes;
 
 #[derive(Serialize)]
 struct Report<'a> {
-    /// `saved`, `unchanged`, or `shown`.
     result: &'static str,
     profile: &'a Profile,
     file: String,
 }
 
-/// Each flag changes only the preference it names.
 pub fn run(args: SetupArgs, mode: Mode, env: &Env) -> Result<u8, Error> {
     let paths = Paths::from_process(env)?;
     let current = config::preferences(&paths)?;
@@ -43,7 +38,6 @@ pub fn run(args: SetupArgs, mode: Mode, env: &Env) -> Result<u8, Error> {
     Ok(super::emit(mode, &doc, &Typed { kind: "setup", body: report }))
 }
 
-/// The command that saves these preferences, for a person to run where torrential can write.
 fn command(preferences: &Preferences) -> String {
     format!(
         "torrential setup --screen {} --max-size {} --playback {}",

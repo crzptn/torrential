@@ -1,7 +1,3 @@
-//! The real binary and libtorrent downloading an archive.org item from web seeds alone, against
-//! local servers: one plays archive.org, and two play the servers that hold the item. Nothing
-//! leaves the machine.
-
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -14,7 +10,6 @@ use sha2::Digest;
 use torrential_engine as lt;
 
 const ITEM: &str = "LlamaDrama";
-/// a.bin ends inside a piece, so that piece needs both files.
 const FILES: [(&str, usize); 2] = [("a.bin", 100_000), ("b.bin", 60_000)];
 const OTHERS: [&str; 7] = ["archlinux", "ubuntu", "debian", "academictorrents", "knaben", "apibay", "nyaa"];
 
@@ -29,7 +24,6 @@ fn bytes(body: Vec<u8>) -> Answer {
     Answer::Bytes { body, delay: Duration::ZERO }
 }
 
-/// Answers each path prefix, in order, over keep-alive connections, the way a web seed asks.
 struct Server {
     base: String,
 }
@@ -234,7 +228,6 @@ impl Home {
         std::fs::read_to_string(self.dir.path().join("th/state/engine.log")).unwrap_or_default()
     }
 
-    /// A lookup can answer after the download.
     fn logs(&self, line: &str) -> bool {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !self.log().contains(line) {

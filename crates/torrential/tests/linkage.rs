@@ -1,5 +1,3 @@
-//! An installed binary has to start after `nix-collect-garbage` and on a Mac
-//! without Nix, so it may load only libraries that macOS ships.
 #![cfg(target_os = "macos")]
 
 use std::process::Command;

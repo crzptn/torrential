@@ -11,7 +11,6 @@ use crate::env::Env;
 use crate::paths::Paths;
 use crate::wire;
 
-/// Most answers take milliseconds. This bounds a wedged engine, not a slow one.
 pub const DEFAULT_REPLY_WITHIN: Duration = Duration::from_secs(30);
 
 pub struct Conn {
@@ -32,7 +31,6 @@ impl Conn {
         self.read_within(within)
     }
 
-    /// The next frame, which for a streaming search may be an `Event` rather than a `Response`.
     pub fn read_within<T: DeserializeOwned>(&mut self, within: Duration) -> Result<T, Error> {
         self.stream.set_read_timeout(Some(within)).map_err(|e| self.lost(e))?;
         let frame = wire::read(&mut self.stream).map_err(|e| self.lost(e))?;
@@ -87,8 +85,6 @@ pub fn existing(paths: &Paths, env: &Env) -> Result<Option<Conn>, Error> {
     }
 }
 
-/// The engine, started if needed. An engine from another version is stopped first, after it
-/// saves its state, so an upgrade takes effect on the next command.
 pub fn ensure(paths: &Paths, env: &Env) -> Result<Conn, Error> {
     if let Some(conn) = existing(paths, env)? {
         if conn.engine_version == env.version() && conn.wire == WIRE_VERSION {
@@ -101,7 +97,6 @@ pub fn ensure(paths: &Paths, env: &Env) -> Result<Conn, Error> {
 
 pub fn stop(mut conn: Conn) -> Result<u32, Error> {
     let pid = conn.pid;
-    // The engine may exit before its reply arrives; the process check below is what counts.
     let _ = conn.call_within(&Request::Shutdown, Duration::from_secs(20));
     let deadline = Instant::now() + Duration::from_secs(20);
     while alive(pid) {

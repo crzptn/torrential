@@ -1,5 +1,3 @@
-//! Disk state comes in through [`Disk`], so tests run the checks against a fake filesystem.
-
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -18,20 +16,17 @@ const MAX_RESERVE: u64 = 10 * GIB;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Space {
-    /// Identifies the filesystem, so downloads sharing a disk share its free space.
     pub device: u64,
     pub total: u64,
     pub free: u64,
 }
 
 pub trait Disk: Send {
-    /// The filesystem holding `path`, or its nearest existing ancestor.
     fn space(&self, path: &Path) -> std::io::Result<Space>;
     fn exists(&self, path: &Path) -> bool;
     fn is_link(&self, path: &Path) -> bool;
 }
 
-/// 2%, at least 2 GiB so a small disk keeps room for the system, at most 10 GiB so a big disk stays usable.
 pub fn reserve(total: u64) -> u64 {
     (total / 50).clamp(MIN_RESERVE, MAX_RESERVE)
 }
@@ -41,9 +36,7 @@ pub struct Plan {
     pub wanted: Vec<bool>,
     pub selected_size: u64,
     pub destination: PathBuf,
-    /// Symbolic links on the way to the selected files. See [`links`].
     pub links: Vec<PathBuf>,
-    /// Files that already exist.
     pub conflicts: Vec<PathBuf>,
     pub space: Space,
 }
@@ -61,7 +54,6 @@ impl Plan {
     }
 }
 
-/// Files in `already_wanted` were written by this download, so they are not conflicts.
 pub fn plan(
     metainfo: &Metainfo,
     selection: &Selection,
@@ -108,12 +100,9 @@ pub fn links(metainfo: &Metainfo, dir: &Path, wanted: &[bool], disk: &dyn Disk) 
     links.into_iter().collect()
 }
 
-/// A download's size cap: `--max-size`, else the max size from `torrential setup`, else
-/// [`DEFAULT_MAX_SIZE`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cap {
     pub bytes: u64,
-    /// So a refusal names the setup answer as what set it.
     pub from_setup: bool,
 }
 
@@ -127,7 +116,6 @@ impl Cap {
     }
 }
 
-/// `job` names a download refused after `get` returned, so the hint gives the whole command.
 pub fn check_size(selected: u64, cap: Cap, job: Option<TorrentId>) -> Result<(), Error> {
     if selected <= cap.bytes {
         return Ok(());
@@ -168,7 +156,6 @@ pub fn check_conflicts(plan: &Plan) -> Result<(), Error> {
     .with_hint("choose another folder with --dir, or move the existing files; torrential never overwrites"))
 }
 
-/// `retry` is the command that runs a refused download again, for a download that already exists.
 pub fn check_links(links: &[PathBuf], dir: &Path, retry: Option<&str>) -> Result<(), Error> {
     let what = match links {
         [] => return Ok(()),
@@ -184,8 +171,6 @@ pub fn check_links(links: &[PathBuf], dir: &Path, retry: Option<&str>) -> Result
         .with_hint(hint))
 }
 
-/// `paths` under `destination` are files of the download `owner`, called `name`. `retry` as in
-/// [`check_links`].
 pub fn claimed(destination: &Path, owner: TorrentId, name: &str, paths: &[PathBuf], retry: Option<&str>) -> Error {
     let n = paths.len();
     let (are, files) = if n == 1 { ("is", "a file") } else { ("are", "files") };
@@ -255,8 +240,6 @@ impl Disk for RealDisk {
     }
 }
 
-/// Plenty of space, and the real filesystem for conflicts: for the fake engine, which writes nothing,
-/// and for swarm tests on a disk below the reserve.
 pub struct RoomyDisk;
 
 impl Disk for RoomyDisk {

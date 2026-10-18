@@ -1,6 +1,3 @@
-//! `doctor`'s config and source checks. With `--network`, this process searches each
-//! enabled source once, built from the same config the engine reads.
-
 use torrential_core::error::Details;
 use torrential_core::{Error, SearchQuery, SourceOutcome, SourceReport};
 use torrential_search::{ResultCache, Search, SearchConfig};
@@ -9,9 +6,6 @@ use crate::config::{self, Config};
 use crate::output::views::{Check, CheckStatus, source_outcome};
 use crate::paths::Paths;
 
-/// Lawful, cheap for every source, and answered by the general indexes. It names no
-/// official image, so the Ubuntu and Debian sources read their listings without
-/// fetching any `.torrent`.
 const PROBE: &str = "linux";
 
 pub fn checks(paths: &Paths, settings: Result<Config, Error>, network: bool) -> Vec<Check> {
@@ -55,7 +49,6 @@ pub fn checks(paths: &Paths, settings: Result<Config, Error>, network: bool) -> 
     checks
 }
 
-/// Every source's report, including when none answered.
 fn ask(search: &Search, sources: Vec<String>) -> Result<Vec<SourceReport>, Error> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

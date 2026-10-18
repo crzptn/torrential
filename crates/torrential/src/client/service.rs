@@ -115,7 +115,6 @@ fn run(program: &str, args: &[&str]) -> Result<(), Error> {
     )))
 }
 
-/// Writes the unit and starts it. Running it twice changes nothing the second time.
 pub fn install(env: &Env, log: &Path) -> Result<Report, Error> {
     let manager = Manager::current();
     let path = manager.unit_path(&home(env)?);

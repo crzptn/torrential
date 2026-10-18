@@ -1,6 +1,3 @@
-//! The TUI's view of the engine. Each call opens its own connection, starting the engine if
-//! needed, so a slow search never holds up a pause.
-
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -19,10 +16,8 @@ use crate::paths::Paths;
 use crate::skill::Writes;
 use crate::wire;
 
-/// Runs the TUI. It never stops the engine, so downloads keep going after it quits.
 pub fn run(env: &Env) -> Result<u8, Error> {
     let paths = Paths::from_process(env)?;
-    // A config error reaches the screen from the engine, which refuses to start.
     let downloads = Config::load(&paths, env).map_or_else(|_| paths.downloads.clone(), |c| c.downloads_dir(&paths));
     let backend = EngineBackend { paths, downloads, env: env.clone() };
     torrential_tui::run(backend).map_err(|e| Error::internal(format!("the terminal UI stopped: {e}")))?;
@@ -35,7 +30,6 @@ struct EngineBackend {
     env: Env,
 }
 
-/// What a streaming search sends: updates, then the final reply.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum SearchFrame {

@@ -29,7 +29,6 @@ pub fn write(w: &mut impl Write, message: &impl Serialize) -> io::Result<()> {
     w.flush()
 }
 
-/// `None` when the stream ends between frames. An end inside a frame is an error.
 pub fn read<T: DeserializeOwned>(r: &mut impl Read) -> io::Result<Option<T>> {
     let mut header = [0; 4];
     let first = loop {

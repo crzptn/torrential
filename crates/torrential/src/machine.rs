@@ -1,7 +1,3 @@
-//! Detects the machine search ranks for: its largest display, its CPU architecture, and the
-//! system language. The engine runs this once in the background after it starts. `setup` and
-//! `doctor` run it to show what the engine sees.
-
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -14,11 +10,8 @@ use torrential_core::{Arch, Display, Error, ErrorCode, Language, Machine, Os, Pr
 use crate::daemon::admission::{Disk, reserve};
 use crate::env::Env;
 
-/// `system_profiler` usually answers in a fifth of a second, and can take seconds on a busy machine.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The engine's view of the machine: detected once, in the background, so it never holds up
-/// a search, and the room in the download folder, read at each search.
 pub struct Detector {
     machine: OnceLock<Machine>,
     downloads: PathBuf,
@@ -26,7 +19,6 @@ pub struct Detector {
 }
 
 impl Detector {
-    /// Until detection finishes, profiles have no machine.
     pub fn start(env: &Env, downloads: PathBuf, disk: Box<dyn Disk + Sync>) -> Arc<Detector> {
         let detector = Arc::new(Detector { machine: OnceLock::new(), downloads, disk });
         let (env, filling) = (env.clone(), detector.clone());
@@ -52,7 +44,6 @@ impl Detector {
     }
 }
 
-/// `TORRENTIAL_TEST_MACHINE` holds a machine as JSON, so tests rank the same on every host.
 pub fn detect(env: &Env) -> Result<Machine, Error> {
     if let Some(json) = env.var("TORRENTIAL_TEST_MACHINE") {
         return serde_json::from_str(json)
@@ -129,7 +120,6 @@ fn profiled_display(json: &str) -> Option<Display> {
         .max_by_key(|d| u64::from(d.width) * u64::from(d.height))
 }
 
-/// The first two numbers in `spdisplays_3024x1964Retina` or `3600 x 2338`.
 fn dimensions(text: &str) -> Option<(u32, u32)> {
     let mut numbers = text.split(|c: char| !c.is_ascii_digit()).filter_map(|n| n.parse().ok());
     Some((numbers.next()?, numbers.next()?))
@@ -150,7 +140,6 @@ fn drm_display(root: &Path) -> Option<Display> {
         .map(|(width, height)| Display { width, height, hdr: false })
 }
 
-/// The command's output, or `None` when it fails or runs past `timeout`.
 fn run(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
     let mut child = Command::new(program)
         .args(args)

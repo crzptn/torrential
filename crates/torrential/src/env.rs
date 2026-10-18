@@ -55,7 +55,6 @@ impl Env {
         Some(*agent)
     }
 
-    /// The version this process reports. Tests override it to simulate an upgrade.
     pub fn version(&self) -> String {
         self.var("TORRENTIAL_TEST_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")).to_string()
     }

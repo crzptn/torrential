@@ -8,7 +8,6 @@ use super::admission::Cap;
 use super::book::{Intent, JobRecord};
 use super::search_port::SavedLink;
 
-/// A database records how many entries it has run, so a shipped entry must never change.
 const MIGRATIONS: &[&str] = &[
     r#"
 CREATE TABLE jobs (
@@ -56,11 +55,9 @@ CREATE TABLE results (
     "ALTER TABLE jobs ADD COLUMN piece_map TEXT;",
     "ALTER TABLE jobs ADD COLUMN files_verified TEXT;",
     "ALTER TABLE jobs ADD COLUMN max_size_from_setup INTEGER NOT NULL DEFAULT 0;",
-    // A private result's `.torrent` link without its API key, which an engine puts back from the config.
     "ALTER TABLE results ADD COLUMN link TEXT;",
 ];
 
-/// A removed download, remembered briefly so a repeated `rm` reports `already_removed`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Tombstone {
     pub id: TorrentId,
@@ -71,11 +68,7 @@ pub struct Tombstone {
 
 pub const TOMBSTONE_SECS: i64 = 86_400;
 pub const RESULTS_SECS: i64 = 7 * 86_400;
-/// A file list no download uses is a cache for a search result's ID, which resolves for as long
-/// as the result is kept.
 pub const METAINFO_SECS: i64 = RESULTS_SECS;
-/// The file lists no download uses: four of the largest `.torrent` files torrential reads, so the
-/// one `files` just fetched is never the one evicted, and hundreds of the usual 50 to 500 KiB.
 pub const METAINFO_BYTES: i64 = 64 << 20;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -285,9 +278,6 @@ impl Store {
         })
     }
 
-    /// Records a check that found damage, with the intent it leads to, in one transaction. The
-    /// stored resume data describes the download before the check, so it goes too: until the
-    /// engine saves the check's own, the next add hashes the files rather than trusting it.
     pub fn record_check(
         &mut self,
         id: TorrentId,
@@ -376,7 +366,6 @@ impl Store {
         self.write(|tx| save_resume(tx, id, bytes, verified, piece_map, files, now))
     }
 
-    /// One transaction, so a crash cannot mark a download done without its final resume data.
     pub fn finish(&mut self, id: TorrentId, finished_at: i64, bytes: &[u8], verified: u64) -> Result<(), Error> {
         self.write(|tx| {
             save_resume(tx, id, bytes, verified, None, None, finished_at)?;
@@ -406,7 +395,6 @@ impl Store {
         })
     }
 
-    /// Leaves no tombstone, because the torrent stays tracked by the job it duplicated.
     pub fn remove_duplicate(&mut self, id: TorrentId) -> Result<(), Error> {
         self.write(|tx| tx.execute("DELETE FROM jobs WHERE id = ?1", [id.to_hex()]).map(drop))
     }
@@ -451,7 +439,6 @@ impl Store {
         Ok(owners)
     }
 
-    /// `saved` pairs each release as shown with its private link less the API key.
     pub fn record_results(&mut self, saved: &[(Release, Option<SavedLink>)], now: i64) -> Result<(), Error> {
         self.write(|tx| {
             for (release, link) in saved {
@@ -539,8 +526,6 @@ fn upsert_metainfo(tx: &Transaction, id: TorrentId, bytes: &[u8], now: i64) -> r
     evict_metainfo(tx, now)
 }
 
-/// Drops the file lists no download uses once they are older than `METAINFO_SECS`, then the
-/// oldest of them until the rest fit in `METAINFO_BYTES`. A download's own is never dropped.
 fn evict_metainfo(tx: &Transaction, now: i64) -> rusqlite::Result<()> {
     tx.execute("DELETE FROM metainfo WHERE id NOT IN (SELECT id FROM jobs) AND saved_at < ?1", [now - METAINFO_SECS])?;
     tx.execute(

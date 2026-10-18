@@ -1,24 +1,3 @@
-//! `config.yaml` in the config folder: where downloads go, which sources search
-//! asks, and the preferences `torrential setup` saves to override what torrential
-//! detects about the machine. The engine reads it when it starts, and clients read the
-//! preferences before each search and download. A file that does not parse is an error
-//! that names the line, never a silent fallback to the defaults.
-//!
-//! ```yaml
-//! downloads:
-//!   dir: ~/Downloads/torrents
-//! sources:
-//!   disabled: [nyaa]
-//!   torznab:
-//!     - name: jackett
-//!       url: http://127.0.0.1:9117/api/v2.0/indexers/all/results/torznab/api
-//!       api_key_env: JACKETT_API_KEY
-//! preferences:
-//!   screen: tv-4k
-//!   max_size: 8GB
-//!   playback: hevc-hdr
-//! ```
-
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -35,11 +14,8 @@ use crate::skill::{Writes, write_atomic};
 
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Config {
-    /// Where `get` puts downloads without `--dir`. `None` keeps the default.
     pub downloads: Option<PathBuf>,
-    /// The sources, with Torznab API keys read from the environment, and no cache folder.
     pub search: SearchConfig,
-    /// The file these settings came from. `None` when there is none and the defaults apply.
     pub file: Option<PathBuf>,
     pub preferences: Preferences,
 }
@@ -52,8 +28,6 @@ struct File {
     preferences: Option<Overrides>,
 }
 
-/// The file as a client reads it. The other sections are the engine's to check, and can
-/// name variables that only the engine's environment sets.
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct PreferencesOnly {
@@ -64,7 +38,6 @@ struct PreferencesOnly {
 #[serde(default, deny_unknown_fields)]
 struct Overrides {
     screen: Option<Screen>,
-    /// A size such as `8GB`, or `none`.
     max_size: Option<Spanned<String>>,
     playback: Option<Playback>,
 }
@@ -87,20 +60,16 @@ struct Sources {
 struct Torznab {
     name: String,
     url: String,
-    /// The variable holding the API key, so the key stays out of the file.
     api_key_env: Option<Spanned<String>>,
 }
 
-/// A problem in the file, on a line when one is known.
 type Problem = (Option<u64>, String);
 
-/// Where the config file goes. `config.yml` is read when it is the only one.
 pub fn path(paths: &Paths) -> PathBuf {
     paths.config.join("config.yaml")
 }
 
 impl Config {
-    /// The defaults when there is no file.
     pub fn load(paths: &Paths, env: &Env) -> Result<Config, Error> {
         let mut config = match read(paths)? {
             None => Config::default(),
@@ -118,21 +87,15 @@ impl Config {
     }
 }
 
-/// The file `setup` writes: the one that exists, or `config.yaml`.
 pub fn file(paths: &Paths) -> Result<PathBuf, Error> {
     Ok(read(paths)?.map_or_else(|| path(paths), |(path, _)| path))
 }
 
-/// The preferences `torrential setup` saved, read fresh, since the engine reads the file
-/// only when it starts.
 pub fn preferences(paths: &Paths) -> Result<Preferences, Error> {
     let Some((path, text)) = read(paths)? else { return Ok(Preferences::default()) };
     read_preferences(&text).map_err(|(line, message)| invalid(&path, line, &message))
 }
 
-/// Writes `preferences` as the file's top-level `preferences` block, or removes the block
-/// when they are empty. Every other line, comments included, stays as it was. Returns the
-/// file and whether it changed.
 pub fn save_preferences(paths: &Paths, preferences: &Preferences, writes: &Writes) -> Result<(PathBuf, bool), Error> {
     let (path, text) = read(paths)?.unwrap_or_else(|| (path(paths), String::new()));
     let edited = if preferences.is_empty() { without_block(&text) } else { with_block(&text, &block(preferences)) };
@@ -142,7 +105,6 @@ pub fn save_preferences(paths: &Paths, preferences: &Preferences, writes: &Write
     if edited == text {
         return Ok((path, false));
     }
-    // Writing through a link keeps a config that lives elsewhere, such as in a dotfiles repo.
     let target = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| writes.error(dir, e))?;
@@ -171,7 +133,6 @@ impl Overrides {
     }
 }
 
-/// The block `setup` writes, with only the preferences that are set.
 fn block(preferences: &Preferences) -> String {
     let lines: Vec<String> = [
         preferences.screen.map(|s| format!("  screen: {}", s.as_str())),
@@ -184,9 +145,6 @@ fn block(preferences: &Preferences) -> String {
     format!("preferences:\n{}\n", lines.join("\n"))
 }
 
-/// Where the top-level `preferences` block starts and ends in `lines`: its key line and the
-/// indented and blank lines after it, less trailing blank lines, so a comment at the left
-/// margin stays with what follows it.
 fn block_lines(lines: &[&str]) -> Option<(usize, usize)> {
     let is_key = |line: &&str| line.strip_prefix("preferences").is_some_and(|rest| rest.starts_with(':'));
     let start = lines.iter().position(is_key)?;
@@ -200,7 +158,6 @@ fn block_lines(lines: &[&str]) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
-/// `text` without its `preferences` block, and without the blank line that set it apart.
 fn without_block(text: &str) -> String {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let Some((start, mut end)) = block_lines(&lines) else { return text.to_string() };
@@ -217,7 +174,6 @@ fn without_block(text: &str) -> String {
     before + &lines[end..].concat()
 }
 
-/// `text` with `block` in place of its top-level `preferences` block, or after its last line.
 fn with_block(text: &str, block: &str) -> String {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let Some((start, end)) = block_lines(&lines) else {
@@ -234,10 +190,6 @@ fn with_block(text: &str, block: &str) -> String {
     [lines[..start].concat(), block.to_string(), lines[end..].concat()].concat()
 }
 
-/// The file and its text. Both names at once is an error, since either could be the one the
-/// user edits. So is a `config.toml` alone, since an earlier README named it, and its settings
-/// would otherwise give way to the defaults without a word. The engine logs to a file nobody
-/// reads, so only an error reaches the user.
 fn read(paths: &Paths) -> Result<Option<(PathBuf, String)>, Error> {
     let try_read = |path: PathBuf| match std::fs::read_to_string(&path) {
         Ok(text) => Ok(Some((path, text))),
@@ -313,7 +265,6 @@ fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
     Ok(Config { downloads, search, file: None, preferences })
 }
 
-/// The message without the line, which `invalid` adds, and without the excerpt of the file.
 fn describe(error: &serde_saphyr::Error) -> String {
     struct NoLocation;
     impl Localizer for NoLocation {
@@ -333,8 +284,6 @@ fn invalid(path: &Path, line: Option<u64>, message: &str) -> Error {
     Error::new(ErrorCode::Usage, format!("{place}: {message}")).with_hint(format!("fix {}", path.display()))
 }
 
-/// `TORRENTIAL_TEST_ENDPOINTS=knaben=http://127.0.0.1:8080/knaben/,…` points built-in sources at a
-/// local server, for tests.
 fn test_endpoints(env: &Env) -> Result<BTreeMap<String, String>, Error> {
     let Some(list) = env.var("TORRENTIAL_TEST_ENDPOINTS") else { return Ok(BTreeMap::new()) };
     list.split(',')
@@ -358,7 +307,6 @@ mod tests {
         load_files(&[("config.yaml", text)])
     }
 
-    /// Loads with each named file in the config folder, which reads as `$TORRENTIAL_HOME/config`.
     fn load_files(files: &[(&str, &str)]) -> Result<Config, Error> {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().display().to_string();
@@ -484,7 +432,6 @@ sources:
         }
     }
 
-    /// A config folder under a temporary `TORRENTIAL_HOME`.
     struct Folder {
         _dir: tempfile::TempDir,
         paths: Paths,

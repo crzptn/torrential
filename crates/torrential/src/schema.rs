@@ -60,7 +60,6 @@ struct ErrorSchema {
     retryable: bool,
 }
 
-/// A field of the JSON documents whose meaning its name and value do not show.
 #[derive(Serialize)]
 struct FieldSchema {
     name: &'static str,

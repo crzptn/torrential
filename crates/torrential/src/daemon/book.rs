@@ -1,7 +1,3 @@
-//! The job book's domain model. A job's public status is derived from two facts kept
-//! apart: what the user asked for ([`Intent`], stored) and what the engine is doing
-//! ([`Observed`], in memory only).
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,9 +8,6 @@ use super::admission::Cap;
 use super::engine_port::{Metainfo, Stats};
 use super::files;
 
-/// How long the download rate must stay above zero before an ETA shows. A transfer
-/// starts well below the rate its swarm settles at. In one download, wait showed
-/// 1.3 MiB/s and 23m left at 0.3%, then 10.1 MiB/s and 1m a minute later.
 const ETA_AFTER: Duration = Duration::from_secs(10);
 
 #[derive(Clone, PartialEq, Debug)]
@@ -27,9 +20,7 @@ pub enum Intent {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Observed {
-    /// Not in the engine. A running download here waits for a slot.
     Absent,
-    /// Not in the engine since the engine restarted. Waits for `resume` or a new `get`.
     Parked,
     InEngine(Phase),
 }
@@ -39,13 +30,9 @@ pub enum Phase {
     Metadata,
     Checking,
     Downloading,
-    /// Asked to pause; writes have not stopped yet.
     Pausing,
     Paused,
-    /// Every wanted piece verified. Waits for writes to stop, then for the final resume data.
-    Finishing {
-        writes_stopped: bool,
-    },
+    Finishing { writes_stopped: bool },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -90,15 +77,11 @@ pub struct JobRecord {
     pub dir: PathBuf,
     pub selection: Selection,
     pub cap: Cap,
-    /// How to add the torrent before its metadata is known.
     pub magnet: Option<String>,
     pub added_at: i64,
     pub intent: Intent,
-    /// Verified bytes at the last save, so progress survives a restart.
     pub verified: u64,
-    /// The piece map at the last save, taken with `verified`.
     pub piece_map: Option<PieceMap>,
-    /// Verified bytes in each file at the last save, counted with `verified`. `None` before the first save.
     pub files_verified: Option<Vec<u64>>,
 }
 
@@ -108,14 +91,9 @@ pub struct JobEntry {
     pub metainfo: Option<Arc<Metainfo>>,
     pub observed: Observed,
     pub stats: Stats,
-    /// Since when the download rate has stayed above zero, as of the last sample.
     receiving_since: Option<Instant>,
-    /// The rate had stayed above zero for `ETA_AFTER` at the last sample.
     rate_settled: bool,
-    /// Connected time while downloading in which the peers and web seeds had none of the pieces
-    /// the download still needs, summed over consecutive samples.
     unsourced: Duration,
-    /// The last sample that added to `unsourced`. `None` once a sample breaks the run.
     unsourced_at: Option<Instant>,
     pub verify: Option<Verify>,
 }
@@ -142,8 +120,6 @@ impl JobEntry {
         let unsourced = stats.missing.is_some_and(|m| m.pieces > 0 && m.unavailable == m.pieces);
         match (downloading, stats.peers > 0, unsourced) {
             (false, ..) | (true, true, false) => self.forget_sources(),
-            // Nothing connected, as in a network outage, earns no time. Neither does the first
-            // sample after it, which can come before a new peer has said what it has.
             (true, false, _) => self.unsourced_at = None,
             (true, true, true) => {
                 self.unsourced += self.unsourced_at.map_or(Duration::ZERO, |last| at - last);
@@ -153,20 +129,15 @@ impl JobEntry {
         self.stats = stats;
     }
 
-    /// How long the connected peers and web seeds have had none of the pieces still missing.
-    /// `None` unless the last sample found it so, so only a source that is there to ask can end it.
     pub fn unsourced_for(&self) -> Option<Duration> {
         self.unsourced_at.map(|_| self.unsourced)
     }
 
-    /// The download left the engine, or a source turned up, so its sources are judged afresh.
     pub fn forget_sources(&mut self) {
         self.unsourced = Duration::ZERO;
         self.unsourced_at = None;
     }
 
-    /// A failed download kept paused in the engine until its resume data is saved. It leaves once
-    /// the save lands.
     pub fn held_for_save(&self) -> bool {
         matches!(self.record.intent, Intent::Failed { .. }) && self.observed == Observed::InEngine(Phase::Paused)
     }
@@ -193,7 +164,6 @@ impl JobEntry {
         }
     }
 
-    /// Follows `verified`: the engine's latest map while in the engine, else the last save's.
     pub fn piece_map(&self) -> Option<PieceMap> {
         match (&self.record.intent, self.observed) {
             (_, Observed::InEngine(_)) => self.stats.piece_map.or(self.record.piece_map),

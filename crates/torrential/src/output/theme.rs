@@ -1,6 +1,3 @@
-//! Vesper's background (#101010) and text (#FFFFFF) are left to the terminal, because
-//! forcing them breaks light themes.
-
 use anstyle::{Color, RgbColor, Style};
 
 pub const MUTED: RgbColor = RgbColor(0xA0, 0xA0, 0xA0);

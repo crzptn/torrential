@@ -16,7 +16,6 @@ use super::store::Store;
 use super::{Ports, Running, server, start};
 
 const ROOMY: Space = Space { device: 1, total: 1000 * GIB, free: 500 * GIB };
-/// A 1 GiB fake torrent's piece size.
 const GIB_PIECE: u64 = GIB / 1024;
 const STALL: Duration = Duration::from_secs(1);
 const WRITES_STOP_WITHIN: Duration = Duration::from_secs(1);
@@ -58,7 +57,6 @@ impl Harness {
         Self { dir, running, swarm, disk, search }
     }
 
-    /// `engine` makes a port for the harness's folder.
     fn with_engine(engine: impl FnOnce(&std::path::Path) -> Box<dyn EnginePort>, parse: ParseTorrent) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let (swarm, disk, search) = (Swarm::new(0), FakeDisk::new(ROOMY), search_port::Fake::new(fake_catalog()));
@@ -66,7 +64,6 @@ impl Harness {
         Self { dir, running, swarm, disk, search }
     }
 
-    /// The downloads `TORRENTIAL_TEST_ENGINE=fake` starts with, in an engine that has loaded none of them.
     fn seeded() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(&dir.path().join("state.db")).unwrap();
@@ -104,7 +101,6 @@ impl Harness {
         start(&tokio::runtime::Handle::current(), store, ports, config(dir.path()), "0.1.0".into()).unwrap()
     }
 
-    /// Kills the engine without letting it save anything, then starts a new one on the same state.
     async fn crash_and_restart(self) -> Self {
         let Self { dir, running, swarm, disk, search } = self;
         running.owner.abort();
@@ -178,7 +174,6 @@ impl Harness {
         }
     }
 
-    /// Each file's verified bytes, as `files` reports them.
     async fn file_bytes(&self, t: &FakeTorrentFile) -> Vec<u64> {
         self.files(&prefix(t)).await.files.iter().map(|f| f.verified).collect()
     }
@@ -194,8 +189,6 @@ impl Harness {
     }
 }
 
-/// Holds back the engine's `Paused` events while closed, as an engine slow to stop writing would,
-/// and lets them through in order once open.
 #[derive(Clone, Default)]
 struct Gate(Arc<Mutex<(bool, Vec<EngineEvent>)>>);
 
@@ -518,7 +511,6 @@ fn request(h: &Harness, target: Target) -> GetRequest {
     }
 }
 
-/// Starts a 3 GiB download from a magnet under a 2 GiB cap from setup, which stops once the file list arrives.
 async fn over_its_setup_cap(h: &Harness, n: u8) -> FakeTorrentFile {
     let film = torrent(n, &format!("film{n}"), &[("film.mkv", 2 * GIB), ("extras.mkv", GIB)]);
     h.swarm.publish(film.clone());
@@ -561,7 +553,6 @@ async fn get_runs_a_download_stopped_over_its_cap_once_it_fits() {
         (fewer.outcome, fewer.job.status.name(), fewer.plan.map(|p| p.selected_size)),
         (GetOutcome::Updated, "checking", Some(2 * GIB))
     );
-    // Queued while the engine still lets go of the stopped download.
     assert!(matches!(started.outcome, GetOutcome::Started | GetOutcome::Queued), "{:?}", started.outcome);
     assert_eq!(repeated.outcome, GetOutcome::Existing);
     let id = show.info_hash.id();
@@ -811,7 +802,6 @@ async fn a_running_downloads_files_agree_with_its_piece_map() {
     assert!(files[2] > 0, "c.bin, last in the torrent, gets pieces too: {files:?}");
 }
 
-/// Fails unless the file bytes `files` reports sum to the download's verified bytes and agree with its map.
 fn assert_files_agree(job: &Job, reply: &FilesReply) {
     let list = reply.files.iter().map(|f| MetaFile { path: f.path.clone(), size: f.size }).collect();
     let metainfo = Metainfo::new(job.info_hash, reply.name.clone().unwrap(), list, false, Vec::new()).unwrap();
@@ -918,7 +908,6 @@ async fn a_stop_whose_save_fails_leaves_the_engine_with_the_error_that_stopped_i
     h.swarm.withhold(id, 2);
     h.get(h.torrent_file(&film), &[]).await.unwrap();
     h.until("all but the withheld pieces", |jobs| jobs[0].progress.verified == GIB - 2 * GIB_PIECE).await;
-    // The periodic save of that progress lands before saves start failing.
     tokio::time::sleep(Duration::from_millis(300)).await;
     h.swarm.refuse_saves(id, Error::new(ErrorCode::StorageError, "libtorrent did not save its state: disk full"));
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1149,7 +1138,6 @@ async fn every_pause_returns_once_writes_stop_or_fails_when_they_do_not() {
     assert_eq!(again, [("3c3c3c".to_string(), "already_paused".to_string())]);
 }
 
-/// A libtorrent session on 127.0.0.1 that seeds a two-file torrent, one 16 KiB piece per file.
 struct Seeder {
     session: torrential_engine::Session,
     id: torrential_engine::TorrentId,
@@ -1196,7 +1184,6 @@ impl Seeder {
         Self { session, id, addr, torrent: torrent.into_bytes(), _files: dir }
     }
 
-    /// A gated libtorrent engine whose only peer is this seeder.
     fn engine(&self, gate: &Gate) -> impl FnOnce(&std::path::Path) -> Box<dyn EnginePort> {
         let (peers, gate) = (vec![self.addr], gate.clone());
         move |dir| {

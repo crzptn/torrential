@@ -204,7 +204,6 @@ fn get(mut conn: Conn, args: GetArgs, mode: Mode, cwd: &Path, env: &Env) -> Resu
     Ok(exit)
 }
 
-/// `~/x` and relative paths, made absolute here because the engine has its own working directory.
 fn absolute(path: &Path, cwd: &Path, env: &Env) -> PathBuf {
     let expanded = match (path.strip_prefix("~"), env.var("HOME")) {
         (Ok(rest), Some(home)) => Path::new(home).join(rest),

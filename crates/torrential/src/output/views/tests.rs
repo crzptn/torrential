@@ -46,7 +46,6 @@ fn release(id: ReleaseId, name: &str) -> Release {
     }
 }
 
-/// This MacBook Pro, with 400 GiB to spare.
 fn mac() -> torrential_core::Profile {
     use torrential_core::{Arch, Display, Language, Machine, Os, Profile};
     let display = Some(Display { width: 3024, height: 1964, hdr: true });
@@ -814,7 +813,6 @@ fn a_tab_in_a_path_stays_inside_its_column() {
         daemon_status(&report).plain(),
         "engine: stopped\nsocket: /run/my torrential/engine.sock\nlog:    /state/my torrential/engine.log\n"
     );
-    // `wait` prints its rows without a doc.
     let row: Vec<String> = wait_row(Duration::from_secs(3), "9b5212", &named).into_iter().map(|c| c.text).collect();
     assert_eq!(row.join("\t"), "3s\t9b5212\tpaused\t-\t-\t-\t-\t-\tarch linux.iso");
 }

@@ -1,8 +1,3 @@
-//! [`EnginePort`] over one `torrential-engine` session, which the engine thread owns. Commands
-//! become session calls, and libtorrent alerts become [`EngineEvent`]s with the meaning the
-//! owner expects: `Finished` describes the owner's current selection, and `Paused` follows
-//! libtorrent's confirmation that writes stopped.
-
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -30,10 +25,7 @@ const SAVE_DHT_EVERY: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Network {
-    /// Every interface, with DHT, local service discovery, UPnP, and NAT-PMP.
     Public,
-    /// 127.0.0.1 only and no discovery, for tests that run their own peers. Every torrent gets
-    /// `peers`, the way trackers and the DHT would hand them out.
     Loopback { peers: Vec<SocketAddr> },
 }
 
@@ -44,7 +36,6 @@ pub struct Libtorrent {
     /// files close, so the owner may add the torrent again in between.
     removing: BTreeMap<TorrentId, u32>,
     events: Vec<EngineEvent>,
-    /// `None` when DHT is off.
     dht_state: Option<PathBuf>,
     /// libtorrent reports a bootstrap for each listen socket, and the log needs one.
     dht_bootstrapped: bool,
@@ -56,8 +47,6 @@ pub struct Libtorrent {
 
 type Found = (TorrentId, Result<Vec<String>, Error>);
 
-/// Lookups of the servers that hold an archive.org torrent's files. They run on the async runtime,
-/// so the engine thread never waits on the network, and [`Libtorrent::poll`] applies the answers.
 struct Mirrors {
     search: Arc<dyn SearchPort>,
     runtime: tokio::runtime::Handle,
@@ -76,7 +65,6 @@ impl Mirrors {
 
 #[derive(Default)]
 struct Torrent {
-    /// The engine's file indices, in the order of the daemon's file list. `None` until metadata.
     files: Option<Vec<lt::FileIndex>>,
     /// The owner's selection. `None` fetches metadata only, which libtorrent counts as finished.
     wanted: Option<Vec<bool>>,
@@ -84,7 +72,6 @@ struct Torrent {
     /// the previous selection.
     unconfirmed: u32,
     check: Check,
-    /// The port paused the torrent after a check, and that pause's alert is not the owner's.
     own_pause_pending: bool,
     failed: bool,
 }
@@ -103,8 +90,6 @@ enum Check {
 }
 
 impl Libtorrent {
-    /// `state` holds the listen port and the DHT routing table between runs. `search` names better
-    /// web seeds for archive.org torrents, and its lookups run on `runtime`.
     pub fn start(
         state: &Path,
         network: Network,
@@ -171,8 +156,6 @@ impl Libtorrent {
         Ok(())
     }
 
-    /// `Finished` can be due after several alerts, so this reads the state instead of trusting one.
-    /// A repeat is harmless: the owner acts on `Finished` only while the download runs.
     fn report_if_finished(&mut self, id: TorrentId) {
         let Some(t) = self.torrents.get(&id) else { return };
         if t.wanted.is_none() || t.unconfirmed > 0 || t.check != Check::Idle || t.failed {
@@ -387,7 +370,6 @@ impl Libtorrent {
         }
     }
 
-    /// Verified bytes in the selected files, and in each file, selected or not, from one status.
     fn verified_bytes(&self, id: TorrentId) -> Result<(u64, Vec<u64>), Error> {
         let t = self.torrents.get(&id).ok_or_else(|| Error::internal(format!("the engine has no torrent {id}")))?;
         let status = self.session.status(engine_id(id)).map_err(engine_error)?;
@@ -406,7 +388,6 @@ impl Libtorrent {
         }
     }
 
-    /// `stats` skips paused torrents, so a pause sends its own last count first.
     fn report_paused(&mut self, id: TorrentId) {
         if let (Some(t), Ok(status)) = (self.torrents.get(&id), self.session.status(engine_id(id))) {
             let stats = Stats { piece_map: piece_map(&self.session, id, t), ..sample(&status, t) };
@@ -480,7 +461,6 @@ impl EnginePort for Libtorrent {
             t.check = Check::Hashing { hold: false, started };
         }
         match (paused, t.own_pause_pending) {
-            // The port's own pause is still closing files. Its alert answers the owner instead.
             (true, true) => t.own_pause_pending = false,
             (true, false) => self.report_paused(id),
             (false, _) => self.session.pause(engine_id(id)).map_err(engine_error)?,
@@ -598,8 +578,6 @@ fn config(network: &Network, port: u16) -> lt::Config {
     }
 }
 
-/// The OS picks a free port the first time, and every later run reuses it, so a port forwarded
-/// in a router keeps working.
 fn listen_port(path: &Path, ip: IpAddr) -> Result<u16, Error> {
     let saved = std::fs::read_to_string(path).ok().and_then(|s| s.trim().parse::<u16>().ok()).filter(|p| *p != 0);
     if let Some(port) = saved {
@@ -636,12 +614,10 @@ fn metainfo(m: lt::Metainfo) -> Result<Metainfo, Error> {
     Metainfo::new(info_hash(m.info_hash()), name, files, single_file, m.into_bytes())
 }
 
-/// The engine's index for each file of [`metainfo`]'s list, in the same order.
 fn file_indices(m: &lt::Metainfo) -> Vec<lt::FileIndex> {
     m.files().iter().map(|f| f.index).collect()
 }
 
-/// Verified bytes per file, in the daemon's order, counting only `wanted` files.
 fn verified(progress: &lt::Progress, files: Option<&[lt::FileIndex]>, wanted: Option<&[bool]>) -> Vec<u64> {
     let (lt::Progress::Known(known), Some(files), Some(wanted)) = (progress, files, wanted) else { return Vec::new() };
     let by_index: BTreeMap<lt::FileIndex, u64> = known.iter().map(|f| (f.index, f.verified)).collect();
@@ -660,7 +636,6 @@ fn sample(status: &lt::TorrentStatus, t: &Torrent) -> Stats {
     }
 }
 
-/// Needs the file list and the owner's selection, which a metadata probe never has.
 fn piece_map(session: &lt::Session, id: TorrentId, t: &Torrent) -> Option<PieceMap> {
     if t.files.is_none() || t.wanted.is_none() {
         return None;
@@ -670,7 +645,6 @@ fn piece_map(session: &lt::Session, id: TorrentId, t: &Torrent) -> Option<PieceM
     Some(PieceMap::new(slices.map(|s| Slice::of(s.verified, s.selected))))
 }
 
-/// Needs the file list and the owner's selection, like [`piece_map`].
 fn missing(session: &lt::Session, id: TorrentId, t: &Torrent) -> Option<Missing> {
     if t.files.is_none() || t.wanted.is_none() {
         return None;

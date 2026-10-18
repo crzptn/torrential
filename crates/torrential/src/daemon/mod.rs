@@ -44,7 +44,6 @@ const STALL_AFTER: Duration = Duration::from_secs(20 * 60);
 pub const MAX_ACTIVE: usize = 3;
 const WRITES_STOP_WITHIN: Duration = Duration::from_secs(10);
 
-/// The pieces the engine process is built from, so tests can swap in fakes.
 pub struct Ports {
     pub engine: Box<dyn EnginePort>,
     pub parse: ParseTorrent,
@@ -54,11 +53,6 @@ pub struct Ports {
 }
 
 impl Ports {
-    /// `TORRENTIAL_TEST_ENGINE=fake` swaps in the simulated engine and search (see [`fixture`]), for
-    /// tests and for trying the CLI and TUI without a network. `TORRENTIAL_TEST_NETWORK=loopback`
-    /// keeps libtorrent on 127.0.0.1 with discovery off, for tests that run their own peers and list
-    /// them in `TORRENTIAL_TEST_PEERS`, and `TORRENTIAL_TEST_DISK=roomy` lets them download on a
-    /// disk below the free-space reserve.
     fn from_env(env: &Env, paths: &Paths, settings: &Config, runtime: &tokio::runtime::Handle) -> Result<Self, Error> {
         if fake(env) {
             let rate =
@@ -110,8 +104,6 @@ fn fake(env: &Env) -> bool {
 pub struct Running {
     pub ctx: Arc<Ctx>,
     pub owner: tokio::task::JoinHandle<()>,
-    /// Ends once every engine handle is dropped. The port's own shutdown, such as saving the DHT
-    /// table, runs on this thread.
     pub engine: std::thread::JoinHandle<()>,
 }
 
@@ -159,7 +151,6 @@ pub fn run(env: &Env, service: bool) -> u8 {
 }
 
 enum Startup {
-    /// Another engine holds the lock. Not an error for the client that raced to start it.
     AlreadyRunning(String),
     Failed(Error),
 }
@@ -210,7 +201,6 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
         probe_dir: paths.cache.join("probes"),
         max_active: MAX_ACTIVE,
         idle_timeout: (!service).then_some(idle_timeout),
-        // Seeded downloads start as if a service had restarted, not as interrupted ones.
         resume_on_start: service || seed,
         save_resume_every,
         stall_after,
@@ -268,7 +258,6 @@ async fn stop_on_signal(owner: OwnerHandle) {
     owner.tell(owner::Command::Shutdown { reply });
 }
 
-/// Mode 0700 and owned by this user, because anyone who can reach the socket controls downloads.
 fn prepare_runtime_dir(dir: &Path) -> Result<(), Error> {
     let refuse =
         |why: String| Error::new(ErrorCode::DaemonUnavailable, why).with_hint("remove it, or set XDG_RUNTIME_DIR");
@@ -298,7 +287,6 @@ impl OwnerLock {
             .mode(0o600)
             .open(path)
             .map_err(|e| Error::new(ErrorCode::StateCorrupt, format!("cannot open {}: {e}", path.display())))?;
-        // SAFETY: flock only reads the descriptor, which `file` keeps open.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             let e = std::io::Error::last_os_error();
             if e.raw_os_error() == Some(libc::EWOULDBLOCK) {

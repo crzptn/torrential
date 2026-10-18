@@ -49,8 +49,6 @@ pub struct Cell {
     pub token: Token,
 }
 
-/// A cell's text is sanitized when it is made, so no cell can add a column, a line, or a terminal
-/// escape, wherever its text came from: an indexer, a torrent, or a path.
 impl Cell {
     pub fn new(text: impl Into<String>) -> Self {
         Self::styled(text, Token::Text)
@@ -61,7 +59,6 @@ impl Cell {
     }
 }
 
-/// Summary lines and the next command are sanitized here, as cells are when they are made.
 impl Doc {
     pub fn plain(&self) -> String {
         let mut out = String::new();

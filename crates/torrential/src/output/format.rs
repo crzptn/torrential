@@ -30,7 +30,6 @@ pub fn eta(seconds: Option<u64>) -> String {
     seconds.map_or_else(|| NONE.to_string(), |s| format_duration(Duration::from_secs(s)))
 }
 
-/// Seconds under ten minutes, so a 100-second bound reads as `100s`, then minutes and hours.
 pub fn elapsed(d: Duration) -> String {
     if d.as_secs() < 600 { format!("{}s", d.as_secs()) } else { format_duration(d) }
 }
@@ -57,7 +56,6 @@ pub fn timestamp(unix: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", secs / 3600, secs % 3600 / 60, secs % 60)
 }
 
-/// Howard Hinnant's days-to-civil algorithm for the proleptic Gregorian calendar.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);

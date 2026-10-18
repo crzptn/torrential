@@ -87,14 +87,12 @@ impl Paths {
         self.state.join("state.db")
     }
 
-    /// Where an engine that failed to start leaves its error for the client that launched it.
     pub fn startup_error(&self) -> PathBuf {
         self.state.join("engine.error")
     }
 }
 
 pub fn uid() -> u32 {
-    // SAFETY: geteuid has no preconditions and cannot fail.
     unsafe { libc::geteuid() }
 }
 

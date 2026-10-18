@@ -115,7 +115,6 @@ pub fn start(paths: &Paths, env: &Env) -> Result<Conn, Error> {
     started.ok_or_else(|| unavailable(format!("the engine did not start within {}s", START_WITHIN.as_secs())))
 }
 
-/// Asks `ready` until it answers or `within` has passed.
 fn poll<T>(within: Duration, mut ready: impl FnMut() -> Result<Option<T>, Error>) -> Result<Option<T>, Error> {
     let started = Instant::now();
     loop {
@@ -130,9 +129,6 @@ fn poll<T>(within: Duration, mut ready: impl FnMut() -> Result<Option<T>, Error>
     }
 }
 
-/// A tenth of the wait so far, from 2 to 20 ms. An engine listens about 25 ms after its
-/// launcher returns, so it is seen within 3 ms of that, while one that never listens is asked
-/// about 520 times in 10 s, near the 500 of a steady 20 ms poll.
 fn pause(waited: Duration) -> Duration {
     (waited / 10).clamp(Duration::from_millis(2), Duration::from_millis(20))
 }
@@ -168,14 +164,11 @@ pub fn launch_stage(env: &Env) -> u8 {
     }
 }
 
-/// Closes the descriptors `/dev/fd` lists. Closing every number up to the limit took 17 ms
-/// under a harness that raised it to a million, and missed any descriptor above the loop's cap.
 fn close_inherited_descriptors() {
     let listed: Option<Vec<libc::c_int>> = std::fs::read_dir("/dev/fd")
         .ok()
         .map(|dir| dir.filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok()).collect());
     let open = listed.unwrap_or_else(|| {
-        // SAFETY: sysconf has no preconditions.
         let max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
         let max = if max <= 0 { 1024 } else { max.min(65_536) } as libc::c_int;
         (3..max).collect()

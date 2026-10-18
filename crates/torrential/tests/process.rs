@@ -5,7 +5,6 @@ use assert_cmd::Command;
 
 const ARCH: &str = "9b521219bc48550140a666f74a29048ed78e933b";
 
-/// One isolated torrential installation. Dropping it stops its engine.
 struct Home {
     dir: tempfile::TempDir,
     vars: Vec<(&'static str, String)>,
@@ -17,7 +16,6 @@ struct Run {
     stderr: String,
 }
 
-/// This MacBook Pro: a 3024x1964 XDR panel, arm64, and English.
 const MAC: &str =
     r#"{"os": "macos", "display": {"width": 3024, "height": 1964, "hdr": true}, "arch": "arm64", "language": "en"}"#;
 
@@ -237,7 +235,6 @@ fn wait_times_out_with_exit_8_while_the_download_runs() {
     let lines: Vec<&str> = wait.stdout.lines().collect();
     assert_eq!(lines[0], "ELAPSED\tID\tSTATE\tPROGRESS\tSIZE\tDOWN\tPEERS\tETA\tNAME");
     assert!(lines[1].starts_with("0s\t9b5212\t"), "{}", wait.stdout);
-    // A second of downloading is too soon for an ETA.
     assert_eq!(lines[lines.len() - 2], "# still running after 1s", "{}", wait.stdout);
     assert_eq!(lines[lines.len() - 1], "next: torrential wait 9b5212");
     let json = home.run(&["wait", "9b5212", "--timeout", "1s", "--json"]);
@@ -268,7 +265,6 @@ fn a_killed_engine_comes_back_with_the_download_interrupted() {
     let home = Home::with(&[("TORRENTIAL_TEST_ENGINE", "fake"), ("TORRENTIAL_TEST_FAKE_RATE", "1MiB")]);
     assert_eq!(home.run(&["get", &magnet(10 << 30), "--dir", &home.downloads()]).code, 0);
     let (pid, _) = home.engine().unwrap();
-    // SAFETY: kill only sends a signal, and this pid is the engine this test started.
     unsafe { libc::kill(pid, libc::SIGKILL) };
     eventually("the killed engine is gone", Duration::from_secs(5), || !alive(pid));
     let status = home.run(&["status", "9b5212"]);
@@ -468,7 +464,6 @@ fn setup_shows_the_detected_machine_and_saves_and_clears_overrides() {
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "");
 }
 
-/// A one-file torrent in the JSON form the fake engine reads.
 fn fake_torrent(name: &str, size: u64) -> Vec<u8> {
     let torrent = serde_json::json!({"info_hash": {"v1": "7".repeat(40)}, "name": name, "files": [[name, size]]});
     serde_json::to_vec(&torrent).unwrap()
