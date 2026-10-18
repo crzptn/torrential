@@ -11,5 +11,5 @@ pub mod units;
 
 pub use error::{Error, ErrorCode};
 pub use id::{HexPrefix, InfoHash, LocatorId, ReleaseId, Target, TorrentId};
-pub use job::{FileRisk, Job, JobStatus, Progress, Selection, TorrentFile};
+pub use job::{Eighths, FileRisk, Job, JobStatus, PieceMap, Progress, Selection, Slice, TorrentFile};
 pub use release::{Category, Flag, Release, SearchQuery, SearchResult, Sort, SourceOutcome, SourceReport};

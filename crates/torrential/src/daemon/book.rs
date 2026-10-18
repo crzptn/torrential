@@ -180,6 +180,7 @@ impl JobEntry {
             progress: Progress {
                 size,
                 verified,
+                piece_map: None,
                 down_rate: s.down_rate,
                 up_rate: s.up_rate,
                 peers: s.peers,

@@ -42,6 +42,7 @@ fn job(short: &str, name: &str, status: JobStatus, size: u64, done: u64, rate: u
         progress: Progress {
             size: Some(size),
             verified: done,
+            piece_map: None,
             down_rate: rate,
             up_rate: 0,
             peers: if rate > 0 { 27 } else { 0 },

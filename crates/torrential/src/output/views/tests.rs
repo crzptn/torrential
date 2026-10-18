@@ -187,6 +187,7 @@ fn downloading() -> Progress {
     Progress {
         size: Some(1_640_497_152),
         verified: 50_855_411,
+        piece_map: None,
         down_rate: 32_715_571,
         up_rate: 120_000,
         peers: 48,
