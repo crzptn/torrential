@@ -94,6 +94,28 @@ fn help_screens() {
 }
 
 #[test]
+fn a_download_says_stalled_only_after_a_quiet_spell() {
+    let mut state = with_downloads((100, 30));
+    let wikipedia = |rate: u64| {
+        let mut job = jobs()[0].clone();
+        job.progress.down_rate = rate;
+        job.progress.eta = None;
+        Msg::Watch(Event::Job { job: Box::new(job) })
+    };
+    state.update(wikipedia(600));
+    let trickled = state.now;
+    assert!(line(&render(&state), 4).ends_with("22%"), "bytes arrive without an ETA: {}", line(&render(&state), 4));
+    later(&mut state, 20_000);
+    state.update(wikipedia(0));
+    assert!(line(&render(&state), 4).ends_with("22%"), "quiet for 20 s: {}", line(&render(&state), 4));
+    assert_eq!(state.next_stall(), Some(trickled + Duration::from_secs(30)));
+    later(&mut state, 10_000);
+    state.update(Msg::Tick);
+    assert!(line(&render(&state), 4).ends_with("22%       stalled"), "{}", line(&render(&state), 4));
+    assert_eq!(state.next_stall(), None);
+}
+
+#[test]
 fn a_long_query_is_cut_so_failed_sources_stay_in_view() {
     let mut state = with_downloads((80, 24));
     press(&mut state, "/night of the living dead 1968 1080p bluray x264");

@@ -121,13 +121,13 @@ fn run_loop<B: Backend>(
     }
 }
 
-/// The next time something happens without input: a spinner frame, a toast going away, or a
-/// file list to fetch.
+/// The next time something happens without input: a spinner frame, a toast going away, a
+/// file list to fetch, or a quiet download turning stalled.
 fn wake_at(state: &State) -> Option<Instant> {
     let spin = state.spinning().then(|| state.next_frame());
     let toast = state.toast.as_ref().map(|t| t.until);
     let prefetch = state.prefetch.map(|(_, at)| at);
-    [spin, toast, prefetch].into_iter().flatten().min()
+    [spin, toast, prefetch, state.next_stall()].into_iter().flatten().min()
 }
 
 /// Keys and resizes. `crossterm::event::read` blocks, so this thread sleeps between keys.

@@ -441,7 +441,8 @@ fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
     let tail = match &job.status {
         JobStatus::Downloading => match p.eta {
             Some(secs) if p.down_rate >= 1024 => format!("{} left", format_duration(Duration::from_secs(secs))),
-            _ => "stalled".into(),
+            _ if state.stalled(job) => "stalled".into(),
+            _ => String::new(),
         },
         JobStatus::Metadata => format!("{} peers", p.peers),
         _ => String::new(),

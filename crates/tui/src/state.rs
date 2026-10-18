@@ -177,6 +177,8 @@ pub struct State {
     pub downloads: Vec<Job>,
     pub download_files: HashMap<TorrentId, DownloadFiles>,
     pub pending: HashMap<TorrentId, JobAction>,
+    /// When bytes last arrived for each download, or when it last started trying to get them.
+    pub arrived: HashMap<TorrentId, Instant>,
     pub free_space: Option<u64>,
     pub free_space_at: Option<Instant>,
     pub query: Input,
@@ -209,6 +211,8 @@ pub struct State {
 pub const SPINNER: [&str; 4] = ["   ", ".  ", ".. ", "..."];
 /// Four frames a second, the most any motion on the screen may use.
 pub const SPIN_EVERY: Duration = Duration::from_millis(250);
+/// How long a download goes without bytes before it counts as stalled.
+pub const STALL_AFTER: Duration = Duration::from_secs(30);
 /// How long the cursor rests on a result before its file list is fetched.
 pub const PREFETCH_AFTER: Duration = Duration::from_millis(300);
 
@@ -224,6 +228,7 @@ impl State {
             downloads: Vec::new(),
             download_files: HashMap::new(),
             pending: HashMap::new(),
+            arrived: HashMap::new(),
             free_space: None,
             free_space_at: None,
             query: Input::default(),
@@ -261,6 +266,29 @@ impl State {
 
     pub fn job(&self, id: TorrentId) -> Option<&Job> {
         self.downloads.iter().find(|j| j.id == id)
+    }
+
+    /// Whether a download has gone [`STALL_AFTER`] without bytes.
+    pub fn stalled(&self, job: &Job) -> bool {
+        self.quiet(job).is_some_and(|at| at + STALL_AFTER <= self.now)
+    }
+
+    /// When the next quiet download counts as stalled, so the screen can say so unprompted.
+    pub fn next_stall(&self) -> Option<Instant> {
+        self.downloads.iter().filter_map(|j| self.quiet(j)).map(|at| at + STALL_AFTER).filter(|at| *at > self.now).min()
+    }
+
+    /// When bytes last arrived for a download that wants them and gets none.
+    fn quiet(&self, job: &Job) -> Option<Instant> {
+        let waiting = job.status == JobStatus::Downloading && job.progress.down_rate == 0;
+        self.arrived.get(&job.id).copied().filter(|_| waiting)
+    }
+
+    /// Notes bytes arriving, or a download starting to want them, which restarts the wait.
+    pub fn note_arrival(&mut self, job: &Job, before: Option<&JobStatus>) {
+        if job.progress.down_rate > 0 || before != Some(&JobStatus::Downloading) {
+            self.arrived.insert(job.id, self.now);
+        }
     }
 
     pub fn release(&self, id: ReleaseId) -> Option<&Release> {
