@@ -42,6 +42,8 @@ pub struct Libtorrent {
     events: Vec<EngineEvent>,
     /// `None` when DHT is off.
     dht_state: Option<PathBuf>,
+    /// libtorrent reports a bootstrap for each listen socket, and the log needs one.
+    dht_bootstrapped: bool,
     peers: Vec<SocketAddr>,
     stats_at: Instant,
     dht_saved_at: Instant,
@@ -105,6 +107,7 @@ impl Libtorrent {
             removing: BTreeMap::new(),
             events: Vec::new(),
             dht_state,
+            dht_bootstrapped: false,
             peers,
             stats_at: now,
             dht_saved_at: now,
@@ -221,7 +224,17 @@ impl Libtorrent {
                 let transport = transport_name(transport);
                 super::log(&format!("cannot listen on {interface} port {port} ({transport}): {operation}: {error}"));
             }
-            (A::DhtBootstrapped, _) => super::log("the DHT is bootstrapped"),
+            (A::DhtBootstrapped, _) => {
+                if !self.dht_bootstrapped {
+                    self.dht_bootstrapped = true;
+                    super::log("the DHT is bootstrapped");
+                }
+                // A torrent added before the bootstrap announced to an empty routing table, and
+                // libtorrent would wait 15 minutes to announce it again.
+                for &id in self.torrents.keys() {
+                    let _ = self.session.announce_to_dht(engine_id(id));
+                }
+            }
             (A::TorrentResumed { .. } | A::TorrentRemoved { .. } | A::HashFailed { .. } | A::SessionStats(_), _) => {}
             (_, None) => {}
         }
