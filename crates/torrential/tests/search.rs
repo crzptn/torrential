@@ -108,7 +108,8 @@ fn answer(mut stream: TcpStream, routes: &Routes, log: &Mutex<Vec<String>>, coun
 }
 
 /// One isolated installation whose config disables every built-in source but `enabled`,
-/// which point at the server. Dropping it stops its engine.
+/// which point at the server, and adds `sources` to its `sources` section. Dropping it
+/// stops its engine.
 struct Home {
     dir: tempfile::TempDir,
     vars: Vec<(&'static str, String)>,
@@ -127,7 +128,7 @@ impl Run {
 }
 
 impl Home {
-    fn new(server: &Server, enabled: &[&str], config: &str) -> Home {
+    fn new(server: &Server, enabled: &[&str], sources: &str) -> Home {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("th");
         let disabled: Vec<String> = BUILTIN.iter().filter(|s| !enabled.contains(s)).map(|s| format!("{s:?}")).collect();
@@ -143,14 +144,14 @@ impl Home {
             ],
             dir,
         };
-        home.write_config(&format!("[sources]\ndisabled = [{}]\n{config}", disabled.join(", ")));
+        home.write_config(&format!("sources:\n  disabled: [{}]\n{sources}", disabled.join(", ")));
         home
     }
 
     fn write_config(&self, text: &str) {
         let dir = self.dir.path().join("th/config");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("config.toml"), text).unwrap();
+        std::fs::write(dir.join("config.yaml"), text).unwrap();
     }
 
     fn set(&mut self, key: &'static str, value: &str) {
@@ -260,8 +261,8 @@ fn get_on_a_search_result_downloads_into_the_configured_folder() {
     let home = Home::new(&server, &["debian"], "");
     let isos = home.path("isos");
     home.write_config(&format!(
-        "{}[downloads]\ndir = \"{}\"\n",
-        std::fs::read_to_string(home.path("th/config/config.toml")).unwrap(),
+        "{}downloads:\n  dir: \"{}\"\n",
+        std::fs::read_to_string(home.path("th/config/config.yaml")).unwrap(),
         isos.display()
     ));
 
@@ -298,11 +299,11 @@ fn private_indexer_links_never_reach_the_output() {
             ("/dl/privatehd/", vec![status(404), status(404), ok(torrent("ubuntu-private.iso"))]),
         ]
     });
-    let config = format!(
-        "\n[[sources.torznab]]\nname = \"jackett\"\nurl = \"{}/torznab/api\"\napi_key_env = \"TEST_JACKETT_KEY\"\n",
+    let sources = format!(
+        "  torznab:\n    - name: jackett\n      url: {}/torznab/api\n      api_key_env: TEST_JACKETT_KEY\n",
         server.base
     );
-    let mut home = Home::new(&server, &[], &config);
+    let mut home = Home::new(&server, &[], &sources);
     home.set("TEST_JACKETT_KEY", "k3y");
 
     let plain = home.run(&["search", "ubuntu"]);
@@ -394,17 +395,14 @@ fn a_streaming_search_sends_updates_before_the_result() {
 #[test]
 fn the_engine_refuses_a_config_that_does_not_parse() {
     let server = Server::start(|_| Vec::new());
-    let home = Home::new(&server, &[], "torznab = 3\n");
+    let home = Home::new(&server, &[], "  torznab: 3\n");
 
     let refused = home.run(&["status"]);
     let doctor = home.run(&["doctor", "--json"]).json();
-    home.write_config("[sources]\ndisabled = [\"nyaa\"]\n");
+    home.write_config("sources:\n  disabled: [nyaa]\n");
     let fixed = home.run(&["status"]);
 
-    let message = format!(
-        "{} line 3: invalid type: integer `3`, expected a sequence",
-        home.path("th/config/config.toml").display()
-    );
+    let message = format!("{} line 3: expected sequence start", home.path("th/config/config.yaml").display());
     assert_eq!(refused.code, 2, "{}{}", refused.stdout, refused.stderr);
     assert!(refused.stderr.contains(&message), "{}", refused.stderr);
     let config = doctor["checks"].as_array().unwrap().iter().find(|c| c["check"] == "config").unwrap();

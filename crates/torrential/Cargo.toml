@@ -25,9 +25,9 @@ indicatif = "0.18"
 libc = "0.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+serde-saphyr = { version = "2", default-features = false, features = ["deserialize"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
-toml = "1"
 tokio = { version = "1.53", features = ["rt-multi-thread", "net", "sync", "time", "signal", "macros", "io-util", "fs"] }
 url = "2.5"
 

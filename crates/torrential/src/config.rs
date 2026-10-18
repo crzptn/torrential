@@ -1,25 +1,24 @@
-//! `config.toml` in the config folder: where downloads go and which sources search
+//! `config.yaml` in the config folder: where downloads go and which sources search
 //! asks. The engine reads it when it starts. A file that does not parse is an error
 //! that names the line, never a silent fallback to the defaults.
 //!
-//! ```toml
-//! [downloads]
-//! dir = "~/Downloads/torrents"
-//!
-//! [sources]
-//! disabled = ["nyaa"]
-//!
-//! [[sources.torznab]]
-//! name = "jackett"
-//! url = "http://127.0.0.1:9117/api/v2.0/indexers/all/results/torznab/api"
-//! api_key_env = "JACKETT_API_KEY"
+//! ```yaml
+//! downloads:
+//!   dir: ~/Downloads/torrents
+//! sources:
+//!   disabled: [nyaa]
+//!   torznab:
+//!     - name: jackett
+//!       url: http://127.0.0.1:9117/api/v2.0/indexers/all/results/torznab/api
+//!       api_key_env: JACKETT_API_KEY
 //! ```
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use toml::Spanned;
+use serde_saphyr::{Localizer, Location, SnippetMode, Spanned, UserMessageFormatter};
 use torrential_core::{Error, ErrorCode};
 use torrential_search::{SearchConfig, TorznabConfig};
 
@@ -63,11 +62,11 @@ struct Torznab {
     api_key_env: Option<Spanned<String>>,
 }
 
-/// A problem in the file, at a byte offset when one is known.
-type Problem = (Option<usize>, String);
+/// A problem in the file, on a line when one is known.
+type Problem = (Option<u64>, String);
 
 pub fn path(paths: &Paths) -> PathBuf {
-    paths.config.join("config.toml")
+    paths.config.join("config.yaml")
 }
 
 impl Config {
@@ -79,10 +78,7 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(invalid(&path, None, &format!("cannot be read: {e}"))),
         };
-        let mut config = parse(&text, env).map_err(|(at, message)| {
-            let line = at.map(|at| text[..at.min(text.len())].matches('\n').count() + 1);
-            invalid(&path, line, &message)
-        })?;
+        let mut config = parse(&text, env).map_err(|(line, message)| invalid(&path, line, &message))?;
         config.search.endpoints = test_endpoints(env)?;
         Ok(config)
     }
@@ -93,13 +89,11 @@ impl Config {
 }
 
 fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
-    let file: File = toml::from_str(text).map_err(|e| (e.span().map(|s| s.start), e.message().to_string()))?;
+    let file: File = serde_saphyr::from_str(text).map_err(|e| (e.location().map(|at| at.line()), describe(&e)))?;
     let downloads = file
         .downloads
         .dir
-        .map(|dir| {
-            let at = dir.span().start;
-            let raw = dir.into_inner();
+        .map(|Spanned { value: raw, referenced, .. }| {
             let expanded = match (raw.strip_prefix('~'), env.var("HOME")) {
                 (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
                     PathBuf::from(format!("{home}{rest}"))
@@ -109,7 +103,10 @@ fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
             if expanded.is_absolute() {
                 Ok(expanded)
             } else {
-                Err((Some(at), format!("downloads.dir {raw:?} must be an absolute path or start with ~/")))
+                Err((
+                    Some(referenced.line()),
+                    format!("downloads.dir {raw:?} must be an absolute path or start with ~/"),
+                ))
             }
         })
         .transpose()?;
@@ -120,12 +117,12 @@ fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
         .map(|Torznab { name, url, api_key_env }| {
             let api_key = match api_key_env {
                 None => None,
-                Some(var) => match env.var(var.get_ref()) {
+                Some(Spanned { value: var, referenced, .. }) => match env.var(&var) {
                     Some(key) => Some(key.to_string()),
                     None => {
                         return Err((
-                            Some(var.span().start),
-                            format!("the {name:?} indexer takes its API key from {}, which is not set", var.get_ref()),
+                            Some(referenced.line()),
+                            format!("the {name:?} indexer takes its API key from {var}, which is not set"),
                         ));
                     }
                 },
@@ -137,7 +134,19 @@ fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
     Ok(Config { downloads, search })
 }
 
-fn invalid(path: &Path, line: Option<usize>, message: &str) -> Error {
+/// The message without the line, which `invalid` adds, and without the excerpt of the file.
+fn describe(error: &serde_saphyr::Error) -> String {
+    struct NoLocation;
+    impl Localizer for NoLocation {
+        fn attach_location<'a>(&self, base: Cow<'a, str>, _: Location) -> Cow<'a, str> {
+            base
+        }
+    }
+    let formatter = UserMessageFormatter.with_localizer(&NoLocation);
+    error.render_with_options(serde_saphyr::render_options! { formatter: &formatter, snippets: SnippetMode::Off })
+}
+
+fn invalid(path: &Path, line: Option<u64>, message: &str) -> Error {
     let place = match line {
         Some(line) => format!("{} line {line}", path.display()),
         None => path.display().to_string(),
@@ -181,18 +190,16 @@ mod tests {
 
     #[test]
     fn reads_downloads_disabled_sources_and_indexers() {
-        let text = r#"
-[downloads]
-dir = "~/isos"
-
-[sources]
-disabled = ["nyaa", "apibay"]
-
-[[sources.torznab]]
-name = "jackett"
-url = "http://127.0.0.1:9117/api"
-api_key_env = "JACKETT_KEY"
-"#;
+        let text = "
+downloads:
+  dir: ~/isos
+sources:
+  disabled: [nyaa, apibay]
+  torznab:
+    - name: jackett
+      url: http://127.0.0.1:9117/api
+      api_key_env: JACKETT_KEY
+";
         let config = parse(text, &env()).unwrap();
         assert_eq!(config.downloads, Some(PathBuf::from("/Users/ada/isos")));
         assert_eq!(config.search.disabled, ["nyaa", "apibay"]);
@@ -205,35 +212,51 @@ api_key_env = "JACKETT_KEY"
             }]
         );
         assert_eq!(parse("", &env()).unwrap(), Config::default());
+        assert_eq!(parse("# nothing yet\n", &env()).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn names_that_yaml_1_1_reads_as_booleans_stay_strings() {
+        let text = "sources:\n  disabled: [no, off, yes]\n  torznab:\n    - name: no\n      url: http://x/api\n";
+        let config = parse(text, &env()).unwrap();
+        assert_eq!(config.search.disabled, ["no", "off", "yes"]);
+        assert_eq!(config.search.torznab[0].name, "no");
     }
 
     #[test]
     fn a_bad_file_is_an_error_that_names_the_line() {
-        let typo = load("[downloads]\ndir = \"/tmp/x\"\n\n[sources]\ndisable = [\"nyaa\"]\n").unwrap_err();
-        let syntax = load("[downloads\ndir = 3\n").unwrap_err();
-        let relative = load("[downloads]\ndir = \"isos\"\n").unwrap_err();
-        let unset =
-            load("[[sources.torznab]]\nname = \"j\"\nurl = \"http://x/api\"\napi_key_env = \"NOPE\"\n").unwrap_err();
-        let key_in_file =
-            load("[[sources.torznab]]\nname = \"j\"\nurl = \"http://x/api\"\napi_key = \"k3y\"\n").unwrap_err();
-
-        assert_eq!(
-            (typo.code, typo.message.as_str()),
+        let indexer = "sources:\n  torznab:\n    - name: j\n      url: http://x/api\n";
+        let cases = [
             (
-                ErrorCode::Usage,
-                "$TORRENTIAL_HOME/config/config.toml line 5: unknown field `disable`, expected `disabled` or `torznab`"
-            )
-        );
-        assert_eq!(syntax.message, "$TORRENTIAL_HOME/config/config.toml line 1: unclosed table, expected `]`");
-        assert_eq!(
-            relative.message,
-            "$TORRENTIAL_HOME/config/config.toml line 2: downloads.dir \"isos\" must be an absolute path or start with ~/"
-        );
-        assert_eq!(
-            unset.message,
-            "$TORRENTIAL_HOME/config/config.toml line 4: the \"j\" indexer takes its API key from NOPE, which is not set"
-        );
-        assert!(key_in_file.message.starts_with("$TORRENTIAL_HOME/config/config.toml line 4: unknown field `api_key`"));
-        assert!(!key_in_file.message.contains("k3y"));
+                "downloads:\n  dir: /tmp/x\nsources:\n  disable: [nyaa]\n".to_string(),
+                "line 4: unknown field `disable`, expected one of disabled, torznab",
+            ),
+            ("sources:\n  disabled: [nyaa, apibay\n".to_string(), "line 2: unclosed bracket '['"),
+            (
+                "sources:\n  disabled: [nyaa]\n  disabled: [apibay]\n".to_string(),
+                "line 3: duplicate mapping key: disabled not allowed here",
+            ),
+            ("sources:\n  torznab: 3\n".to_string(), "line 2: expected sequence start"),
+            (
+                "downloads:\n  dir: isos\n".to_string(),
+                "line 2: downloads.dir \"isos\" must be an absolute path or start with ~/",
+            ),
+            (
+                format!("{indexer}      api_key_env: NOPE\n"),
+                "line 5: the \"j\" indexer takes its API key from NOPE, which is not set",
+            ),
+            (
+                format!("{indexer}      api_key: k3y\n"),
+                "line 5: unknown field `api_key`, expected one of name, url, api_key_env",
+            ),
+        ];
+        for (text, expected) in cases {
+            let error = load(&text).unwrap_err();
+            assert_eq!(
+                (error.code, error.message),
+                (ErrorCode::Usage, format!("$TORRENTIAL_HOME/config/config.yaml {expected}")),
+                "{text}"
+            );
+        }
     }
 }

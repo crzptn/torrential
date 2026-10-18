@@ -267,7 +267,7 @@ fn base_url(name: &str, raw: &str) -> Result<Url, Error> {
 }
 
 fn config_error(message: String) -> Error {
-    Error::new(ErrorCode::Usage, message).with_hint("fix the [sources] section of the torrential config")
+    Error::new(ErrorCode::Usage, message).with_hint("fix the sources section of the torrential config")
 }
 
 /// Joins a fixed relative path onto a validated `http(s)` base, which cannot fail.
