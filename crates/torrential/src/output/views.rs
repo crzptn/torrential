@@ -6,8 +6,8 @@ use torrential_core::protocol::{Change, FilesReply, GetOutcome, GetReply};
 use torrential_core::text::sanitize;
 use torrential_core::units::{format_limit, format_size};
 use torrential_core::{
-    Arch, Category, ErrorCode, Job, JobStatus, Machine, Profile, Release, ReleaseId, SearchResult, Selection,
-    SourceOutcome, TorrentId,
+    Arch, ErrorCode, Job, JobStatus, Machine, Profile, Release, ReleaseId, SearchResult, Selection, SourceOutcome,
+    TorrentId,
 };
 
 use super::format::{self, NONE};
@@ -136,20 +136,12 @@ pub fn search(result: &SearchResult, now: i64) -> Doc {
     }
     let mut summary = vec![line.join(" · ")];
     let profile = &result.query.profile;
-    if is_video(result) {
+    if result.is_video() {
         summary.push(format!("ranked for {}", ranked_for(profile)));
     } else if result.releases.iter().any(|r| !Arch::named_in(&r.name).is_empty()) {
         summary.push(format!("ranked for {}", profile.describe_arch()));
     }
     Doc { body: Body::Table { header, rows }, summary, next: Some(next.to_string()) }
-}
-
-/// A search for films or shows: `--category video`, or most results are video by their
-/// category or a resolution tag.
-fn is_video(result: &SearchResult) -> bool {
-    let video = |r: &&Release| r.category == Some(Category::Video) || r.quality().resolution.is_some();
-    result.query.category == Some(Category::Video)
-        || result.releases.iter().filter(video).count() * 2 > result.releases.len()
 }
 
 /// `this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English`, and the preferences that

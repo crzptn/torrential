@@ -258,9 +258,62 @@ pub struct SearchResult {
     pub elapsed_ms: u32,
 }
 
+impl SearchResult {
+    /// A search for films or shows: `--category video`, or most results are video by their
+    /// category or a resolution tag.
+    pub fn is_video(&self) -> bool {
+        let video = |r: &&Release| r.category == Some(Category::Video) || r.quality().resolution.is_some();
+        self.query.category == Some(Category::Video)
+            || self.releases.iter().filter(video).count() * 2 > self.releases.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named(name: &str, category: Option<Category>) -> Release {
+        Release {
+            id: ReleaseId::Locator(crate::id::LocatorId::from_bytes([0; 20])),
+            name: name.into(),
+            size: None,
+            seeders: None,
+            leechers: None,
+            published: None,
+            category,
+            flags: BTreeSet::new(),
+            sources: Vec::new(),
+            magnet: None,
+            torrent_url: None,
+            info_url: None,
+        }
+    }
+
+    fn found(releases: Vec<Release>) -> SearchResult {
+        SearchResult {
+            query: SearchQuery::new("x"),
+            total: releases.len() as u32,
+            releases,
+            hidden_adult: 0,
+            sources: Vec::new(),
+            elapsed_ms: 0,
+        }
+    }
+
+    #[test]
+    fn a_search_is_video_when_most_results_are_films_by_category_or_resolution_tag() {
+        let film = named("Night of the Living Dead (1968)", Some(Category::Video));
+        let tagged = named("Night.of.the.Living.Dead.1968.1080p.BluRay.x264", None);
+        let iso = named("ubuntu-24.04.1-desktop-amd64.iso", Some(Category::Software));
+        let score = named("Night of the Living Dead, original score FLAC", Some(Category::Audio));
+        assert!(found(vec![film.clone(), tagged.clone(), iso.clone()]).is_video());
+        assert!(!found(vec![film.clone(), iso.clone(), score.clone()]).is_video(), "one in three");
+        assert!(!found(vec![film, iso.clone()]).is_video(), "half is not most");
+        assert!(!found(Vec::new()).is_video());
+        let mut asked = found(vec![iso]);
+        asked.query.category = Some(Category::Video);
+        assert!(asked.is_video(), "--category video");
+    }
 
     #[test]
     fn source_reports_flatten_their_outcome() {
