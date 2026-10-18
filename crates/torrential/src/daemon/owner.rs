@@ -389,14 +389,14 @@ impl Owner {
         let selection = if files.is_empty() { Selection::All } else { Selection::Patterns(files) };
         let info_hash = match &source {
             Source::Download(id) if self.jobs.contains_key(id) => {
-                return self.get_existing(*id, source, selection, dry_run);
+                return self.get_existing(*id, source, selection, max_size, dry_run);
             }
             Source::Download(id) => return Err(no_download(&id.to_hex())),
             Source::Magnet(m) => m.info_hash,
             Source::Torrent { metainfo, .. } => metainfo.info_hash,
         };
         if let Some(id) = self.find_job(&info_hash) {
-            return self.get_existing(id, source, selection, dry_run);
+            return self.get_existing(id, source, selection, max_size, dry_run);
         }
         let id = info_hash.id();
         let (metainfo, magnet) = match source {
@@ -410,7 +410,7 @@ impl Owner {
         let plan =
             metainfo.as_deref().map(|m| admission::plan(m, &selection, &dir, None, self.disk.as_ref())).transpose()?;
         if let Some(plan) = &plan {
-            admission::check_size(plan.selected_size, cap)?;
+            admission::check_size(plan.selected_size, cap, None)?;
             if !dry_run {
                 admission::check_conflicts(plan)?;
             }
@@ -453,13 +453,22 @@ impl Owner {
         Ok(GetReply { outcome, job: job.view(), plan: plan.map(|p| p.public()), previous_selection: None })
     }
 
+    /// `max_size` is `--max-size`, which replaces the download's cap. A download stopped for
+    /// `too_large` runs again once its selection fits.
     fn get_existing(
         &mut self,
         id: TorrentId,
         source: Source,
         selection: Selection,
+        max_size: Option<u64>,
         dry_run: bool,
     ) -> Result<GetReply, Error> {
+        let cap = max_size.map_or(self.jobs[&id].record.cap, |bytes| Cap { bytes, from_setup: false });
+        // Without a file list there is nothing to check the cap against, and the file list checks it.
+        if !dry_run && self.jobs[&id].metainfo.is_none() && cap != self.jobs[&id].record.cap {
+            self.store.set_cap(id, cap)?;
+            self.jobs.get_mut(&id).expect("found above").record.cap = cap;
+        }
         if let Source::Torrent { metainfo, .. } = source
             && self.jobs[&id].metainfo.is_none()
         {
@@ -471,30 +480,33 @@ impl Owner {
             self.publish(id);
         }
         let job = &self.jobs[&id];
+        let too_large = matches!(&job.record.intent, Intent::Failed { error } if error.code == ErrorCode::TooLarge);
         let unchanged = selection == Selection::All || selection == job.record.selection;
-        if unchanged {
+        if unchanged && cap == job.record.cap && !too_large {
             let plan = self.current_plan(job);
             return Ok(GetReply { outcome: GetOutcome::Existing, job: job.view(), plan, previous_selection: None });
         }
-        let previous = job.record.selection.clone();
+        let previous = (!unchanged).then(|| job.record.selection.clone());
+        let selection = if unchanged { job.record.selection.clone() } else { selection };
         let Some(metainfo) = job.metainfo.clone() else {
             if dry_run {
                 return Ok(GetReply {
                     outcome: GetOutcome::Planned,
                     job: job.view(),
                     plan: None,
-                    previous_selection: Some(previous),
+                    previous_selection: previous,
                 });
             }
             self.store.set_selection(id, &selection)?;
             self.jobs.get_mut(&id).expect("found above").record.selection = selection;
             self.publish(id);
             let job = self.jobs[&id].view();
-            return Ok(GetReply { outcome: GetOutcome::Updated, job, plan: None, previous_selection: Some(previous) });
+            return Ok(GetReply { outcome: GetOutcome::Updated, job, plan: None, previous_selection: previous });
         };
-        let before = job.wanted();
+        // A download stopped for its size never claimed its files, so they all count as new.
+        let before = if too_large { None } else { job.wanted() };
         let plan = admission::plan(&metainfo, &selection, &job.record.dir, before.as_deref(), self.disk.as_ref())?;
-        admission::check_size(plan.selected_size, job.record.cap)?;
+        admission::check_size(plan.selected_size, cap, None)?;
         if !dry_run {
             admission::check_conflicts(&plan)?;
         }
@@ -508,31 +520,38 @@ impl Owner {
                 outcome: GetOutcome::Planned,
                 job,
                 plan: Some(plan.public()),
-                previous_selection: Some(previous),
+                previous_selection: previous,
             });
         }
-        self.store.set_selection(id, &selection)?;
-        let reopen = matches!(job.record.intent, Intent::Done { .. });
+        if previous.is_some() {
+            self.store.set_selection(id, &selection)?;
+        }
+        if cap != job.record.cap {
+            self.store.set_cap(id, cap)?;
+        }
+        let reopen = too_large || (previous.is_some() && matches!(job.record.intent, Intent::Done { .. }));
         if reopen {
             self.store.set_intent(id, &Intent::Running)?;
         }
         let job = self.jobs.get_mut(&id).expect("found above");
         job.record.selection = selection;
+        job.record.cap = cap;
         if reopen {
             job.record.intent = Intent::Running;
         }
-        if job.observed.in_engine() {
+        if previous.is_some() && job.observed.in_engine() {
             self.engine.send(EngineCommand::Select(id, plan.wanted.clone()));
         }
         self.schedule();
         self.publish(id);
-        let job = self.jobs[&id].view();
-        Ok(GetReply {
-            outcome: GetOutcome::Updated,
-            job,
-            plan: Some(plan.public()),
-            previous_selection: Some(previous),
-        })
+        let job = &self.jobs[&id];
+        let outcome = match (&previous, too_large) {
+            (Some(_), _) => GetOutcome::Updated,
+            (None, true) if job.observed.in_engine() => GetOutcome::Started,
+            (None, true) => GetOutcome::Queued,
+            (None, false) => GetOutcome::Existing,
+        };
+        Ok(GetReply { outcome, job: job.view(), plan: Some(plan.public()), previous_selection: previous })
     }
 
     fn current_plan(&self, job: &JobEntry) -> Option<torrential_core::protocol::DownloadPlan> {
@@ -907,7 +926,7 @@ impl Owner {
         job.metainfo = Some(metainfo.clone());
         let (dir, cap, selection) = (job.record.dir.clone(), job.record.cap, job.record.selection.clone());
         let admitted = admission::plan(&metainfo, &selection, &dir, None, self.disk.as_ref()).and_then(|plan| {
-            admission::check_size(plan.selected_size, cap)?;
+            admission::check_size(plan.selected_size, cap, Some(id))?;
             admission::check_conflicts(&plan)?;
             admission::check_disk(plan.space, plan.selected_size, self.others_remaining(&dir, id))?;
             Ok(plan)

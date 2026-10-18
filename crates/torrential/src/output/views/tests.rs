@@ -679,7 +679,7 @@ fn sample(code: ErrorCode) -> Error {
         ),
         ErrorCode::DiskFull => admission::check_disk(disk, 70 * GIB, 0).unwrap_err(),
         ErrorCode::TooLarge => {
-            admission::check_size(plan(vec![]).selected_size, admission::Cap::new(None, None)).unwrap_err()
+            admission::check_size(plan(vec![]).selected_size, admission::Cap::new(None, None), None).unwrap_err()
         }
         ErrorCode::NoSelection => {
             crate::daemon::files::wanted(&film(), &Selection::Patterns(vec!["*.mkv".into()])).unwrap_err()

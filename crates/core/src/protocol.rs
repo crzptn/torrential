@@ -118,7 +118,7 @@ pub struct GetReply {
 pub enum GetOutcome {
     Started,
     Queued,
-    /// The download already existed with the same selection. Nothing changed.
+    /// The download already existed with the same selection. Any `--max-size` became its cap.
     Existing,
     /// The download already existed, and its file selection changed.
     Updated,

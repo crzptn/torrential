@@ -348,9 +348,33 @@ async fn a_cap_from_setup_is_named_when_the_file_list_arrives_over_it() {
         (
             ErrorCode::TooLarge,
             "the selection is 3.0 GiB, over the 2 GiB cap from torrential setup",
-            Some("add --max-size 3GiB to allow it, or pick fewer files with --files")
+            Some("torrential get 292929 --max-size 3GiB allows it, or pick fewer files with --files")
         )
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_runs_a_download_stopped_over_its_cap_once_it_fits() {
+    let h = Harness::new();
+    let film = over_its_setup_cap(&h, 41).await;
+    let show = over_its_setup_cap(&h, 43).await;
+
+    let again = h.get(Target::Prefix(prefix(&film)), &[]).await.unwrap_err();
+    let fewer = h.get(Target::Prefix(prefix(&film)), &["film.mkv"]).await.unwrap();
+    let raised = GetRequest { max_size: Some(4 * GIB), ..request(&h, Target::Prefix(prefix(&show))) };
+    let started = h.get_with(raised.clone()).await.unwrap();
+    let repeated = h.get_with(raised).await.unwrap();
+
+    assert_eq!(again.code, ErrorCode::TooLarge);
+    assert_eq!(
+        (fewer.outcome, fewer.job.status.name(), fewer.plan.map(|p| p.selected_size)),
+        (GetOutcome::Updated, "checking", Some(2 * GIB))
+    );
+    // Queued while the engine still lets go of the stopped download.
+    assert!(matches!(started.outcome, GetOutcome::Started | GetOutcome::Queued), "{:?}", started.outcome);
+    assert_eq!(repeated.outcome, GetOutcome::Existing);
+    let id = show.info_hash.id();
+    h.until("the show runs", |jobs| jobs.iter().any(|j| j.id == id && j.status.name() == "checking")).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

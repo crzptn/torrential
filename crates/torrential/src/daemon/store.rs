@@ -309,6 +309,16 @@ impl Store {
         })
     }
 
+    pub fn set_cap(&mut self, id: TorrentId, cap: Cap) -> Result<(), Error> {
+        self.write(|tx| {
+            tx.execute(
+                "UPDATE jobs SET max_size = ?2, max_size_from_setup = ?3 WHERE id = ?1",
+                params![id.to_hex(), cap.bytes as i64, cap.from_setup],
+            )
+            .map(drop)
+        })
+    }
+
     pub fn learn(
         &mut self,
         id: TorrentId,

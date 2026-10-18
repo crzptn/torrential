@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use torrential_core::error::Details;
 use torrential_core::protocol::DownloadPlan;
 use torrential_core::units::{format_limit, format_size};
-use torrential_core::{Error, ErrorCode, Selection};
+use torrential_core::{Error, ErrorCode, Selection, TorrentId};
 
 use super::engine_port::Metainfo;
 use super::files;
@@ -96,16 +96,25 @@ impl Cap {
     }
 }
 
-pub fn check_size(selected: u64, cap: Cap) -> Result<(), Error> {
+/// `job` names a download refused after `get` returned, so the hint gives the whole command.
+pub fn check_size(selected: u64, cap: Cap, job: Option<TorrentId>) -> Result<(), Error> {
     if selected <= cap.bytes {
         return Ok(());
     }
     let from = if cap.from_setup { " from torrential setup" } else { "" };
+    let allow = selected.div_ceil(GIB);
+    let hint = match job {
+        None => format!("add --max-size {allow}GiB to allow it, or pick fewer files with --files"),
+        Some(id) => format!(
+            "torrential get {} --max-size {allow}GiB allows it, or pick fewer files with --files",
+            &id.to_hex()[..6]
+        ),
+    };
     Err(Error::new(
         ErrorCode::TooLarge,
         format!("the selection is {}, over the {} cap{from}", format_size(selected), format_limit(cap.bytes)),
     )
-    .with_hint(format!("add --max-size {}GiB to allow it, or pick fewer files with --files", selected.div_ceil(GIB))))
+    .with_hint(hint))
 }
 
 pub fn check_conflicts(plan: &Plan) -> Result<(), Error> {
@@ -269,18 +278,25 @@ mod tests {
     fn refuses_past_the_size_cap_unless_raised() {
         let disk = FakeDisk::new(Space { free: 500 * GIB, total: 1000 * GIB, ..DISK });
         let size = plan_for(60 * GIB, &disk).selected_size;
-        let err = check_size(size, Cap::new(None, None)).unwrap_err();
+        let err = check_size(size, Cap::new(None, None), None).unwrap_err();
         assert_eq!(err.code, ErrorCode::TooLarge);
         assert_eq!(err.message, "the selection is 61.0 GiB, over the 50 GiB cap");
         assert_eq!(err.hint.as_deref(), Some("add --max-size 61GiB to allow it, or pick fewer files with --files"));
-        assert_eq!(check_size(size, Cap::new(Some(61 * GIB), Some(GIB))), Ok(()));
+        assert_eq!(check_size(size, Cap::new(Some(61 * GIB), Some(GIB)), None), Ok(()));
     }
 
     #[test]
-    fn a_refusal_names_a_cap_from_setup() {
-        let err = check_size(2_254_911_385, Cap::new(None, Some(2_000_000_000))).unwrap_err();
-        assert_eq!(err.message, "the selection is 2.1 GiB, over the 2 GB cap from torrential setup");
-        let flagged = check_size(2_254_911_385, Cap::new(Some(GIB), Some(2_000_000_000))).unwrap_err();
+    fn a_refusal_names_a_cap_from_setup_and_the_download_it_stopped() {
+        let id: TorrentId = format!("2d9b6a{}", "0".repeat(34)).parse().unwrap();
+        let err = check_size(2_254_911_385, Cap::new(None, Some(2_000_000_000)), Some(id)).unwrap_err();
+        assert_eq!(
+            (err.message.as_str(), err.hint.as_deref()),
+            (
+                "the selection is 2.1 GiB, over the 2 GB cap from torrential setup",
+                Some("torrential get 2d9b6a --max-size 3GiB allows it, or pick fewer files with --files")
+            )
+        );
+        let flagged = check_size(2_254_911_385, Cap::new(Some(GIB), Some(2_000_000_000)), None).unwrap_err();
         assert_eq!(flagged.message, "the selection is 2.1 GiB, over the 1 GiB cap");
     }
 
