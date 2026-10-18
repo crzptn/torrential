@@ -1,7 +1,3 @@
-//! The cxx bridge and every conversion between its records and the public
-//! types. This is the only module with `unsafe`, and no record defined here
-//! leaves the crate.
-
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
@@ -16,6 +12,13 @@ use crate::torrent::{
 
 #[cxx::bridge(namespace = "torrential")]
 pub(crate) mod ffi {
+    enum FailureKind {
+        UnknownTorrent,
+        NoMetadata,
+        InvalidInput,
+        Native,
+    }
+
     struct Hashes {
         v1: [u8; 20],
         v2: [u8; 32],
@@ -23,7 +26,6 @@ pub(crate) mod ffi {
         has_v2: bool,
     }
 
-    /// `code` 0 means no error.
     struct ErrorRecord {
         category: String,
         code: i32,
@@ -37,7 +39,6 @@ pub(crate) mod ffi {
         lsd: bool,
         upnp: bool,
         natpmp: bool,
-        /// Bytes per second, 0 for unlimited.
         download_rate_limit: i32,
         upload_rate_limit: i32,
         upload_off: bool,
@@ -45,7 +46,6 @@ pub(crate) mod ffi {
         multiple_connections_per_ip: bool,
         peer_fingerprint: String,
         user_agent: String,
-        /// Empty when there is no saved state.
         state: Vec<u8>,
     }
 
@@ -144,7 +144,7 @@ pub(crate) mod ffi {
         FileError,
         HashFailed,
         TorrentRemoved,
-        FilePriorities,
+        FilePrioritiesApplied,
         ListenSucceeded,
         ListenFailed,
         DhtBootstrapped,
@@ -164,7 +164,6 @@ pub(crate) mod ffi {
         Rtc,
     }
 
-    /// One flattened alert. `kind` decides which fields carry data.
     struct AlertRecord {
         kind: AlertKind,
         hashes: Hashes,
@@ -226,20 +225,26 @@ pub(crate) mod ffi {
     }
 }
 
-// SAFETY: every libtorrent session call posts to libtorrent's own network
-// thread, so the session may be used from any one thread at a time. The shim's
-// own fields are written only in the constructor.
+// SAFETY: lt::session has no thread affinity. Its calls are marshalled to
+// libtorrent's network thread, and wait_for_alert and pop_alerts lock the
+// alert queue, so any one thread at a time may own it. The shim writes its own
+// fields only in the constructor.
 unsafe impl Send for ffi::Session {}
 
-/// Parses the "<kind>:<message>" format that `describe_exception` in the shim
-/// produces.
+/// cxx carries only an exception's message, so the shim's trycatch writes the
+/// `FailureKind` discriminant in front of it.
 pub(crate) fn error(e: cxx::Exception) -> EngineError {
     let what = e.what();
-    let (kind, message) = what.split_once(':').unwrap_or(("native", what));
-    let kind = match kind {
-        "unknown_torrent" => ErrorKind::UnknownTorrent,
-        "no_metadata" => ErrorKind::NoMetadata,
-        "invalid_input" => ErrorKind::InvalidInput,
+    let Some((repr, message)) = what
+        .split_once(':')
+        .and_then(|(kind, message)| Some((kind.parse().ok()?, message)))
+    else {
+        return EngineError::new(ErrorKind::Native, what);
+    };
+    let kind = match (ffi::FailureKind { repr }) {
+        ffi::FailureKind::UnknownTorrent => ErrorKind::UnknownTorrent,
+        ffi::FailureKind::NoMetadata => ErrorKind::NoMetadata,
+        ffi::FailureKind::InvalidInput => ErrorKind::InvalidInput,
         _ => ErrorKind::Native,
     };
     EngineError::new(kind, message)
@@ -368,7 +373,6 @@ pub(crate) fn settings(config: &Config) -> ffi::SessionSettings {
     }
 }
 
-/// libtorrent stores these settings as `int`.
 fn setting_int(value: u32) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
 }
@@ -518,14 +522,8 @@ pub(crate) fn alert(r: ffi::AlertRecord) -> Result<Alert, EngineError> {
         K::TorrentRemoved => Alert::TorrentRemoved {
             torrent: torrent()?,
         },
-        K::FilePriorities => match native_error(r.error) {
-            None => Alert::FilePrioritiesApplied {
-                torrent: torrent()?,
-            },
-            Some(error) => Alert::FilePrioritiesFailed {
-                torrent: torrent()?,
-                error,
-            },
+        K::FilePrioritiesApplied => Alert::FilePrioritiesApplied {
+            torrent: torrent()?,
         },
         K::ListenSucceeded => Alert::ListenSucceeded {
             address: SocketAddr::new(ip(&r.address)?, r.port),

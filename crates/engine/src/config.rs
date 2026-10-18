@@ -6,8 +6,8 @@ use std::num::NonZeroU32;
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Addresses to accept peers on. Port 0 lets the OS choose. A taken port
-    /// is not an error: libtorrent binds the next free one, up to 10 tries.
-    /// `Session::listen_port` reports the port it got.
+    /// is not an error: libtorrent tries the next 10 ports, then lets the OS
+    /// choose. `Session::listen_port` reports the port it got.
     pub listen: Vec<SocketAddr>,
     pub dht: Dht,
     /// Local service discovery (BEP 14).
@@ -105,14 +105,13 @@ impl Default for ClientIdentity {
     }
 }
 
-/// The Azureus-style `-XXabcd-` prefix, encoding each version component the
-/// way libtorrent's `generate_fingerprint` does.
+/// The Azureus-style `-XXabcd-` prefix, one character per version component:
+/// 0 to 9, then A to Z for 10 to 35. Larger components stay at Z, where
+/// libtorrent's `generate_fingerprint` would run past Z into punctuation.
 fn azureus_prefix(code: &str, version: &str) -> String {
     let digit = |n: u32| match n {
         0..=9 => char::from(b'0' + n as u8),
-        10..=35 => char::from(b'A' + (n - 10) as u8),
-        36..=61 => char::from(b'a' + (n - 36) as u8),
-        _ => 'z',
+        _ => char::from(b'A' + n.min(35) as u8 - 10),
     };
     let mut parts = version
         .split(['.', '-', '+'])
@@ -152,8 +151,8 @@ mod tests {
     use super::azureus_prefix;
 
     #[test]
-    fn version_components_encode_like_libtorrent() {
+    fn version_components_encode_as_azureus_digits() {
         assert_eq!(azureus_prefix("TO", "0.1.0"), "-TO0100-");
-        assert_eq!(azureus_prefix("TO", "1.12.40-beta"), "-TO1Ce0-");
+        assert_eq!(azureus_prefix("TO", "1.12.40-beta"), "-TO1CZ0-");
     }
 }

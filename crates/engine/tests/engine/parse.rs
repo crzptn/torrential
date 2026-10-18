@@ -41,6 +41,10 @@ fn malformed_inputs_are_invalid_input() {
         PieceSize::new(24 * 1024).map_err(kind).unwrap_err(),
         ErrorKind::InvalidInput
     );
+    assert_eq!(
+        PieceSize::new(256 * 1024 * 1024).map_err(kind).unwrap_err(),
+        ErrorKind::InvalidInput
+    );
     assert_eq!(PieceSize::new(32 * 1024).unwrap().get(), 32_768);
     let garbage = Config {
         dht_state: Some(DhtState::from_bytes(b"garbage".to_vec())),

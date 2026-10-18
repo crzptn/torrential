@@ -136,7 +136,6 @@ impl ResumeData {
         })
     }
 
-    /// For bytes libtorrent just produced for this torrent.
     pub(crate) fn new(bytes: Vec<u8>, info_hash: InfoHash) -> Self {
         ResumeData { bytes, info_hash }
     }
@@ -204,7 +203,7 @@ pub enum FilePriority {
 }
 
 /// One torrent to add. The options apply to every source, so they override
-/// the paused flag and file priorities stored in resume data.
+/// the save path, paused flag, and file priorities stored in resume data.
 #[derive(Debug, Clone)]
 pub struct AddTorrent {
     pub source: TorrentSource,
@@ -275,7 +274,7 @@ pub struct TorrentStatus {
     /// Payload bytes per second.
     pub download_rate: u64,
     pub upload_rate: u64,
-    /// Payload bytes since the torrent was added to this session.
+    /// Payload bytes since the torrent last started or resumed.
     pub downloaded_payload: u64,
     pub uploaded_payload: u64,
     pub peers: u32,
@@ -321,8 +320,7 @@ pub struct FileProgress {
     pub index: FileIndex,
     pub size: u64,
     pub priority: FilePriority,
-    /// Bytes of this file inside pieces that passed their hash check. A
-    /// downloaded block in an unverified piece does not count, so this only
-    /// drops when a recheck finds damage.
+    /// Bytes of this file inside pieces that passed their hash check. Blocks
+    /// of a piece that has not been checked do not count.
     pub verified: u64,
 }

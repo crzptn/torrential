@@ -17,7 +17,8 @@ pub enum Alert {
         torrent: InfoHash,
         error: NativeError,
     },
-    /// Every selected piece passed its hash check.
+    /// Every selected piece passed its hash check. The last pieces may not be
+    /// written yet; pause and wait for `TorrentPaused` before reading files.
     TorrentFinished {
         torrent: InfoHash,
     },
@@ -45,7 +46,8 @@ pub enum Alert {
         torrent: InfoHash,
         error: NativeError,
     },
-    /// The torrent stopped with an error. libtorrent pauses it.
+    /// The torrent stopped with an error, which `TorrentStatus::error` then
+    /// reports.
     TorrentError {
         torrent: InfoHash,
         file: Option<PathBuf>,
@@ -67,10 +69,6 @@ pub enum Alert {
     },
     FilePrioritiesApplied {
         torrent: InfoHash,
-    },
-    FilePrioritiesFailed {
-        torrent: InfoHash,
-        error: NativeError,
     },
     ListenSucceeded {
         address: SocketAddr,
@@ -105,8 +103,7 @@ impl Alert {
             | Alert::FileError { torrent, .. }
             | Alert::HashFailed { torrent, .. }
             | Alert::TorrentRemoved { torrent }
-            | Alert::FilePrioritiesApplied { torrent }
-            | Alert::FilePrioritiesFailed { torrent, .. } => Some(*torrent),
+            | Alert::FilePrioritiesApplied { torrent } => Some(*torrent),
             Alert::ListenSucceeded { .. }
             | Alert::ListenFailed { .. }
             | Alert::DhtBootstrapped
@@ -129,8 +126,8 @@ pub enum Transport {
     Rtc,
 }
 
-/// Session-wide counters since the session started, from
-/// `Session::post_session_stats`.
+/// Byte totals since the session started, and current DHT node and peer
+/// counts, from `Session::post_session_stats`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SessionStats {
     pub sent_payload_bytes: u64,

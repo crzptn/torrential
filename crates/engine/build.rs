@@ -1,13 +1,3 @@
-//! Builds vendored libtorrent as a static library, then compiles the C++ shim
-//! against the exact compile definitions libtorrent exports.
-//!
-//! OpenSSL links dynamically from the path in `OPENSSL_LIB_DIR`. A fully
-//! static release needs static `libssl.a` and `libcrypto.a` (for example
-//! nixpkgs `pkgsStatic.openssl` or the `openssl-src` crate), the
-//! `OPENSSL_USE_STATIC_LIBS=ON` CMake define, `static=ssl` and `static=crypto`
-//! link lines, and on Linux musl a static libstdc++ (`-static-libstdc++`).
-//! macOS always links libc++ and libSystem dynamically.
-
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};

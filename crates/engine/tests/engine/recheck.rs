@@ -28,11 +28,16 @@ fn recheck_reports_a_damaged_piece_and_downloading_repairs_it() {
     let total = total_size(&torrent);
     let (mut leecher, download, id) = downloaded(&fixture);
 
-    // Offset 20_000 lies in piece 1, bytes 16_384..32_768 of a.bin.
+    let piece_1_middle = PIECE as usize * 3 / 2;
+    assert!(
+        2 * PIECE as usize <= fixture.files["a.bin"].len(),
+        "piece 1 lies inside a.bin"
+    );
     let damaged = fixture.path_in(download.path(), "a.bin");
     let mut file = OpenOptions::new().write(true).open(&damaged).unwrap();
-    file.seek(SeekFrom::Start(20_000)).unwrap();
-    file.write_all(&[!fixture.files["a.bin"][20_000]]).unwrap();
+    file.seek(SeekFrom::Start(piece_1_middle as u64)).unwrap();
+    file.write_all(&[!fixture.files["a.bin"][piece_1_middle]])
+        .unwrap();
     drop(file);
 
     leecher.session.resume(id).unwrap();

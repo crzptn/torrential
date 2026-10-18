@@ -13,17 +13,16 @@ use crate::torrent::{
 /// One libtorrent session, which serves every torrent.
 ///
 /// One thread owns a `Session`. It is `Send`, so it can be created and moved
-/// to that thread, and not `Sync`, so no two threads call it at once. Other
-/// threads talk to the owner through channels.
+/// to that thread, and not `Sync`, so no two threads call it at once.
 ///
 /// ```compile_fail
 /// fn shared<T: Sync>() {}
 /// shared::<torrential_engine::Session>();
 /// ```
 ///
-/// Calls that change a torrent return once libtorrent has queued the change.
-/// The matching alert from `wait_alerts` confirms it. Dropping the session
-/// blocks until libtorrent has shut down.
+/// Calls that change a torrent return once libtorrent has queued the change,
+/// and most post a confirming alert. Dropping the session blocks until
+/// libtorrent has shut down.
 pub struct Session {
     native: cxx::UniquePtr<ffi::Session>,
 }
@@ -69,8 +68,9 @@ impl Session {
         r.map_err(|e| with_id(e, id))
     }
 
-    /// Sets the listed files and leaves the rest as they are.
-    /// `Alert::FilePrioritiesApplied` confirms the change. Needs metadata.
+    /// Sets the listed files and leaves the rest as they are. Needs metadata.
+    /// `Alert::FilePrioritiesApplied` confirms the change. A disk failure posts
+    /// `Alert::FileError` and `Alert::TorrentError` instead.
     pub fn set_file_priorities(
         &mut self,
         id: TorrentId,
@@ -90,16 +90,18 @@ impl Session {
         r.map_err(|e| with_id(e, id))
     }
 
-    /// Hashes every file on disk again. `Alert::TorrentChecked` follows, and
+    /// Hashes every file on disk again once the torrent is running; a paused
+    /// torrent waits for `resume`. `Alert::TorrentChecked` follows, and selected
     /// pieces that fail are downloaded again once the torrent has peers.
     pub fn force_recheck(&mut self, id: TorrentId) -> Result<(), EngineError> {
         let r = self.native.pin_mut().force_recheck(id.as_bytes());
         r.map_err(|e| with_id(e, id))
     }
 
-    /// Flushes the torrent's disk cache and asks for resume data, including
-    /// the info dictionary. `Alert::ResumeDataSaved` or
-    /// `Alert::ResumeDataFailed` follows.
+    /// Asks for resume data, including the info dictionary.
+    /// `Alert::ResumeDataSaved` or `Alert::ResumeDataFailed` follows. The data
+    /// lists only pieces already written to disk, which can trail the verified
+    /// count until the torrent is paused.
     pub fn save_resume_data(&mut self, id: TorrentId) -> Result<(), EngineError> {
         let r = self.native.pin_mut().save_resume_data(id.as_bytes());
         r.map_err(|e| with_id(e, id))
@@ -162,15 +164,17 @@ impl Session {
         Ok(DhtState::from_bytes(bytes))
     }
 
-    /// The port of the first listen socket that opened, or `None` while none
-    /// has.
+    /// The TCP port peers should use for the first listen socket: the port a
+    /// UPnP or NAT-PMP mapping gave, if one exists, otherwise the bound port.
+    /// `None` while no socket is open.
     pub fn listen_port(&self) -> Result<Option<u16>, EngineError> {
         let port = self.native.listen_port().map_err(bridge::error)?;
         Ok((port != 0).then_some(port))
     }
 
-    /// Waits up to `timeout` for alerts, then returns every queued one. An
-    /// empty list means the wait timed out.
+    /// Waits up to `timeout` for alerts, then returns the queued ones this
+    /// crate models. The list can be empty before the timeout, because other
+    /// libtorrent alerts and alerts about removed torrents are dropped.
     pub fn wait_alerts(&mut self, timeout: Duration) -> Result<Vec<Alert>, EngineError> {
         let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
         let records = self

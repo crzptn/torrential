@@ -33,8 +33,12 @@ struct Error : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
-[[noreturn]] void fail(char const* kind, std::string const& message) {
-  throw Error(std::string(kind) + ":" + message);
+std::string failure_text(FailureKind kind, std::string const& message) {
+  return std::to_string(static_cast<int>(kind)) + ":" + message;
+}
+
+[[noreturn]] void fail(FailureKind kind, std::string const& message) {
+  throw Error(failure_text(kind, message));
 }
 
 rust::String str(std::string const& s) { return rust::String::lossy(s); }
@@ -81,7 +85,7 @@ State to_state(lt::torrent_status::state_t s) {
     case lt::torrent_status::seeding: return State::Seeding;
     case lt::torrent_status::checking_resume_data: return State::CheckingResumeData;
   }
-  fail("native", "unknown torrent state " + std::to_string(static_cast<int>(s)));
+  fail(FailureKind::Native, "unknown torrent state " + std::to_string(static_cast<int>(s)));
 }
 
 Transport to_transport(lt::socket_type_t t) {
@@ -97,7 +101,7 @@ Transport to_transport(lt::socket_type_t t) {
     case lt::socket_type_t::i2p: return Transport::I2p;
     case lt::socket_type_t::rtc: return Transport::Rtc;
   }
-  fail("native", "unknown socket type " + std::to_string(static_cast<int>(t)));
+  fail(FailureKind::Native, "unknown socket type " + std::to_string(static_cast<int>(t)));
 }
 
 rust::Vec<FileRecord> file_records(lt::file_storage const& fs, lt::renamed_files const& names) {
@@ -126,7 +130,7 @@ ParsedTorrent parsed(lt::add_torrent_params const& atp) {
     p.hashes = to_hashes(atp.info_hashes);
     p.name = str(atp.name);
   }
-  if (!p.hashes.has_v1 && !p.hashes.has_v2) fail("invalid_input", "no info hash");
+  if (!p.hashes.has_v1 && !p.hashes.has_v2) fail(FailureKind::InvalidInput, "no info hash");
   return p;
 }
 
@@ -134,35 +138,34 @@ lt::add_torrent_params load_metainfo(lt::span<char const> bytes) {
   try {
     return lt::load_torrent_buffer(bytes);
   } catch (lt::system_error const& e) {
-    fail("invalid_input", std::string("metainfo: ") + e.code().message());
+    fail(FailureKind::InvalidInput, std::string("metainfo: ") + e.code().message());
   }
 }
 
 lt::add_torrent_params load_resume_data(lt::span<char const> bytes) {
   lt::error_code ec;
   lt::add_torrent_params atp = lt::read_resume_data(bytes, ec);
-  if (ec) fail("invalid_input", "resume data: " + ec.message());
+  if (ec) fail(FailureKind::InvalidInput, "resume data: " + ec.message());
   return atp;
 }
 
 lt::add_torrent_params load_magnet(rust::Str uri) {
   lt::error_code ec;
   lt::add_torrent_params atp = lt::parse_magnet_uri(lt::string_view(uri.data(), uri.size()), ec);
-  if (ec) fail("invalid_input", "magnet: " + ec.message());
+  if (ec) fail(FailureKind::InvalidInput, "magnet: " + ec.message());
   return atp;
 }
 
 lt::address parse_address(rust::Str address) {
   lt::error_code ec;
   lt::address const a = lt::make_address(std::string(address), ec);
-  if (ec) fail("invalid_input", "address " + std::string(address) + ": " + ec.message());
+  if (ec) fail(FailureKind::InvalidInput, "address " + std::string(address) + ": " + ec.message());
   return a;
 }
 
-// Zero unchoke slots alone still serves payload two ways: peers in the local
-// peer class skip the choker, and a choked peer may request the allowed-fast
-// pieces. make_params and every_peer_global close both. Refusing every
-// request keeps upload at zero through any path those settings miss.
+// libtorrent asks peer plugins before it serves any block request, so refusing
+// every request is what holds upload at zero. The choker settings in
+// make_params keep peers choked, so they have no reason to send one.
 struct RefuseRequests final : lt::peer_plugin {
   explicit RefuseRequests(lt::peer_connection_handle pc) : pc_(std::move(pc)) {}
   bool on_request(lt::peer_request const&) override {
@@ -192,7 +195,7 @@ lt::session_params make_params(SessionSettings const& s) {
     try {
       params = lt::read_session_params(as_span(s.state), lt::session_handle::save_dht_state);
     } catch (std::exception const& e) {
-      fail("invalid_input", std::string("session state: ") + e.what());
+      fail(FailureKind::InvalidInput, std::string("session state: ") + e.what());
     }
   }
 
@@ -211,7 +214,8 @@ lt::session_params make_params(SessionSettings const& s) {
   p.set_str(lt::settings_pack::user_agent, std::string(s.user_agent));
   // A finished torrent otherwise disconnects every seed, and a metadata-only
   // torrent is finished as soon as its metadata arrives. Selecting files then
-  // waits out min_reconnect_time (60 s) before any peer is tried again.
+  // waits until libtorrent retries those seeds, min_reconnect_time (60 s) or
+  // more later.
   p.set_bool(lt::settings_pack::close_redundant_connections, false);
   p.set_int(lt::settings_pack::alert_queue_size, 10000);
   p.set_int(lt::settings_pack::alert_mask, lt::alert_category::status | lt::alert_category::error |
@@ -238,7 +242,7 @@ lt::ip_filter every_peer_global() {
 
 int metric(char const* name) {
   int const index = lt::find_metric_idx(name);
-  if (index < 0) fail("native", std::string("missing session metric ") + name);
+  if (index < 0) fail(FailureKind::Native, std::string("missing session metric ") + name);
   return index;
 }
 
@@ -260,12 +264,13 @@ std::string describe_exception(std::exception_ptr error) {
   } catch (Error const& e) {
     return e.what();
   } catch (lt::system_error const& e) {
-    return std::string("native:") + e.code().category().name() + " " +
-           std::to_string(e.code().value()) + ": " + e.code().message();
+    return failure_text(FailureKind::Native, std::string(e.code().category().name()) + " " +
+                                                 std::to_string(e.code().value()) + ": " +
+                                                 e.code().message());
   } catch (std::exception const& e) {
-    return std::string("native:") + e.what();
+    return failure_text(FailureKind::Native, e.what());
   } catch (...) {
-    return "native:unknown C++ exception";
+    return failure_text(FailureKind::Native, "unknown C++ exception");
   }
 }
 
@@ -278,17 +283,17 @@ Session::Session(SessionSettings const& settings)
 }
 
 lt::torrent_handle Session::find(rust::Slice<const std::uint8_t> id) const {
-  if (id.size() != lt::sha1_hash::size()) fail("native", "torrent id must be 20 bytes");
+  if (id.size() != lt::sha1_hash::size()) fail(FailureKind::Native, "torrent id must be 20 bytes");
   lt::sha1_hash const key(reinterpret_cast<char const*>(id.data()));
   lt::torrent_handle h = session_.find_torrent(key);
-  if (!h.is_valid()) fail("unknown_torrent", "");
+  if (!h.is_valid()) fail(FailureKind::UnknownTorrent, "");
   return h;
 }
 
 lt::torrent_handle Session::find_with_metadata(rust::Slice<const std::uint8_t> id) const {
   lt::torrent_handle h = find(id);
   auto const ti = h.torrent_file();
-  if (!ti || !ti->is_valid()) fail("no_metadata", "torrent has no metadata yet");
+  if (!ti || !ti->is_valid()) fail(FailureKind::NoMetadata, "torrent has no metadata yet");
   return h;
 }
 
@@ -298,7 +303,7 @@ AddResult Session::add_torrent(AddParams const& p) {
     case SourceKind::Magnet: atp = load_magnet(p.magnet); break;
     case SourceKind::Metainfo: atp = load_metainfo(as_span(p.bytes)); break;
     case SourceKind::Resume: atp = load_resume_data(as_span(p.bytes)); break;
-    default: fail("native", "unknown torrent source");
+    default: fail(FailureKind::Native, "unknown torrent source");
   }
 
   lt::info_hash_t const ih = atp.ti ? atp.ti->info_hashes() : atp.info_hashes;
@@ -320,7 +325,7 @@ AddResult Session::add_torrent(AddParams const& p) {
     for (std::uint32_t const index : p.selected) {
       int const i = static_cast<int>(index);
       if (known >= 0 && i >= known) {
-        fail("invalid_input", "file index " + std::to_string(i) + " is out of range for " +
+        fail(FailureKind::InvalidInput, "file index " + std::to_string(i) + " is out of range for " +
                                   std::to_string(known) + " files");
       }
       if (static_cast<int>(atp.file_priorities.size()) <= i) {
@@ -350,7 +355,7 @@ void Session::set_file_priorities(rust::Slice<const std::uint8_t> id,
   all.resize(static_cast<std::size_t>(files), lt::default_priority);
   for (PriorityRecord const& p : priorities) {
     if (static_cast<int>(p.index) >= files) {
-      fail("invalid_input", "file index " + std::to_string(p.index) + " is out of range for " +
+      fail(FailureKind::InvalidInput, "file index " + std::to_string(p.index) + " is out of range for " +
                                 std::to_string(files) + " files");
     }
     all[p.index] = lt::download_priority_t(p.priority);
@@ -384,7 +389,7 @@ rust::Vec<std::uint8_t> Session::metainfo(rust::Slice<const std::uint8_t> id) co
       if (fs.pad_file_at(f) || fs.file_size(f) <= fs.piece_length()) continue;
       auto const i = static_cast<std::size_t>(static_cast<int>(f));
       if (i >= layers.size() || static_cast<int>(layers[i].size()) != fs.file_num_pieces(f)) {
-        fail("no_metadata", "piece layers are not complete yet");
+        fail(FailureKind::NoMetadata, "piece layers are not complete yet");
       }
       std::string& layer = dict[fs.root(f).to_string()].string();
       for (lt::sha256_hash const& hash : layers[i]) layer += hash.to_string();
@@ -513,13 +518,9 @@ rust::Vec<AlertRecord> Session::wait_alerts(std::uint32_t timeout_ms) {
         r.hashes = to_hashes(lt::alert_cast<lt::torrent_removed_alert>(a)->info_hashes);
         keep = true;
         break;
-      case lt::file_prio_alert::alert_type: {
-        auto const* e = lt::alert_cast<lt::file_prio_alert>(a);
-        r.error = to_error(e->error);
-        r.operation = str(lt::operation_name(e->op));
-        keep = torrent_record(a, AlertKind::FilePriorities, r);
+      case lt::file_prio_alert::alert_type:
+        keep = torrent_record(a, AlertKind::FilePrioritiesApplied, r);
         break;
-      }
       case lt::listen_succeeded_alert::alert_type: {
         auto const* l = lt::alert_cast<lt::listen_succeeded_alert>(a);
         r.kind = AlertKind::ListenSucceeded;
@@ -584,9 +585,9 @@ rust::Vec<std::uint8_t> create_torrent(rust::Str path, std::uint32_t piece_size,
   try {
     files = lt::list_files(root, flags);
   } catch (lt::system_error const& e) {
-    fail("invalid_input", "listing " + root + ": " + e.code().message());
+    fail(FailureKind::InvalidInput, "listing " + root + ": " + e.code().message());
   }
-  if (files.empty()) fail("invalid_input", "no files under " + root);
+  if (files.empty()) fail(FailureKind::InvalidInput, "no files under " + root);
   // Directory order is filesystem-dependent, and the v1 file order is part of
   // the info hash.
   std::sort(files.begin(), files.end(),
@@ -595,7 +596,7 @@ rust::Vec<std::uint8_t> create_torrent(rust::Str path, std::uint32_t piece_size,
   t.set_creator("torrential");
   lt::error_code ec;
   lt::set_piece_hashes(t, std::filesystem::path(root).parent_path().string(), ec);
-  if (ec) fail("invalid_input", "hashing " + root + ": " + ec.message());
+  if (ec) fail(FailureKind::InvalidInput, "hashing " + root + ": " + ec.message());
   return to_vec(t.generate_buf());
 }
 

@@ -16,9 +16,6 @@ struct Served {
     total: u64,
 }
 
-/// A leecher under `policy` downloads everything from a seeder. The seeder
-/// then leaves, so a third peer that connects can only get pieces from the
-/// leecher.
 fn serve_third_peer(policy: UploadPolicy, name: &str) -> Served {
     let fixture = Fixture::new(name, &FILES, 7);
     let torrent = fixture.torrent(TorrentFormat::V1);

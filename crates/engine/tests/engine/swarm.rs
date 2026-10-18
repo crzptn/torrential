@@ -8,12 +8,9 @@ use torrential_engine::{
 };
 
 use crate::support::{
-    Fixture, Node, bencode, expected_hashes, info_hash, loopback, magnet, sha256_file,
+    Fixture, Node, PIECE, bencode, expected_hashes, info_hash, loopback, magnet, sha256_file,
 };
 
-/// Sizes chosen so each file boundary falls inside a 16 KiB piece: piece 2
-/// holds the end of a.bin and the start of b.bin, and piece 4 holds the end
-/// of b.bin and the start of c.bin.
 const FILES: [(&str, usize); 3] = [("a.bin", 40_000), ("b.bin", 30_000), ("c.bin", 50_000)];
 
 #[test]
@@ -73,9 +70,17 @@ fn magnet_leecher_fetches_metadata_and_only_the_selected_files() {
         panic!("metadata is known: {status:?}");
     };
     let verified: Vec<(u32, u64)> = files.iter().map(|f| (f.index.get(), f.verified)).collect();
-    // b.bin shares pieces 2 and 4 with its neighbours: 49_152 - 40_000 bytes
-    // and 70_000 - 65_536 bytes.
-    assert_eq!(verified, [(0, 40_000), (1, 9_152 + 4_464), (2, 50_000)]);
+    let piece = u64::from(PIECE);
+    let b_bytes_in_piece_2 = 3 * piece - 40_000;
+    let b_bytes_in_piece_4 = 70_000 - 4 * piece;
+    assert_eq!(
+        verified,
+        [
+            (0, 40_000),
+            (1, b_bytes_in_piece_2 + b_bytes_in_piece_4),
+            (2, 50_000)
+        ]
+    );
     assert_eq!(status.progress.selected_bytes(), 90_000);
     assert_eq!(status.progress.verified_selected_bytes(), 90_000);
 

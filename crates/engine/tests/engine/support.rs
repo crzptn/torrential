@@ -15,8 +15,6 @@ use torrential_engine::{
 pub const PIECE: u32 = 16 * 1024;
 pub const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// A session on 127.0.0.1 with DHT, LSD, and port mapping off, so peers only
-/// meet through `connect_peer` or `AddTorrent::peers`.
 pub fn loopback() -> Config {
     Config {
         listen: vec![SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)],
@@ -43,15 +41,12 @@ pub fn upload(policy: UploadPolicy) -> Config {
     }
 }
 
-/// A session plus every alert it has produced, so a test can wait for one
-/// alert and later ask what else happened.
 pub struct Node {
     pub session: Session,
     pub log: Vec<Alert>,
-    /// Alerts before this index have been matched or passed over by
-    /// `wait_for`. One read can return several alerts, and a later wait must
-    /// still see the ones after the match.
-    waited: usize,
+    /// One read can return several alerts, and a later `wait_for` must still
+    /// see the ones after the alert it matched.
+    examined: usize,
     port: u16,
 }
 
@@ -61,7 +56,7 @@ impl Node {
         let mut node = Node {
             session,
             log: Vec::new(),
-            waited: 0,
+            examined: 0,
             port: 0,
         };
         node.wait_for("listen socket", |a| {
@@ -79,8 +74,6 @@ impl Node {
         self.session.add(add).expect("torrent added").id()
     }
 
-    /// Adds `metainfo` over existing data in `save_path` and waits until it
-    /// has checked the files.
     pub fn seed(&mut self, metainfo: &Metainfo, save_path: &Path) -> TorrentId {
         let id = self.add(AddTorrent::new(
             TorrentSource::Metainfo(metainfo.clone()),
@@ -101,16 +94,14 @@ impl Node {
         self.log.extend(alerts);
     }
 
-    /// Returns the first alert after the previous match that matches,
-    /// reading more alerts until one does.
     pub fn wait_for(&mut self, what: &str, mut matches: impl FnMut(&Alert) -> bool) -> Alert {
         let deadline = Instant::now() + TIMEOUT;
         loop {
-            if let Some(offset) = self.log[self.waited..].iter().position(&mut matches) {
-                self.waited += offset + 1;
-                return self.log[self.waited - 1].clone();
+            if let Some(offset) = self.log[self.examined..].iter().position(&mut matches) {
+                self.examined += offset + 1;
+                return self.log[self.examined - 1].clone();
             }
-            self.waited = self.log.len();
+            self.examined = self.log.len();
             if Instant::now() >= deadline {
                 panic!("timed out waiting for {what}; alerts seen: {:#?}", self.log);
             }
@@ -118,7 +109,6 @@ impl Node {
         }
     }
 
-    /// Polls the session, reading alerts in between, until `done` holds.
     pub fn wait_until(&mut self, what: &str, mut done: impl FnMut(&Session) -> bool) {
         let deadline = Instant::now() + TIMEOUT;
         while Instant::now() < deadline {
@@ -141,7 +131,6 @@ impl Node {
         });
     }
 
-    /// Reads alerts for `window` without waiting on anything.
     pub fn idle(&mut self, window: Duration) {
         let deadline = Instant::now() + window;
         while Instant::now() < deadline {
@@ -150,7 +139,6 @@ impl Node {
     }
 }
 
-/// Files under one directory, named after the torrent they become.
 pub struct Fixture {
     pub dir: TempDir,
     pub name: String,
@@ -158,7 +146,6 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    /// Pseudo-random contents, seeded so every run builds the same torrent.
     pub fn new(name: &str, files: &[(&str, usize)], seed: u64) -> Fixture {
         let dir = TempDir::new().unwrap();
         let mut state = seed | 1;
@@ -222,7 +209,6 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A magnet built from hashes the test computed itself, with no tracker.
 pub fn magnet(v1: Option<[u8; 20]>, v2: Option<[u8; 32]>) -> String {
     let mut uri = String::from("magnet:?");
     if let Some(v1) = v1 {
@@ -235,8 +221,6 @@ pub fn magnet(v1: Option<[u8; 20]>, v2: Option<[u8; 32]>) -> String {
     uri
 }
 
-/// The info hashes of a `.torrent`, computed from its raw info dictionary
-/// without libtorrent.
 pub fn expected_hashes(torrent: &[u8]) -> ([u8; 20], [u8; 32]) {
     let info = bencode::dict_value(torrent, b"info").expect("info dictionary");
     (sha1::Sha1::digest(info).into(), sha256(info))
@@ -253,9 +237,7 @@ pub fn info_hash(hashes: ([u8; 20], [u8; 32]), format: TorrentFormat) -> InfoHas
     }
 }
 
-/// Enough of a bencode reader to find raw values by key.
 pub mod bencode {
-    /// The raw bytes of `key`'s value in the dictionary that starts `data`.
     pub fn dict_value<'a>(data: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
         if data.first() != Some(&b'd') {
             return None;
@@ -273,7 +255,6 @@ pub mod bencode {
         None
     }
 
-    /// The contents of a raw bencoded string.
     pub fn string(raw: &[u8]) -> Option<&[u8]> {
         let colon = raw.iter().position(|&b| b == b':')?;
         let len: usize = std::str::from_utf8(&raw[..colon]).ok()?.parse().ok()?;
@@ -300,8 +281,6 @@ pub mod bencode {
     }
 }
 
-/// Length, modification time, and SHA-256 of every file under `dir`, so a
-/// test can tell whether anything on disk changed.
 pub fn snapshot(dir: &Path) -> BTreeMap<PathBuf, (u64, std::time::SystemTime, [u8; 32])> {
     let mut files = BTreeMap::new();
     let mut pending = vec![dir.to_path_buf()];

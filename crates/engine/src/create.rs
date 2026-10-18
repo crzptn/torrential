@@ -4,21 +4,22 @@ use crate::bridge::{self, ffi};
 use crate::error::{EngineError, ErrorKind};
 use crate::torrent::Metainfo;
 
-/// A piece size libtorrent accepts for both v1 and v2: a power of two of at
-/// least 16 KiB.
+/// A piece size libtorrent accepts for both v1 and v2: a power of two from
+/// 16 KiB to 128 MiB.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PieceSize(u32);
 
 impl PieceSize {
     pub const MIN: PieceSize = PieceSize(16 * 1024);
+    pub const MAX: PieceSize = PieceSize(128 * 1024 * 1024);
 
     pub fn new(bytes: u32) -> Result<PieceSize, EngineError> {
-        if bytes.is_power_of_two() && bytes >= Self::MIN.0 {
+        if bytes.is_power_of_two() && (Self::MIN.0..=Self::MAX.0).contains(&bytes) {
             Ok(PieceSize(bytes))
         } else {
             Err(EngineError::new(
                 ErrorKind::InvalidInput,
-                format!("piece size {bytes} is not a power of two of at least 16 KiB"),
+                format!("piece size {bytes} is not a power of two from 16 KiB to 128 MiB"),
             ))
         }
     }

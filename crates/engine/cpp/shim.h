@@ -1,5 +1,3 @@
-// The C++ half of the bridge. It translates between the cxx records in
-// src/bridge.rs and libtorrent calls, and holds no policy of its own.
 #pragma once
 
 #include <cstdint>
@@ -13,8 +11,6 @@
 
 namespace torrential {
 
-// Formats any in-flight exception as "<kind>:<message>". src/bridge.rs parses
-// the kind back into an ErrorKind.
 std::string describe_exception(std::exception_ptr error);
 
 }  // namespace torrential
