@@ -11,7 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 use torrential_core::units::format_duration;
 use torrential_core::{Flag, Job, JobStatus, Release, ReleaseId, SourceOutcome};
 
-use crate::format::{age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
+use crate::format::{self, age, ellipsize, home_path, middle, percent, rate, seeds, size, width};
 use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
 use crate::state::{Engine, Files, Focus, Item, SearchPhase, Sort, State, Tone, label};
 use crate::theme::*;
@@ -421,11 +421,13 @@ fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
     let name = job.name.clone().unwrap_or_else(|| job.id.to_hex());
     let p = &job.progress;
     if done {
-        put(buf, CONTENT, y, g.tail - 2 - CONTENT, &name, ink);
+        let room = g.tail - 2 - CONTENT;
+        put(buf, CONTENT, y, room, &format::name(&name, room.into()), ink);
         put_right(buf, g.right, y, &p.size.map_or("–".into(), size), ink);
         return;
     }
-    put(buf, CONTENT, y, g.rule - 2 - CONTENT, &name, ink);
+    let room = g.rule - 2 - CONTENT;
+    put(buf, CONTENT, y, room, &format::name(&name, room.into()), ink);
     let moving = job.status == JobStatus::Downloading;
     progress(buf, g.rule, y, g.rule_cells, p.fraction(), if moving { ACTION } else { PENCIL });
     let pct = p.size.map_or("–".to_string(), |size| percent(p.verified, size));
@@ -541,7 +543,8 @@ fn result_row(buf: &mut Buffer, state: &State, release: &Release, c: &Columns, y
         mark(buf, y);
     }
     let pick = |plain: Color| if is_selected { bold(INK) } else { fg(plain) };
-    put(buf, CONTENT, y, c.flag - 2 - CONTENT, &release.name, pick(TEXT));
+    let room = c.flag - 2 - CONTENT;
+    put(buf, CONTENT, y, room, &format::name(&release.name, room.into()), pick(TEXT));
     if let Some(flag) = first_flag(release) {
         let style = match flag {
             Flag::Cam => fg(ERROR),

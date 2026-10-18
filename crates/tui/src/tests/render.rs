@@ -94,6 +94,13 @@ fn help_screens() {
 }
 
 #[test]
+fn a_cut_name_keeps_its_end() {
+    let screen = shot(&searched((80, 24)));
+    assert!(screen.contains("Night of the…Dead (1968) [DVD]"), "{screen}");
+    assert!(screen.contains("Night.of.the…1080p.BluRay.x264"), "{screen}");
+}
+
+#[test]
 fn a_small_window_asks_to_grow() {
     let state = app((52, 14));
     assert!(shot(&state).contains("Make the window at least 60×16."));

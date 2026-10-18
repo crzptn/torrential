@@ -65,6 +65,49 @@ pub fn middle(s: &str, max: usize) -> String {
     start
 }
 
+/// How far a cut may move to land on a word break.
+const NEAR: usize = 4;
+
+fn in_word(c: char) -> bool {
+    c.is_alphanumeric()
+}
+
+fn separator(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '.' | '_' | '-' | ',')
+}
+
+/// Cuts a torrent's name in the middle, giving two thirds of the room to its end, where the
+/// version, resolution, and edition sit. A cut inside a word moves to a nearby break, so no
+/// fragment like `80p` is left.
+pub fn name(s: &str, max: usize) -> String {
+    if width(s) <= max || max < 8 {
+        return ellipsize(s, max);
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let inside = |at: usize| at > 0 && at < chars.len() && in_word(chars[at - 1]) && in_word(chars[at]);
+    let room = max - 1;
+    let (mut start, mut used) = (chars.len(), 0);
+    while used + char_width(chars[start - 1]) <= room * 2 / 3 {
+        start -= 1;
+        used += char_width(chars[start]);
+    }
+    if inside(start) {
+        start = (start..(start + NEAR).min(chars.len())).find(|&i| !in_word(chars[i])).unwrap_or(start);
+    }
+    let tail: String = chars[start..].iter().collect();
+    let tail = tail.trim_start_matches(separator);
+    let (mut end, mut used) = (0, 0);
+    while used + char_width(chars[end]) <= room - width(tail) {
+        used += char_width(chars[end]);
+        end += 1;
+    }
+    if inside(end) {
+        end = (end.saturating_sub(NEAR)..end).rev().find(|&i| !in_word(chars[i])).unwrap_or(end);
+    }
+    let head: String = chars[..end].iter().collect();
+    format!("{}…{tail}", head.trim_end_matches(separator))
+}
+
 /// `now` under a minute, then `45m`, `5h`, `17d`, `2mo`, `3y`.
 pub fn age(published: i64, now: i64) -> String {
     let secs = (now - published).max(0);
@@ -142,6 +185,15 @@ mod tests {
     fn cuts_paths_in_the_middle() {
         assert_eq!(middle("~/Downloads/night_of_the_living_dead_meta.xml", 30), "~/Downloads/nig…_dead_meta.xml");
         assert_eq!(middle("~/x", 30), "~/x");
+    }
+
+    #[test]
+    fn names_keep_their_ends_and_cut_at_word_breaks() {
+        assert_eq!(name("Night of the Living Dead (1968) [DVD]", 31), "Night of the…Dead (1968) [DVD]");
+        assert_eq!(name("Night.of.the.Living.Dead.1968.1080p.BluRay.x264", 31), "Night.of.the…1080p.BluRay.x264");
+        assert_eq!(name("ubuntu-24.04.5-desktop-amd64.iso", 20), "ubuntu-24…amd64.iso");
+        assert_eq!(name("Night of the Living Dead", 31), "Night of the Living Dead");
+        assert_eq!(name("日本語のタイトル 第1話 1080p", 16), "日本語のタ…1080p");
     }
 
     #[test]
