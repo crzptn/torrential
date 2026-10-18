@@ -23,13 +23,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use futures_util::FutureExt;
-use futures_util::future::join_all;
+use futures_util::stream::FuturesUnordered;
+use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, timeout_at};
 use torrential_core::{Error, ErrorCode, SearchQuery, SearchResult};
 
-use crate::assemble::{Answer, Run, assemble, vet};
+use crate::assemble::{Answer, Run, assemble, merged, vet};
 use crate::cache::AnswerKey;
 pub use crate::cache::ResultCache;
 use crate::http::Http;
@@ -80,6 +80,14 @@ pub struct SourceInfo {
     pub lawful: bool,
 }
 
+/// A search under way: the sources that have answered, merged and ranked the way
+/// the final result is, and the sources still to answer, most authoritative first.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Progress {
+    pub result: SearchResult,
+    pub pending: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct Search {
     inner: Arc<Inner>,
@@ -111,6 +119,16 @@ impl Search {
     /// reported as `timeout`. Fails with `providers_unavailable` when no source
     /// answered, and with `usage` for a query without words or an unknown source.
     pub async fn search(&self, query: &SearchQuery) -> Result<SearchResult, Error> {
+        self.search_with_progress(query, |_| {}).await
+    }
+
+    /// Like [`Search::search`], and calls `progress` each time sources answer while
+    /// others are still pending. Answers that arrive together make one call.
+    pub async fn search_with_progress(
+        &self,
+        query: &SearchQuery,
+        mut progress: impl FnMut(Progress) + Send,
+    ) -> Result<SearchResult, Error> {
         let started = Instant::now();
         let terms = Terms::parse(&query.text);
         if terms.is_empty() {
@@ -120,7 +138,8 @@ impl Search {
         }
         let deadline = started + Duration::from_millis(query.timeout_ms.into());
         let cache = &self.inner.cache;
-        let lookups = self.select(&query.sources)?.into_iter().map(|source| {
+        let selected = self.select(&query.sources)?;
+        let lookups = selected.iter().cloned().map(|source| {
             let key = AnswerKey {
                 source: source.meta.name.clone(),
                 scope: source.scope(),
@@ -148,9 +167,26 @@ impl Search {
                 Run { source: source.meta.clone(), answer, elapsed_ms: millis(started.elapsed()) }
             }
         });
-        let runs = join_all(lookups).await;
+        let mut lookups: FuturesUnordered<_> = lookups.collect();
+        let mut runs: Vec<Run> = Vec::with_capacity(selected.len());
+        while let Some(run) = lookups.next().await {
+            runs.push(run);
+            while let Some(Some(run)) = lookups.next().now_or_never() {
+                runs.push(run);
+            }
+            if runs.len() < selected.len() {
+                let (result, linked) = merged(query, &terms, &runs, millis(started.elapsed()));
+                cache.remember(&linked);
+                let pending = selected
+                    .iter()
+                    .filter(|s| !runs.iter().any(|r| r.source.name == s.meta.name))
+                    .map(|s| s.meta.name.clone())
+                    .collect();
+                progress(Progress { result, pending });
+            }
+        }
         let (result, linked) = assemble(query, &terms, &runs, millis(started.elapsed()))?;
-        self.inner.cache.remember(&linked);
+        cache.remember(&linked);
         Ok(result)
     }
 

@@ -49,12 +49,24 @@ pub(crate) fn assemble(
     runs: &[Run],
     elapsed_ms: u32,
 ) -> Result<(SearchResult, Vec<Release>), Error> {
+    let (result, linked) = merged(query, terms, runs, elapsed_ms);
+    if !result.sources.iter().any(|r| r.outcome.is_ok()) {
+        return Err(all_failed(result.sources));
+    }
+    Ok((result, linked))
+}
+
+/// What the answers add up to, even when none succeeded, as a search still
+/// waiting on other sources shows them.
+pub(crate) fn merged(
+    query: &SearchQuery,
+    terms: &Terms,
+    runs: &[Run],
+    elapsed_ms: u32,
+) -> (SearchResult, Vec<Release>) {
     let mut runs: Vec<&Run> = runs.iter().collect();
     runs.sort_by_key(|r| r.source.authority);
     let sources: Vec<SourceReport> = runs.iter().map(|r| report(r)).collect();
-    if !sources.iter().any(|r| r.outcome.is_ok()) {
-        return Err(all_failed(sources));
-    }
     let sightings = runs.iter().flat_map(|run| {
         let rows: &[Observation] = match &run.answer {
             Answer::Fresh(rows) | Answer::Cached(rows) => rows,
@@ -68,7 +80,7 @@ pub(crate) fn assemble(
     kept.truncate(query.limit.into());
     let releases = kept.iter().map(Candidate::shown).collect();
     let result = SearchResult { query: query.clone(), releases, total, hidden_adult, sources, elapsed_ms };
-    Ok((result, kept.into_iter().map(|c| c.release).collect()))
+    (result, kept.into_iter().map(|c| c.release).collect())
 }
 
 fn report(run: &Run) -> SourceReport {

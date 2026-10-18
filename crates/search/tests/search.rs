@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use torrential_core::error::Details;
 use torrential_core::{ErrorCode, Flag, HexPrefix, SearchQuery, SourceOutcome};
-use torrential_search::{ResultCache, Search, SearchConfig, TorznabConfig};
+use torrential_search::{Progress, ResultCache, Search, SearchConfig, TorznabConfig};
 
 #[derive(Clone)]
 struct Reply {
@@ -563,6 +563,40 @@ async fn the_academic_catalog_survives_a_restart() {
     assert_eq!(listed(&after_restart), listed(&first));
     assert_eq!(down.hits("/academictorrents/"), 0);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn progress_shows_each_answer_and_the_final_ranking_is_unchanged() {
+    let late = |body: Vec<u8>, ms: u64| Reply { delay: Duration::from_millis(ms), ..ok(body) };
+    let server = Server::start(vec![
+        ("/knaben/", vec![ok(fixture("knaben/v2-search-ubuntu.json"))]),
+        ("/apibay/", vec![late(fixture("apibay/q.php-ubuntu.json"), 300)]),
+        ("/nyaa/", vec![Reply { delay: Duration::from_millis(600), ..status(404) }]),
+    ])
+    .await;
+    let sources = ["knaben", "apibay", "nyaa"];
+    let mut q = query("ubuntu", &sources);
+    q.limit = 200;
+    let streamed = Search::new(&server.config(&sources), ResultCache::new()).unwrap();
+    let mut updates: Vec<Progress> = Vec::new();
+
+    let last = streamed.search_with_progress(&q, |p| updates.push(p)).await.unwrap();
+    let whole = Search::new(&server.config(&sources), ResultCache::new()).unwrap().search(&q).await.unwrap();
+
+    let seen: Vec<String> = updates
+        .iter()
+        .map(|p| format!("{:?} total {} pending {:?}", outcomes(&p.result), p.result.total, p.pending))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            r#"[("knaben", Ok { results: 98 })] total 97 pending ["apibay", "nyaa"]"#,
+            r#"[("knaben", Ok { results: 98 }), ("apibay", Ok { results: 100 })] total 158 pending ["nyaa"]"#,
+        ]
+    );
+    assert_eq!(outcomes(&last)[2], ("nyaa".into(), SourceOutcome::Http { status: 404 }));
+    assert_eq!(last.releases, whole.releases);
+    assert_eq!(last.releases, updates[1].result.releases);
 }
 
 #[tokio::test]
