@@ -839,7 +839,7 @@ impl Owner {
                 if let Some(job) = self.jobs.get_mut(&id) {
                     let now = Instant::now();
                     job.sample(stats, now);
-                    if job.unsourced_for(now).is_some_and(|d| d >= self.config.stall_after) {
+                    if job.unsourced_for().is_some_and(|d| d >= self.config.stall_after) {
                         self.stop_unsourced(id);
                     } else {
                         self.publish(id);
@@ -1069,9 +1069,7 @@ impl Owner {
                 job.record.piece_map = piece_map;
                 job.record.files_verified = files;
             }
-            // A failed check or a stop for lack of sources held the torrent for this save. A new
-            // verify or a resume moved it on.
-            if matches!(job.record.intent, Intent::Failed { .. }) && job.observed == Observed::InEngine(Phase::Paused) {
+            if job.held_for_save() {
                 job.observed = Observed::Absent;
                 job.forget_sources();
                 self.engine.send(EngineCommand::Remove(id));
@@ -1093,12 +1091,26 @@ impl Owner {
         self.engine.send(EngineCommand::SaveResume(id));
         let short = id.to_hex()[..6].to_string();
         let intent = job.record.intent.clone();
+        // Damage contradicts the stored resume data, so the check's count replaces it in one write,
+        // and until the engine saves again the next add hashes the files instead of trusting it.
+        let files = job.record.files_verified.clone().unwrap_or_default();
+        let record = |store: &mut Store, intent: Option<&Intent>| {
+            let _ = store.record_check(id, intent, verified, piece_map, &files);
+        };
         match (intent, damaged, mode) {
-            (Intent::Running, ..) => {
+            (Intent::Running, n, _) => {
+                if n > 0 {
+                    record(&mut self.store, None);
+                }
                 job.observed = Observed::InEngine(Phase::Downloading);
                 self.engine.send(EngineCommand::Resume(id));
             }
-            (Intent::Paused, ..) => job.observed = Observed::InEngine(Phase::Paused),
+            (Intent::Paused, n, _) => {
+                if n > 0 {
+                    record(&mut self.store, None);
+                }
+                job.observed = Observed::InEngine(Phase::Paused);
+            }
             (Intent::Done { .. } | Intent::Failed { .. }, 0, _) => {
                 let finished_at = match job.record.intent {
                     Intent::Done { finished_at } => finished_at,
@@ -1113,22 +1125,25 @@ impl Owner {
                 self.draining.insert(id);
             }
             (Intent::Done { .. } | Intent::Failed { .. }, _, Verify::Repair) => {
-                let _ = self.store.set_intent(id, &Intent::Running);
+                record(&mut self.store, Some(&Intent::Running));
                 job.record.intent = Intent::Running;
                 job.observed = Observed::InEngine(Phase::Downloading);
                 self.engine.send(EngineCommand::Resume(id));
             }
-            (Intent::Done { .. } | Intent::Failed { .. }, n, Verify::Report) => {
+            // Pieces that never arrived count as damaged too, so the error that stopped it stays.
+            (Intent::Failed { .. }, _, Verify::Report) => {
+                record(&mut self.store, None);
+                job.observed = Observed::InEngine(Phase::Paused);
+            }
+            (Intent::Done { .. }, n, Verify::Report) => {
                 let error = Error::new(
                     ErrorCode::VerificationFailed,
                     format!("{} in the selected files", crate::output::format::count(n as usize, "damaged piece")),
                 )
                 .with_hint(format!("torrential verify {short} --repair downloads them again"));
                 let failed = Intent::Failed { error };
-                let files = job.record.files_verified.as_deref().unwrap_or_default();
-                let _ = self.store.record_failed_check(id, &failed, verified, piece_map, files);
+                record(&mut self.store, Some(&failed));
                 job.record.intent = failed;
-                // Held until the engine saves the check's resume data, so a restart resumes from it.
                 job.observed = Observed::InEngine(Phase::Paused);
             }
         }

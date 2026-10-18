@@ -111,9 +111,11 @@ pub struct JobEntry {
     receiving_since: Option<Instant>,
     /// The rate had stayed above zero for `ETA_AFTER` at the last sample.
     rate_settled: bool,
-    /// Since when the connected peers and web seeds have had none of the pieces the download
-    /// still needs, as of the last sample while downloading.
-    unsourced_since: Option<Instant>,
+    /// Connected time while downloading in which the peers and web seeds had none of the pieces
+    /// the download still needs, summed over consecutive samples.
+    unsourced: Duration,
+    /// The last sample that added to `unsourced`. `None` once a sample breaks the run.
+    unsourced_at: Option<Instant>,
     pub verify: Option<Verify>,
 }
 
@@ -126,7 +128,8 @@ impl JobEntry {
             stats: Stats::default(),
             receiving_since: None,
             rate_settled: false,
-            unsourced_since: None,
+            unsourced: Duration::ZERO,
+            unsourced_at: None,
             verify: None,
         }
     }
@@ -134,25 +137,37 @@ impl JobEntry {
     pub fn sample(&mut self, stats: Stats, at: Instant) {
         self.receiving_since = if stats.down_rate > 0 { self.receiving_since.or(Some(at)) } else { None };
         self.rate_settled = self.receiving_since.is_some_and(|since| at - since >= ETA_AFTER);
-        if self.observed != Observed::InEngine(Phase::Downloading) {
-            self.unsourced_since = None;
-        } else if stats.peers > 0 {
-            // With nothing connected, as in a network outage, a sample says nothing about sources.
-            let unsourced = stats.missing.is_some_and(|m| m.pieces > 0 && m.unavailable == m.pieces);
-            self.unsourced_since = if unsourced { self.unsourced_since.or(Some(at)) } else { None };
+        let downloading = self.observed == Observed::InEngine(Phase::Downloading);
+        let unsourced = stats.missing.is_some_and(|m| m.pieces > 0 && m.unavailable == m.pieces);
+        match (downloading, stats.peers > 0, unsourced) {
+            (false, ..) | (true, true, false) => self.forget_sources(),
+            // Nothing connected, as in a network outage, earns no time. Neither does the first
+            // sample after it, which can come before a new peer has said what it has.
+            (true, false, _) => self.unsourced_at = None,
+            (true, true, true) => {
+                self.unsourced += self.unsourced_at.map_or(Duration::ZERO, |last| at - last);
+                self.unsourced_at = Some(at);
+            }
         }
         self.stats = stats;
     }
 
     /// How long the connected peers and web seeds have had none of the pieces still missing.
-    /// `None` while nothing is connected, so only a source that is there to ask can end it.
-    pub fn unsourced_for(&self, at: Instant) -> Option<Duration> {
-        self.unsourced_since.filter(|_| self.stats.peers > 0).map(|since| at - since)
+    /// `None` unless the last sample found it so, so only a source that is there to ask can end it.
+    pub fn unsourced_for(&self) -> Option<Duration> {
+        self.unsourced_at.map(|_| self.unsourced)
     }
 
-    /// The download left the engine, so its next run judges its sources afresh.
+    /// The download left the engine, or a source turned up, so its sources are judged afresh.
     pub fn forget_sources(&mut self) {
-        self.unsourced_since = None;
+        self.unsourced = Duration::ZERO;
+        self.unsourced_at = None;
+    }
+
+    /// A failed download kept paused in the engine until its resume data is saved, after a check
+    /// or a stop for lack of sources. It leaves once the save lands.
+    pub fn held_for_save(&self) -> bool {
+        matches!(self.record.intent, Intent::Failed { .. }) && self.observed == Observed::InEngine(Phase::Paused)
     }
 
     pub fn id(&self) -> TorrentId {
@@ -200,7 +215,7 @@ impl JobEntry {
         let verified = self.verified();
         let s = if transferring { self.stats } else { Stats::default() };
         let eta = match size {
-            Some(size) if s.down_rate > 0 && self.rate_settled && self.unsourced_since.is_none() => {
+            Some(size) if s.down_rate > 0 && self.rate_settled && self.unsourced_at.is_none() => {
                 Some(size.saturating_sub(verified).div_ceil(s.down_rate))
             }
             _ => None,
@@ -323,26 +338,25 @@ mod tests {
     }
 
     #[test]
-    fn only_connected_sources_that_lack_every_missing_piece_count_as_none() {
+    fn only_connected_time_without_a_source_for_any_missing_piece_counts() {
         let mut job = entry(1, 0, Intent::Running, Observed::InEngine(Phase::Downloading));
         let start = Instant::now();
-        let at = |second| start + Duration::from_secs(second);
         let sample = |job: &mut JobEntry, second, peers, unavailable| {
             let missing = Some(Missing { pieces: 2, unavailable });
-            job.sample(Stats { peers, missing, ..Stats::default() }, at(second));
+            job.sample(Stats { peers, missing, ..Stats::default() }, start + Duration::from_secs(second));
+            job.unsourced_for().map(|d| d.as_secs())
         };
-        sample(&mut job, 0, 0, 2);
-        assert_eq!(job.unsourced_for(at(0)), None, "nothing connected");
-        sample(&mut job, 1, 2, 1);
-        assert_eq!(job.unsourced_for(at(1)), None, "a peer has one of the pieces");
-        sample(&mut job, 2, 2, 2);
-        sample(&mut job, 3, 0, 2);
-        assert_eq!(job.unsourced_for(at(9)), None, "nothing connected to ask");
-        sample(&mut job, 9, 1, 2);
-        assert_eq!(job.unsourced_for(at(9)), Some(Duration::from_secs(7)), "the gap kept the clock");
+        assert_eq!(sample(&mut job, 0, 0, 2), None, "nothing connected");
+        assert_eq!(sample(&mut job, 1, 2, 1), None, "a peer has one of the pieces");
+        assert_eq!(sample(&mut job, 2, 2, 2), Some(0));
+        assert_eq!(sample(&mut job, 5, 2, 2), Some(3));
+        assert_eq!(sample(&mut job, 6, 0, 2), None, "nothing connected to ask");
+        assert_eq!(sample(&mut job, 900, 2, 2), Some(3), "the outage and the first sample after it earn nothing");
+        assert_eq!(sample(&mut job, 901, 2, 2), Some(4));
+        assert_eq!(sample(&mut job, 902, 2, 1), None, "a source turned up");
+        assert_eq!(sample(&mut job, 903, 2, 2), Some(0), "and the count starts over");
         job.observed = Observed::InEngine(Phase::Pausing);
-        sample(&mut job, 10, 2, 2);
-        assert_eq!(job.unsourced_for(at(10)), None, "only downloading counts");
+        assert_eq!(sample(&mut job, 904, 2, 2), None, "only downloading counts");
     }
 
     #[test]

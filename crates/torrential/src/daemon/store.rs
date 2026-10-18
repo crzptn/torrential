@@ -270,31 +270,28 @@ impl Store {
         })
     }
 
-    /// Records a check that found damage, in one transaction. The stored resume data describes
-    /// the download before the check, so it goes too: until the engine saves the check's own,
-    /// the next add hashes the files rather than trusting it.
-    pub fn record_failed_check(
+    /// Records a check that found damage, with the intent it leads to, in one transaction. The
+    /// stored resume data describes the download before the check, so it goes too: until the
+    /// engine saves the check's own, the next add hashes the files rather than trusting it.
+    pub fn record_check(
         &mut self,
         id: TorrentId,
-        intent: &Intent,
+        intent: Option<&Intent>,
         verified: u64,
         piece_map: Option<PieceMap>,
         files: &[u64],
     ) -> Result<(), Error> {
-        let (intent, finished_at, error) = intent_columns(intent);
         self.write(|tx| {
+            if let Some(intent) = intent {
+                let (intent, finished_at, error) = intent_columns(intent);
+                tx.execute(
+                    "UPDATE jobs SET intent = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
+                    params![id.to_hex(), intent, finished_at, error],
+                )?;
+            }
             tx.execute(
-                "UPDATE jobs SET intent = ?2, finished_at = ?3, error = ?4, verified = ?5, piece_map = ?6, \
-                 files_verified = ?7 WHERE id = ?1",
-                params![
-                    id.to_hex(),
-                    intent,
-                    finished_at,
-                    error,
-                    verified as i64,
-                    piece_map.map(|m| m.to_string()),
-                    json(&files)
-                ],
+                "UPDATE jobs SET verified = ?2, piece_map = ?3, files_verified = ?4 WHERE id = ?1",
+                params![id.to_hex(), verified as i64, piece_map.map(|m| m.to_string()), json(&files)],
             )?;
             tx.execute("DELETE FROM resume WHERE job = ?1", [id.to_hex()]).map(drop)
         })
@@ -588,7 +585,7 @@ mod tests {
         store.insert(&record(6), None, 100).unwrap();
         store.finish(id, 200, b"every piece", 42).unwrap();
         let failed = Intent::Failed { error: Error::new(ErrorCode::VerificationFailed, "1 damaged piece") };
-        store.record_failed_check(id, &failed, 30, None, &[20, 10]).unwrap();
+        store.record_check(id, Some(&failed), 30, None, &[20, 10]).unwrap();
         let jobs = store.jobs().unwrap();
         let checked = JobRecord { intent: failed, verified: 30, files_verified: Some(vec![20, 10]), ..record(6) };
         assert_eq!(jobs[0].record, checked);

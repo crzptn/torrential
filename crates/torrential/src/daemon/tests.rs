@@ -604,6 +604,13 @@ async fn a_download_whose_missing_pieces_have_no_source_stops_and_resume_looks_a
             Some("torrential resume 222222 looks for them again; the 1020.0 MiB verified stays")
         )
     );
+    let verify = || h.changes(Request::Verify { reference: prefix(&film), repair: false });
+    while verify().await.is_err() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let jobs = h.until("checked", |jobs| jobs[0].status.name() == "error").await;
+    let JobStatus::Error { error } = &jobs[0].status else { unreachable!() };
+    assert_eq!(error.code, ErrorCode::NoSource, "pieces that never arrived are not damage");
     h.swarm.withhold(film.info_hash.id(), 0);
     h.changes(Request::Resume { refs: vec![prefix(&film)], all: false }).await.unwrap();
     h.until("done", |jobs| jobs[0].status.name() == "done").await;
