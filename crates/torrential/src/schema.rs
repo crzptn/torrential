@@ -177,12 +177,13 @@ mod tests {
                 "rm",
                 "verify",
                 "doctor",
+                "tui",
                 "daemon",
                 "schema",
                 "completions"
             ]
         );
-        let daemon = &schema()["commands"][10]["subcommands"];
+        let daemon = &schema()["commands"][11]["subcommands"];
         let subs: Vec<&str> = daemon.as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
         assert_eq!(subs, ["status", "stop", "install", "uninstall"]);
     }

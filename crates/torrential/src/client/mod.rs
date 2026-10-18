@@ -1,6 +1,7 @@
 pub mod connect;
 pub mod launch;
 pub mod service;
+pub mod tui;
 pub mod wait;
 
 use std::io::Write;
@@ -106,6 +107,7 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
             changes(engine()?, Request::Verify { reference, repair: args.repair }, ChangeCommand::Verify, mode)
         }
         Command::Doctor => Ok(doctor(env, mode)),
+        Command::Tui => tui::run(env),
         Command::Daemon { command } => daemon(command, env, mode),
         Command::Schema => {
             let schema = crate::schema::build(&<crate::cli::Cli as clap::CommandFactory>::command(), env.version());

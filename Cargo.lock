@@ -3136,6 +3136,7 @@ dependencies = [
  "tokio",
  "torrential-core",
  "torrential-engine",
+ "torrential-tui",
  "url",
 ]
 

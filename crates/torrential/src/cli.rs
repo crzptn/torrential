@@ -57,6 +57,8 @@ pub enum Command {
     Verify(VerifyArgs),
     /// Diagnose sandbox, disk, state, engine, and sources
     Doctor,
+    /// Open the terminal UI, which `torrential` alone also opens on a terminal
+    Tui,
     /// Inspect or manage the engine process
     Daemon {
         #[command(subcommand)]

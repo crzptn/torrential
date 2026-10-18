@@ -2,6 +2,7 @@ use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
+use serde::de::DeserializeOwned;
 use torrential_core::protocol::{Request, Response, WIRE_VERSION};
 use torrential_core::{Error, ErrorCode};
 
@@ -28,9 +29,14 @@ impl Conn {
 
     pub fn call_within(&mut self, request: &Request, within: Duration) -> Result<Response, Error> {
         self.send(request)?;
+        self.read_within(within)
+    }
+
+    /// The next frame, which for a streaming search may be an `Event` rather than a `Response`.
+    pub fn read_within<T: DeserializeOwned>(&mut self, within: Duration) -> Result<T, Error> {
         self.stream.set_read_timeout(Some(within)).map_err(|e| self.lost(e))?;
-        let response = wire::read(&mut self.stream).map_err(|e| self.lost(e))?;
-        response.ok_or_else(|| self.lost(std::io::Error::from(ErrorKind::UnexpectedEof)))
+        let frame = wire::read(&mut self.stream).map_err(|e| self.lost(e))?;
+        frame.ok_or_else(|| self.lost(std::io::Error::from(ErrorKind::UnexpectedEof)))
     }
 
     pub fn send(&mut self, request: &Request) -> Result<(), Error> {

@@ -273,6 +273,12 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
       "flags": []
     },
     {
+      "name": "tui",
+      "about": "Open the terminal UI, which `torrential` alone also opens on a terminal",
+      "arguments": [],
+      "flags": []
+    },
+    {
       "name": "daemon",
       "about": "Inspect or manage the engine process",
       "arguments": [],

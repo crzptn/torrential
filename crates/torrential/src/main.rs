@@ -26,6 +26,7 @@ const SHORT_HELP: &str = "torrential searches torrent indexes and downloads torr
   torrential get <ID>             download it
   torrential wait <ID>            follow it until it is done
   torrential status               list downloads
+  torrential tui                  open the terminal UI
 
 Run torrential --help for every command, or torrential schema for JSON.
 ";
@@ -49,6 +50,9 @@ fn main() -> ExitCode {
         }
     };
     let Some(command) = cli.command else {
+        if !cli.json && stdout_is_terminal && std::io::stdin().is_terminal() {
+            return ExitCode::from(client::run(Command::Tui, Mode::Human, &env));
+        }
         print!("{SHORT_HELP}");
         return ExitCode::SUCCESS;
     };
