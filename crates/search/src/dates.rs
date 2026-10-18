@@ -1,5 +1,3 @@
-//! Dates as sources write them, turned into Unix seconds.
-
 use time::format_description::well_known::{Rfc2822, Rfc3339};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 

@@ -91,7 +91,6 @@ pub(crate) enum Adapter {
     Torznab { api_key: Option<String> },
 }
 
-/// What merging and ranking need to know about a source.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct SourceMeta {
     pub name: String,
@@ -110,7 +109,6 @@ pub(crate) struct Source {
     adapter: Adapter,
 }
 
-/// Why a source gave no usable answer.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Failure {
     Timeout,
@@ -157,7 +155,6 @@ impl Stores {
     }
 }
 
-/// Everything an adapter may use during one search.
 pub(crate) struct Ctx<'a> {
     pub http: &'a Http,
     pub stores: &'a Stores,

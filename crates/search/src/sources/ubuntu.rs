@@ -1,5 +1,3 @@
-//! Official Ubuntu torrents from releases.ubuntu.com.
-
 use url::Url;
 
 use super::listing::{self, Entry, LISTING_CAP};

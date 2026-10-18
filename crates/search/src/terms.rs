@@ -1,5 +1,3 @@
-//! The words of a query, and how well a release name covers them.
-
 use std::collections::HashSet;
 
 /// Words that say little on their own. They count toward coverage, but a row that
@@ -18,7 +16,8 @@ pub(crate) struct Terms {
     year: Option<u16>,
 }
 
-/// How a name relates to the year in the query. Ordered worst to best.
+/// How a name relates to the year in the query. The derived `Ord` relies on the
+/// variants running worst to best.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum YearMatch {
     /// The name carries a different year.

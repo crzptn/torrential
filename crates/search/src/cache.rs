@@ -1,5 +1,3 @@
-//! Recent answers and releases, held in memory by the engine process.
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};

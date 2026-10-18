@@ -1,5 +1,3 @@
-//! Official Debian torrents for the current release from cdimage.debian.org.
-
 use url::Url;
 
 use super::listing;

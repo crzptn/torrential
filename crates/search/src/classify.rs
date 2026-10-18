@@ -1,8 +1,6 @@
-//! Flags read from release names.
-
 use torrential_core::Category;
 
-/// Tokens no ordinary title contains.
+/// No ordinary title contains these, so any case counts.
 const CAM_ANY_CASE: &[&str] = &["hdcam", "camrip", "hdcamrip", "telesync", "telecine", "hdts", "hdtc"];
 /// Short tokens that collide with ordinary words ("Cam Newton", "TS Eliot") and file
 /// types (MPEG-TS). They count only in capitals and after the release year, where

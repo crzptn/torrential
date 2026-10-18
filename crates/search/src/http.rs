@@ -1,5 +1,3 @@
-//! The HTTP client every source shares.
-
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -8,12 +6,11 @@ use url::Url;
 
 const USER_AGENT: &str = concat!("torrential/", env!("CARGO_PKG_VERSION"));
 
-/// Response bodies by URL, in arrival order.
 pub type Recorded = Vec<(String, Vec<u8>)>;
 
 pub(crate) struct Http {
     client: reqwest::Client,
-    /// Every body received, by URL, when recording fixtures.
+    /// `Some` only while recording fixtures.
     recorded: Option<Mutex<Recorded>>,
 }
 

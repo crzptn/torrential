@@ -125,7 +125,6 @@ pub(crate) struct Magnet {
     pub trackers: Vec<String>,
 }
 
-/// Reads the infohashes (`btih` and `btmh`) and trackers of a magnet link.
 pub(crate) fn parse_magnet(raw: &str) -> Option<Magnet> {
     let url = url::Url::parse(raw.trim()).ok()?;
     if url.scheme() != "magnet" {
@@ -166,7 +165,6 @@ pub(crate) fn unescape_html(name: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// Unreserved characters stay literal; everything else is percent-encoded, spaces as `%20`.
 const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
 
 /// Encodes a URL query value with `%20` for spaces. apibay reads `+` literally.
