@@ -24,14 +24,14 @@ pub(crate) enum FetchError {
     Decode(String),
 }
 
-impl FetchError {
-    fn retryable(&self) -> bool {
-        match self {
-            Self::Timeout => true,
-            Self::Status(status) => *status >= 500,
-            Self::Connect(_) | Self::TooLarge(_) | Self::Decode(_) => false,
-        }
-    }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Retry {
+    /// A request with no response by three fifths of the time left is joined by a
+    /// second one, and a 5xx is asked once more.
+    Once,
+    /// Asking twice can cost twice: a Torznab search fans out to the user's
+    /// private trackers.
+    Never,
 }
 
 impl Http {
@@ -45,24 +45,14 @@ impl Http {
         Ok(Http { client, recorded: record.then(Mutex::default) })
     }
 
-    /// GETs `url`, giving up at `deadline`. A timeout or a 5xx is retried once when
-    /// time remains. The first attempt must start its response within three fifths
-    /// of the time left, so a stalled connection still leaves room for the retry; a
-    /// response that has started may use the whole deadline.
     pub async fn get(&self, url: &Url, cap: usize, deadline: Instant) -> Result<Vec<u8>, FetchError> {
-        const RETRY_PAUSE: Duration = Duration::from_millis(200);
-        const MIN_RETRY: Duration = Duration::from_millis(600);
-        let respond_by = Instant::now() + deadline.saturating_duration_since(Instant::now()) * 3 / 5;
-        let first = self.attempt(url, cap, respond_by, deadline).await;
-        let body = match first {
-            Err(e) if e.retryable() && deadline.saturating_duration_since(Instant::now()) > MIN_RETRY => {
-                if matches!(e, FetchError::Status(_)) {
-                    tokio::time::sleep(RETRY_PAUSE).await;
-                }
-                self.attempt(url, cap, deadline, deadline).await
-            }
-            other => other,
-        }?;
+        self.fetch(url, cap, deadline, Retry::Once).await
+    }
+
+    /// GETs `url`, giving up at `deadline`.
+    pub async fn fetch(&self, url: &Url, cap: usize, deadline: Instant, retry: Retry) -> Result<Vec<u8>, FetchError> {
+        let body =
+            timeout_at(deadline, self.fetch_by(url, cap, deadline, retry)).await.unwrap_or(Err(FetchError::Timeout))?;
         if let Some(recorded) = &self.recorded {
             recorded.lock().unwrap_or_else(|e| e.into_inner()).push((url.to_string(), body.clone()));
         }
@@ -76,33 +66,62 @@ impl Http {
             .unwrap_or_default()
     }
 
-    async fn attempt(
-        &self,
-        url: &Url,
-        cap: usize,
-        respond_by: Instant,
-        deadline: Instant,
-    ) -> Result<Vec<u8>, FetchError> {
-        let send = self.client.get(url.clone()).send();
-        let mut response = timeout_at(respond_by, send).await.map_err(|_| FetchError::Timeout)?.map_err(classify)?;
+    async fn fetch_by(&self, url: &Url, cap: usize, deadline: Instant, retry: Retry) -> Result<Vec<u8>, FetchError> {
+        const RETRY_PAUSE: Duration = Duration::from_millis(200);
+        const MIN_RETRY: Duration = Duration::from_millis(600);
+        let left = || deadline.saturating_duration_since(Instant::now());
+        let join_at = Instant::now() + left() * 3 / 5;
+        let can_join = retry == Retry::Once && left() * 2 / 5 > MIN_RETRY;
+        let first = self.respond(url);
+        tokio::pin!(first);
+        // The first request is never abandoned: a slow server may still answer it.
+        let (response, retried) = tokio::select! {
+            response = &mut first => (response, false),
+            _ = tokio::time::sleep_until(join_at), if can_join => (first_ok(first, self.respond(url)).await, true),
+        };
+        let response = match response {
+            Err(FetchError::Status(status))
+                if status >= 500 && retry == Retry::Once && !retried && left() > MIN_RETRY =>
+            {
+                tokio::time::sleep(RETRY_PAUSE).await;
+                self.respond(url).await
+            }
+            other => other,
+        }?;
+        read(response, cap).await
+    }
+
+    /// Resolves once a successful response has started.
+    async fn respond(&self, url: &Url) -> Result<reqwest::Response, FetchError> {
+        let response = self.client.get(url.clone()).send().await.map_err(classify)?;
         let status = response.status();
         if !status.is_success() {
             return Err(FetchError::Status(status.as_u16()));
         }
-        if response.content_length().is_some_and(|len| len > cap as u64) {
+        Ok(response)
+    }
+}
+
+async fn read(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>, FetchError> {
+    if response.content_length().is_some_and(|len| len > cap as u64) {
+        return Err(FetchError::TooLarge(cap));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(classify)? {
+        if body.len() + chunk.len() > cap {
             return Err(FetchError::TooLarge(cap));
         }
-        let read = async {
-            let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(classify)? {
-                if body.len() + chunk.len() > cap {
-                    return Err(FetchError::TooLarge(cap));
-                }
-                body.extend_from_slice(&chunk);
-            }
-            Ok(body)
-        };
-        timeout_at(deadline, read).await.unwrap_or(Err(FetchError::Timeout))
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// The first of two attempts to succeed, or the last error when both fail.
+async fn first_ok<T, E>(a: impl Future<Output = Result<T, E>>, b: impl Future<Output = Result<T, E>>) -> Result<T, E> {
+    tokio::pin!(a, b);
+    tokio::select! {
+        r = &mut a => match r { Ok(v) => Ok(v), Err(_) => b.await },
+        r = &mut b => match r { Ok(v) => Ok(v), Err(_) => a.await },
     }
 }
 

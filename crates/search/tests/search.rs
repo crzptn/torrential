@@ -231,6 +231,53 @@ async fn a_response_that_never_starts_is_retried_once() {
 }
 
 #[tokio::test]
+async fn a_slow_first_byte_is_raced_rather_than_abandoned() {
+    let slow = Reply { delay: Duration::from_millis(2000), ..ok(fixture("apibay/q.php-ubuntu.json")) };
+    let server = Server::start(vec![("/apibay/", vec![slow])]).await;
+    let search = Search::new(&server.config(&["apibay"]), ResultCache::new()).unwrap();
+
+    let result = search.search(&query("ubuntu", &["apibay"])).await.unwrap();
+
+    assert_eq!(outcomes(&result), [("apibay".into(), SourceOutcome::Ok { results: 100 })]);
+    assert!(result.elapsed_ms < 2600, "took {} ms", result.elapsed_ms);
+}
+
+#[tokio::test]
+async fn a_short_budget_waits_for_its_only_request() {
+    let slow = Reply { delay: Duration::from_millis(750), ..ok(fixture("apibay/q.php-ubuntu.json")) };
+    let server = Server::start(vec![("/apibay/", vec![slow])]).await;
+    let search = Search::new(&server.config(&["apibay"]), ResultCache::new()).unwrap();
+    let mut q = query("ubuntu", &["apibay"]);
+    q.timeout_ms = 1200;
+
+    let result = search.search(&q).await.unwrap();
+
+    assert_eq!(outcomes(&result), [("apibay".into(), SourceOutcome::Ok { results: 100 })]);
+    assert_eq!(server.hits("/apibay/"), 1);
+}
+
+#[tokio::test]
+async fn torznab_is_asked_only_once() {
+    let server =
+        Server::start(vec![("/torznab/api", vec![status(503), ok(fixture("torznab/jackett-ubuntu.xml"))])]).await;
+    let config = SearchConfig {
+        torznab: vec![TorznabConfig {
+            name: "jackett".into(),
+            url: format!("{}/torznab/api", server.base),
+            api_key: None,
+        }],
+        ..SearchConfig::default()
+    };
+    let search = Search::new(&config, ResultCache::new()).unwrap();
+
+    let err = search.search(&query("ubuntu", &["jackett"])).await.unwrap_err();
+
+    let Some(Details::Sources(reports)) = err.details else { panic!("no source reports") };
+    assert_eq!(reports[0].outcome, SourceOutcome::Http { status: 503 });
+    assert_eq!(server.hits("/torznab/api"), 1);
+}
+
+#[tokio::test]
 async fn an_oversized_answer_is_an_error_not_a_truncated_list() {
     let mut huge = fixture("apibay/q.php-ubuntu.json");
     huge.resize(5 << 20, b' ');

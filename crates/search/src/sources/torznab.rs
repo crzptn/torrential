@@ -6,6 +6,7 @@ use torrential_core::{Category, Flag};
 use url::Url;
 
 use super::{Ctx, Failure, rss};
+use crate::http::Retry;
 use crate::observation::{Identity, Observation, Peers, count, infohash, parse_magnet, web_url};
 
 pub(super) async fn search(ctx: &Ctx<'_>, endpoint: &Url, api_key: Option<&str>) -> Result<Vec<Observation>, Failure> {
@@ -17,7 +18,7 @@ pub(super) async fn search(ctx: &Ctx<'_>, endpoint: &Url, api_key: Option<&str>)
             pairs.append_pair("apikey", key);
         }
     }
-    let body = ctx.http.get(&url, 8 << 20, ctx.deadline).await?;
+    let body = ctx.http.fetch(&url, 8 << 20, ctx.deadline, Retry::Never).await?;
     parse(&body).map_err(Failure::BadResponse)
 }
 
