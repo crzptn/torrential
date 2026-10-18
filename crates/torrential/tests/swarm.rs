@@ -6,6 +6,7 @@ use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -483,6 +484,72 @@ fn a_download_whose_seeder_lacks_the_rest_stops_with_no_source_and_keeps_what_it
     assert_eq!(verified(&job), a_alone, "nothing unverified counts, and nothing verified is lost");
     home.ok(&["daemon", "stop"]);
     assert_eq!(verified(&home.job(&fixture.id())), a_alone, "what it verified outlived the engine");
+}
+
+/// A path's mode until dropped.
+struct Locked {
+    path: PathBuf,
+    restore: u32,
+}
+
+impl Locked {
+    /// `None` as root, which reads and writes past any mode.
+    fn new(path: PathBuf, mode: u32) -> Option<Self> {
+        // SAFETY: geteuid only reads this process's user id.
+        if unsafe { libc::geteuid() } == 0 {
+            return None;
+        }
+        let restore = std::fs::metadata(&path).unwrap().permissions().mode();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        Some(Self { path, restore })
+    }
+}
+
+impl Drop for Locked {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.restore));
+    }
+}
+
+#[test]
+fn after_a_storage_error_resume_downloads_what_never_reached_the_disk() {
+    let fixture = Fixture::new("set", &[("a.bin", 4_000_000), ("b.bin", 300_000)], 14);
+    let seeder = Seeder::start(&fixture, SLOW);
+    let home = Home::new(&seeder);
+    home.get(&fixture.torrent_file(), &["--files", "a.bin"]);
+    home.until(&fixture.id(), "part of a.bin is verified", |j| verified(j) >= 512 * 1024);
+    let Some(locked) = Locked::new(home.downloads().join(fixture.name), 0o555) else { return };
+    home.get(&fixture.torrent_file(), &["--files", "*.bin"]);
+    let wait = home.run(&["wait", &fixture.short(), "--timeout", "60s"]);
+    drop(locked);
+    assert_eq!(wait.code, 7, "libtorrent cannot create b.bin: {}{}", wait.stdout, wait.stderr);
+    let job = home.job(&fixture.id());
+    assert_eq!((state(&job), job["error"]["code"].as_str()), ("error", Some("storage_error")), "{job:#}");
+    home.ok(&["daemon", "stop"]);
+    home.ok(&["resume", &fixture.short()]);
+    let wait = home.run(&["wait", &fixture.short(), "--timeout", "60s"]);
+    assert_eq!(wait.code, 0, "{}{}", wait.stdout, wait.stderr);
+    assert!(fixture.intact(&home, "a.bin"), "a.bin matches its source");
+    assert!(fixture.intact(&home, "b.bin"), "b.bin pieces that passed their check but failed to write came again");
+}
+
+#[test]
+fn a_check_that_cannot_read_a_file_fails_and_keeps_what_was_verified() {
+    let fixture = Fixture::new("set", &SET, 15);
+    let seeder = Seeder::start(&fixture, None);
+    let home = Home::new(&seeder);
+    home.get(&fixture.torrent_file(), &[]);
+    assert_eq!(home.run(&["wait", &fixture.short()]).code, 0);
+    let Some(locked) = Locked::new(fixture.downloaded(&home, "a.bin"), 0o000) else { return };
+    assert_eq!(home.ok(&["verify", &fixture.short()])["changes"][0]["result"], "checking");
+    let job = home.until(&fixture.id(), "the check stops", |j| state(j) != "checking");
+    drop(locked);
+    assert_eq!(job["error"]["code"], "storage_error", "{job:#}");
+    home.ok(&["daemon", "stop"]);
+    assert_eq!(verified(&home.job(&fixture.id())), fixture.total(), "a check that stopped took nothing back");
+    home.ok(&["verify", &fixture.short()]);
+    let job = home.until(&fixture.id(), "the check passes", |j| state(j) != "checking");
+    assert_eq!(state(&job), "done", "{job:#}");
 }
 
 #[test]

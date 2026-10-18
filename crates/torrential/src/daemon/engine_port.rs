@@ -297,6 +297,8 @@ struct SwarmState {
     damaged: BTreeMap<TorrentId, u32>,
     /// The last wanted pieces each torrent would land, which no peer has.
     unavailable: BTreeMap<TorrentId, u32>,
+    /// Why saving each torrent's resume data fails, and how many saves it has refused.
+    unsaved: BTreeMap<TorrentId, (Error, u32)>,
 }
 
 impl Swarm {
@@ -330,6 +332,16 @@ impl Swarm {
     #[cfg(test)]
     pub fn withhold(&self, id: TorrentId, pieces: u32) {
         self.0.lock().unwrap().unavailable.insert(id, pieces);
+    }
+
+    #[cfg(test)]
+    pub fn refuse_saves(&self, id: TorrentId, error: Error) {
+        self.0.lock().unwrap().unsaved.insert(id, (error, 0));
+    }
+
+    #[cfg(test)]
+    pub fn refused_saves(&self, id: TorrentId) -> u32 {
+        self.0.lock().unwrap().unsaved.get(&id).map_or(0, |(_, refused)| *refused)
     }
 
     fn unavailable(&self, id: TorrentId) -> u32 {
@@ -484,6 +496,10 @@ impl EnginePort for Fake {
     }
 
     fn save_resume_data(&mut self, id: TorrentId) -> Result<(), Error> {
+        if let Some((error, refused)) = self.swarm.0.lock().unwrap().unsaved.get_mut(&id) {
+            *refused += 1;
+            return Err(error.clone());
+        }
         let t = self.torrent(id)?;
         t.saved = t.arrived;
         let (verified, piece_map) = t.progress();

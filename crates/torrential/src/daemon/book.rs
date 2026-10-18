@@ -165,8 +165,8 @@ impl JobEntry {
         self.unsourced_at = None;
     }
 
-    /// A failed download kept paused in the engine until its resume data is saved, after a check
-    /// or a stop for lack of sources. It leaves once the save lands.
+    /// A failed download kept paused in the engine until its resume data is saved. It leaves once
+    /// the save lands.
     pub fn held_for_save(&self) -> bool {
         matches!(self.record.intent, Intent::Failed { .. }) && self.observed == Observed::InEngine(Phase::Paused)
     }

@@ -897,7 +897,8 @@ impl Owner {
                     self.engine.send(EngineCommand::Remove(id));
                     self.draining.insert(id);
                     self.reply_metadata_waiters(id, Err(error));
-                } else if self.jobs.contains_key(&id) {
+                } else if self.jobs.get(&id).is_some_and(|j| j.observed.in_engine()) {
+                    // A failure for a download out of the engine answers a command sent before it left.
                     self.fail(id, error);
                 }
             }
@@ -976,23 +977,55 @@ impl Owner {
         }
     }
 
+    /// A download that may hold pieces verified since its last save pauses and saves before it
+    /// leaves the engine, so they stay. Others leave at once and keep the last save:
+    /// - one fetching its file list or checking its files, which has nothing new, and whose save
+    ///   mid-check would keep only the pieces checked so far;
+    /// - one stopped by a disk error, since libtorrent counts a piece that passed its hash check
+    ///   even when writing it failed;
+    /// - one whose save fails, since saving again could fail forever. Its first error stays.
     fn fail(&mut self, id: TorrentId, error: Error) {
-        let intent = Intent::Failed { error };
-        let _ = self.store.set_intent(id, &intent);
         let Some(job) = self.jobs.get_mut(&id) else { return };
-        job.record.intent = intent;
         job.verify = None;
-        if job.observed.in_engine() {
-            self.engine.send(EngineCommand::Remove(id));
-            self.draining.insert(id);
-        }
-        job.observed = Observed::Absent;
         job.forget_sources();
+        let saving = matches!(job.record.intent, Intent::Failed { .. })
+            && matches!(job.observed, Observed::InEngine(Phase::Pausing | Phase::Paused));
+        let disk = matches!(error.code, ErrorCode::DiskFull | ErrorCode::StorageError);
+        if !saving {
+            let intent = Intent::Failed { error };
+            let _ = self.store.set_intent(id, &intent);
+            job.record.intent = intent;
+        }
+        let save = job.metainfo.is_some() && !saving && !disk;
+        job.observed = match job.observed {
+            Observed::InEngine(Phase::Paused | Phase::Finishing { writes_stopped: true }) if save => {
+                self.engine.send(EngineCommand::SaveResume(id));
+                Observed::InEngine(Phase::Paused)
+            }
+            Observed::InEngine(Phase::Pausing | Phase::Finishing { writes_stopped: false }) if save => {
+                Observed::InEngine(Phase::Pausing)
+            }
+            Observed::InEngine(Phase::Downloading) if save => {
+                self.engine.send(EngineCommand::Pause(id));
+                Observed::InEngine(Phase::Pausing)
+            }
+            Observed::InEngine(_) => {
+                self.engine.send(EngineCommand::Remove(id));
+                self.draining.insert(id);
+                if let Some(stopping) = &mut self.stopping {
+                    stopping.waiting.remove(&id);
+                }
+                for pause in &mut self.pauses {
+                    pause.waiting.remove(&id);
+                }
+                Observed::Absent
+            }
+            outside @ (Observed::Absent | Observed::Parked) => outside,
+        };
         self.publish(id);
     }
 
     /// Fails a download whose sources have lacked every piece it still needs for `stall_after`.
-    /// It pauses first and leaves the engine once that pause is saved, so what it verified stays.
     fn stop_unsourced(&mut self, id: TorrentId) {
         let job = &self.jobs[&id];
         let pieces = job.stats.missing.map_or(0, |m| m.pieces) as usize;
@@ -1013,13 +1046,7 @@ impl Owner {
             &id.to_hex()[..6],
             size(verified)
         ));
-        let failed = Intent::Failed { error };
-        let _ = self.store.set_intent(id, &failed);
-        let job = self.jobs.get_mut(&id).expect("caller checked");
-        job.record.intent = failed;
-        job.observed = Observed::InEngine(Phase::Pausing);
-        self.engine.send(EngineCommand::Pause(id));
-        self.publish(id);
+        self.fail(id, error);
     }
 
     fn paused(&mut self, id: TorrentId) {

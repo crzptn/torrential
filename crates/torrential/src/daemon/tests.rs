@@ -719,6 +719,30 @@ async fn a_repair_after_no_source_gives_its_sources_a_full_window_again() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_stop_whose_save_fails_leaves_the_engine_with_the_error_that_stopped_it() {
+    let h = Harness::new();
+    h.swarm.set_rate(100 * GIB);
+    let film = torrent(37, "film", &[("film.mp4", GIB)]);
+    let id = film.info_hash.id();
+    h.swarm.withhold(id, 2);
+    h.get(h.torrent_file(&film), &[]).await.unwrap();
+    h.until("all but the withheld pieces", |jobs| jobs[0].progress.verified == GIB - 2 * GIB_PIECE).await;
+    // The periodic save of that progress lands before saves start failing.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    h.swarm.refuse_saves(id, Error::new(ErrorCode::StorageError, "libtorrent did not save its state: disk full"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while h.swarm.refused_saves(id) == 0 {
+        assert!(Instant::now() < deadline, "the stop never tried to save");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let jobs = h.status().await;
+    let JobStatus::Error { error } = &jobs[0].status else { panic!("{jobs:#?}") };
+    assert_eq!((error.code, jobs[0].progress.verified), (ErrorCode::NoSource, GIB - 2 * GIB_PIECE));
+    assert_eq!(h.swarm.refused_saves(id), 1, "it left the engine instead of saving again");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_download_that_gets_nothing_from_peers_that_have_its_pieces_keeps_waiting() {
     let h = Harness::new();
     let film = torrent(35, "film", &[("film.mp4", GIB)]);
