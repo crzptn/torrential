@@ -149,13 +149,22 @@ pub fn launch_stage(env: &Env) -> u8 {
     }
 }
 
+/// Closes the descriptors `/dev/fd` lists. Closing every number up to the limit took 17 ms
+/// under a harness that raised it to a million, and missed any descriptor above the loop's cap.
 fn close_inherited_descriptors() {
-    // SAFETY: sysconf has no preconditions.
-    let max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
-    let max = if max <= 0 { 1024 } else { max.min(65_536) } as libc::c_int;
-    for fd in 3..max {
+    let listed: Option<Vec<libc::c_int>> = std::fs::read_dir("/dev/fd")
+        .ok()
+        .map(|dir| dir.filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok()).collect());
+    let open = listed.unwrap_or_else(|| {
+        // SAFETY: sysconf has no preconditions.
+        let max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+        let max = if max <= 0 { 1024 } else { max.min(65_536) } as libc::c_int;
+        (3..max).collect()
+    });
+    for fd in open.into_iter().filter(|fd| *fd > 2) {
         // SAFETY: nothing in this process has opened a descriptor yet, so every one above
-        // stderr was inherited and is safe to close.
+        // stderr was inherited and is safe to close. The listing's own descriptor is already
+        // closed, so closing its number again only fails.
         unsafe { libc::close(fd) };
     }
 }

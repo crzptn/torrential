@@ -49,7 +49,13 @@ impl Home {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::cargo_bin("torrential").unwrap();
+        let mut cmd = Command::from_std(self.process(args));
+        cmd.timeout(Duration::from_secs(60));
+        cmd
+    }
+
+    fn process(&self, args: &[&str]) -> std::process::Command {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_torrential"));
         for key in [
             "CODEX_SANDBOX_NETWORK_DISABLED",
             "CODEX_THREAD_ID",
@@ -59,7 +65,7 @@ impl Home {
         ] {
             cmd.env_remove(key);
         }
-        cmd.args(args).envs(self.vars.iter().map(|(k, v)| (*k, v.as_str()))).timeout(Duration::from_secs(60));
+        cmd.args(args).envs(self.vars.iter().map(|(k, v)| (*k, v.as_str())));
         cmd
     }
 
@@ -171,6 +177,37 @@ fn a_sandboxed_client_refuses_to_start_an_engine() {
     home.unset("CODEX_SANDBOX_NETWORK_DISABLED");
     home.unset("CODEX_THREAD_ID");
     assert_eq!(home.engine(), None, "no engine was started");
+}
+
+#[test]
+fn the_engine_holds_no_descriptor_its_client_inherited() {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+
+    let home = Home::new();
+    let (mut reader, writer) = std::io::pipe().unwrap();
+    let mut client = home.process(&["status"]);
+    client.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let fd = writer.as_raw_fd();
+    // SAFETY: dup2 is async-signal-safe. Its copy keeps no close-on-exec flag, like a
+    // descriptor an agent harness hands its tools.
+    unsafe {
+        client.pre_exec(move || if libc::dup2(fd, 9) == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+    }
+    let status = client.status().unwrap();
+    drop(writer);
+    let (eof_tx, eof) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = eof_tx.send(reader.read_to_end(&mut Vec::new()).map(drop));
+    });
+
+    assert!(status.success());
+    assert!(home.engine().is_some(), "the engine is running");
+    assert!(
+        matches!(eof.recv_timeout(Duration::from_secs(5)), Ok(Ok(()))),
+        "the engine still holds the client's descriptor 9"
+    );
 }
 
 #[test]
