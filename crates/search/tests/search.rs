@@ -646,6 +646,38 @@ async fn a_torrent_fetch_failure_never_quotes_the_link() {
 }
 
 #[tokio::test]
+async fn restored_results_resolve_without_replacing_fresh_links() {
+    let server = Server::start(vec![("/torznab/api", vec![ok(fixture("torznab/jackett-ubuntu.xml"))])]).await;
+    let config = SearchConfig {
+        torznab: vec![TorznabConfig {
+            name: "jackett".into(),
+            url: format!("{}/torznab/api", server.base),
+            api_key: Some("k3y".into()),
+        }],
+        ..SearchConfig::default()
+    };
+    let cache = ResultCache::new();
+    let search = Search::new(&config, cache.clone()).unwrap();
+    let result = search.search(&query("ubuntu", &["jackett"])).await.unwrap();
+    let locator = result.releases.iter().find(|r| r.id.to_ref().starts_with('u')).unwrap().clone();
+    let older = torrential_core::Release {
+        id: torrential_core::ReleaseId::Torrent("9b521219bc48550140a666f74a29048ed78e933b".parse().unwrap()),
+        name: "archlinux-2026.10.01-x86_64.iso".into(),
+        ..locator.clone()
+    };
+
+    cache.restore(vec![locator.clone(), older]);
+
+    let private = cache.find(&locator.id.to_ref().parse().unwrap());
+    assert_eq!(
+        private[0].torrent_url.as_deref(),
+        Some("http://127.0.0.1:9117/dl/privatehd/?jackett_apikey=k3y&path=def&file=ubuntu")
+    );
+    let restored: Vec<String> = cache.find(&"9b5212".parse().unwrap()).into_iter().map(|r| r.name).collect();
+    assert_eq!(restored, ["archlinux-2026.10.01-x86_64.iso"]);
+}
+
+#[tokio::test]
 async fn rejects_unknown_sources_and_queries_without_words() {
     let search = Search::new(&SearchConfig::default(), ResultCache::new()).unwrap();
 

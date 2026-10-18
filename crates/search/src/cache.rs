@@ -30,6 +30,17 @@ struct State {
     seq: u64,
 }
 
+impl State {
+    fn trim(&mut self) {
+        if self.recent.len() > MAX_RECENT {
+            let mut seqs: Vec<u64> = self.recent.values().map(|(seq, _)| *seq).collect();
+            seqs.sort_unstable();
+            let cutoff = seqs[seqs.len() - MAX_RECENT];
+            self.recent.retain(|_, (seq, _)| *seq >= cutoff);
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct AnswerKey {
     pub source: String,
@@ -76,6 +87,21 @@ impl ResultCache {
         state.answers.insert(key, (now, rows));
     }
 
+    /// Remembers releases an earlier engine process showed, newest first, so their
+    /// IDs still resolve. Call it before the first search: it never replaces a
+    /// release this cache already holds. Shown releases carry no private links.
+    pub fn restore(&self, releases: Vec<Release>) {
+        let mut state = self.lock();
+        for release in releases.into_iter().rev() {
+            if !state.recent.contains_key(&release.id) {
+                state.seq += 1;
+                let seq = state.seq;
+                state.recent.insert(release.id, (seq, release));
+            }
+        }
+        state.trim();
+    }
+
     pub(crate) fn remember(&self, releases: &[Release]) {
         let mut state = self.lock();
         for release in releases {
@@ -83,12 +109,7 @@ impl ResultCache {
             let seq = state.seq;
             state.recent.insert(release.id, (seq, release.clone()));
         }
-        if state.recent.len() > MAX_RECENT {
-            let mut seqs: Vec<u64> = state.recent.values().map(|(seq, _)| *seq).collect();
-            seqs.sort_unstable();
-            let cutoff = seqs[seqs.len() - MAX_RECENT];
-            state.recent.retain(|_, (seq, _)| *seq >= cutoff);
-        }
+        state.trim();
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
