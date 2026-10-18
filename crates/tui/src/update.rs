@@ -11,7 +11,7 @@ use torrential_core::{Error, Job, JobStatus, ReleaseId, SearchQuery, SearchResul
 use crate::format::home_path;
 use crate::layout;
 use crate::state::{
-    DownloadFiles, Engine, Files, Focus, Input, Item, JobAction, Overlay, Palette, Search, SearchPhase, State, Tone,
+    DownloadFiles, Engine, Files, Focus, Input, Item, JobAction, Search, SearchPhase, State, Tone,
 };
 use crate::tree::Tree;
 
@@ -59,11 +59,10 @@ pub enum Effect {
     Copy(String),
 }
 
-/// Everything a key or a palette command can do.
+/// Everything a key can do.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     Quit,
-    Commands,
     Help,
     Search,
     Downloads,
@@ -83,7 +82,6 @@ pub enum Action {
     CopyPath,
     Pick,
     PickAll,
-    ReduceMotion,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -94,13 +92,6 @@ pub enum Move {
     PageDown,
     First,
     Last,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Command {
-    pub label: String,
-    pub key: &'static str,
-    pub action: Action,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -231,13 +222,8 @@ impl State {
             self.quit = true;
             return Vec::new();
         }
-        match self.overlay {
-            Some(Overlay::Palette(_)) => return self.palette_key(key),
-            Some(Overlay::ConfirmRemove(id)) => return self.confirm_key(id, key),
-            None => {}
-        }
-        if ctrl && key.code == KeyCode::Char('p') {
-            return self.act(Action::Commands);
+        if let Some(id) = self.confirm {
+            return self.confirm_key(id, key);
         }
         if self.focus == Focus::Query {
             return self.query_key(key);
@@ -290,9 +276,6 @@ impl State {
     pub fn act(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::Quit => self.quit = true,
-            Action::Commands => {
-                self.overlay = Some(Overlay::Palette(Palette { filter: String::new(), selected: 0 }));
-            }
             Action::Help => self.help = !self.help,
             Action::Search => {
                 self.focus = Focus::Query;
@@ -338,7 +321,7 @@ impl State {
             }
             Action::Remove => {
                 if let Some(job) = self.selected_job() {
-                    self.overlay = Some(Overlay::ConfirmRemove(job.id));
+                    self.confirm = Some(job.id);
                 }
             }
             Action::OpenFolder => {
@@ -364,10 +347,6 @@ impl State {
                 if let Some(tree) = self.tree() {
                     tree.toggle_all();
                 }
-            }
-            Action::ReduceMotion => {
-                self.reduced_motion = !self.reduced_motion;
-                self.say(Tone::Info, if self.reduced_motion { "Animations off" } else { "Animations on" });
             }
         }
         Vec::new()
@@ -875,95 +854,15 @@ impl State {
     fn confirm_key(&mut self, id: TorrentId, key: KeyEvent) -> Vec<Effect> {
         match key.code {
             KeyCode::Enter | KeyCode::Char('x' | 'y') => {
-                self.overlay = None;
+                self.confirm = None;
                 self.job_action(id, JobAction::Remove)
             }
             KeyCode::Esc | KeyCode::Char('n' | 'q') => {
-                self.overlay = None;
+                self.confirm = None;
                 Vec::new()
             }
             _ => Vec::new(),
         }
-    }
-
-    /// Commands for the palette: the selected item's first, then the rest.
-    pub fn commands(&self) -> Vec<Command> {
-        let mut out = Vec::new();
-        let mut add = |label: &str, key, action| out.push(Command { label: label.into(), key, action });
-        match self.cursor {
-            Some(Item::Download(id)) if self.focus != Focus::Query => {
-                let job = self.job(id);
-                match job.map(|j| &j.status) {
-                    Some(JobStatus::Paused | JobStatus::Interrupted | JobStatus::Error { .. }) => {
-                        add("Resume download", "space", Action::TogglePause)
-                    }
-                    Some(JobStatus::Done { .. }) | None => {}
-                    Some(_) => add("Pause download", "space", Action::TogglePause),
-                }
-                add("Verify files", "v", Action::Verify);
-                add("Remove from list", "x", Action::Remove);
-                add("Open folder", "o", Action::OpenFolder);
-                add("Copy path", "y", Action::CopyPath);
-            }
-            Some(Item::Result(_)) if self.focus == Focus::Files => {
-                add("Download picked files", "enter", Action::Download);
-                add("Pick all or none", "a", Action::PickAll);
-                add("Leave the file list", "esc", Action::Back);
-            }
-            Some(Item::Result(_)) if self.focus == Focus::List => {
-                add("Choose files", "enter", Action::Open);
-                add("Download", "D", Action::Download);
-                add(&format!("Sort by {}", self.sort.next().label()), "s", Action::Sort);
-            }
-            _ => {}
-        }
-        add("Search", "/", Action::Search);
-        add("Go to downloads", "d", Action::Downloads);
-        if self.search.is_some() {
-            add("Go to results", "r", Action::Results);
-        }
-        add(if self.help { "Hide help" } else { "Show help" }, "?", Action::Help);
-        add(if self.reduced_motion { "Turn animations on" } else { "Turn animations off" }, "", Action::ReduceMotion);
-        add("Quit · downloads keep running", "q", Action::Quit);
-        out
-    }
-
-    pub fn palette_matches(&self) -> Vec<Command> {
-        let Some(Overlay::Palette(palette)) = &self.overlay else { return Vec::new() };
-        let filter = palette.filter.to_lowercase();
-        self.commands().into_iter().filter(|c| c.label.to_lowercase().contains(&filter)).collect()
-    }
-
-    fn palette_key(&mut self, key: KeyEvent) -> Vec<Effect> {
-        use KeyCode::*;
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let count = self.palette_matches().len();
-        let Some(Overlay::Palette(palette)) = &mut self.overlay else { return Vec::new() };
-        match key.code {
-            Esc => self.overlay = None,
-            Up => palette.selected = palette.selected.saturating_sub(1),
-            Char('p' | 'k') if ctrl => palette.selected = palette.selected.saturating_sub(1),
-            Down => palette.selected = (palette.selected + 1).min(count.saturating_sub(1)),
-            Char('n' | 'j') if ctrl => palette.selected = (palette.selected + 1).min(count.saturating_sub(1)),
-            Backspace => {
-                palette.filter.pop();
-                palette.selected = 0;
-            }
-            Char(c) if !ctrl => {
-                palette.filter.push(c);
-                palette.selected = 0;
-            }
-            Enter => {
-                let selected = palette.selected;
-                let command = self.palette_matches().into_iter().nth(selected);
-                self.overlay = None;
-                if let Some(command) = command {
-                    return self.act(command.action);
-                }
-            }
-            _ => {}
-        }
-        Vec::new()
     }
 }
 

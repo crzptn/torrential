@@ -21,7 +21,7 @@ expression: shot(&scenario(size))
 "    results                                                                     "
 "                                                                                "
 "            Search catalogs and indexes without leaving this list.              "
-"            / search   ctrl+p commands                                          "
+"            / search   ? help                                                   "
 "                                                                                "
 "                                                                                "
 "    download 1 of 5                                                             "

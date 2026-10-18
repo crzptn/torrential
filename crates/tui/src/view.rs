@@ -10,7 +10,7 @@ use torrential_core::{Flag, Job, JobStatus, Release, ReleaseId, SourceOutcome};
 
 use crate::format::{age, ellipsize, home_path, middle, percent, seeds, width};
 use crate::layout::{self, Block, HEADER, QUERY, SOURCES, Screen};
-use crate::state::{Engine, Files, Focus, Item, Overlay, SearchPhase, State, Tone};
+use crate::state::{Engine, Files, Focus, Item, SearchPhase, State, Tone};
 use crate::theme::*;
 use crate::tree::{Check, NodeKind, Tree};
 
@@ -112,25 +112,20 @@ pub fn render(buf: &mut Buffer, state: &State, mode: ColorMode) -> Option<Positi
         return None;
     };
     header(buf, state, screen.column);
-    let mut cursor = query(buf, state, screen.column);
+    let cursor = query(buf, state, screen.column);
     sources(buf, state, screen.column);
     list(buf, state, screen.list);
     if let Some(rect) = screen.help {
         help(buf, rect);
     }
     footer(buf, state, &screen);
-    if state.overlay.is_some() {
+    if let Some(id) = state.confirm {
         if mode.paints_backgrounds() {
             dim(buf);
         }
-        cursor = match &state.overlay {
-            Some(Overlay::Palette(_)) => palette(buf, state),
-            Some(Overlay::ConfirmRemove(id)) => {
-                confirm(buf, state, *id);
-                None
-            }
-            None => None,
-        };
+        confirm(buf, state, id);
+        degrade(buf, mode);
+        return None;
     }
     degrade(buf, mode);
     cursor
@@ -729,7 +724,7 @@ fn empty(buf: &mut Buffer, state: &State, x: u16, right: u16, y: u16) {
     }
     let Some(search) = &state.search else {
         put(buf, tx, y + 1, room, "Search catalogs and indexes without leaving this list.", fg(MUTED));
-        hints(buf, tx, y + 2, room, &[("/", "search"), ("ctrl+p", "commands")]);
+        hints(buf, tx, y + 2, room, &[("/", "search"), ("?", "help")]);
         return;
     };
     if state.filtering() {
@@ -758,7 +753,7 @@ const HELP: [(&str, &str, &str, &str); 8] = [
     ("space", "pick a file · pause or resume", "a", "pick all or none"),
     ("D", "download", "s", "sort results"),
     ("v  x", "verify · remove", "o  y", "open folder · copy path"),
-    ("g G", "first · last", "ctrl+p", "commands"),
+    ("g G", "first · last", "pgup pgdn", "page"),
     ("esc", "back", "q", "quit · downloads keep running"),
 ];
 
@@ -813,7 +808,7 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
     };
     let pairs: Vec<(&str, &str)> = match (state.focus, state.cursor) {
         (Focus::Query, _) => {
-            vec![("enter", "search"), ("↓", "list"), ("ctrl+u", "clear"), ("ctrl+p", "commands"), ("esc", "back")]
+            vec![("enter", "search"), ("↓", "list"), ("ctrl+u", "clear"), ("esc", "back")]
         }
         (Focus::Files, _) => {
             vec![("space", "pick"), ("a", "all"), ("←→", "fold"), ("enter", "download"), ("esc", "back"), ("?", "help")]
@@ -830,7 +825,7 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
         (Focus::List, Some(Item::Result(_))) => {
             vec![("↑↓", "move"), ("enter", "files"), ("D", "download"), ("s", "sort"), ("/", "search"), ("?", "help")]
         }
-        (Focus::List, None) => vec![("/", "search"), ("ctrl+p", "commands"), ("?", "help"), ("q", "quit")],
+        (Focus::List, None) => vec![("/", "search"), ("?", "help"), ("q", "quit")],
     };
     hints(buf, x, screen.hints, room, &pairs);
 }
@@ -870,46 +865,6 @@ fn dialog(buf: &mut Buffer, w: u16, h: u16) -> Rect {
         put(buf, rect.right() - 1, y, 1, "│", fg(BORDER));
     }
     rect
-}
-
-fn palette(buf: &mut Buffer, state: &State) -> Option<Position> {
-    let Some(Overlay::Palette(p)) = &state.overlay else { return None };
-    let commands = state.palette_matches();
-    let max_rows = buf.area.height.saturating_sub(12).max(3);
-    let rows = (commands.len().max(1) as u16).min(max_rows);
-    let more = commands.len() as u16 > rows;
-    let r = dialog(buf, 60, 8 + rows + u16::from(more));
-    let (x, inner) = (r.x + 3, r.width - 6);
-    put(buf, x, r.y + 1, inner, "Commands", bold(TEXT));
-    put_right(buf, r.right() - 3, r.y + 1, "esc", fg(MUTED));
-    fill(buf, Rect::new(x, r.y + 3, inner, 1), ELEMENT);
-    let text = &p.filter;
-    if text.is_empty() {
-        put(buf, x + 1, r.y + 3, inner - 2, "Search commands", fg(DIM));
-    } else {
-        put(buf, x + 1, r.y + 3, inner - 2, text, fg(TEXT));
-    }
-    put(buf, x, r.y + 5, inner, "Suggested", bold(ACCENT));
-    if commands.is_empty() {
-        put(buf, x, r.y + 6, inner, "No results found", fg(DIM));
-    }
-    let offset = p.selected.saturating_sub(usize::from(rows) - 1);
-    for (k, command) in commands.iter().enumerate().skip(offset).take(usize::from(rows)) {
-        let y = r.y + 6 + (k - offset) as u16;
-        let active = k == p.selected;
-        if active {
-            fill(buf, Rect::new(x - 1, y, inner + 2, 1), ACCENT);
-        }
-        let label = if active { bold(ON_ACCENT) } else { fg(TEXT) };
-        let key = if active { bold(ON_ACCENT) } else { fg(MUTED) };
-        let key_x = put_right(buf, r.right() - 3, y, command.key, key);
-        put(buf, x, y, key_x.saturating_sub(x + 1), &command.label, label);
-    }
-    if more {
-        put(buf, x, r.y + 6 + rows, inner, "…", fg(FAINT));
-    }
-    let caret = x + 1 + width(text).min(usize::from(inner) - 2) as u16;
-    Some(Position::new(caret, r.y + 3))
 }
 
 fn confirm(buf: &mut Buffer, state: &State, id: torrential_core::TorrentId) {

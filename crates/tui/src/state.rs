@@ -120,18 +120,6 @@ impl JobAction {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Palette {
-    pub filter: String,
-    pub selected: usize,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Overlay {
-    Palette(Palette),
-    ConfirmRemove(TorrentId),
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tone {
     Info,
@@ -195,10 +183,10 @@ pub struct State {
     /// The first list line shown.
     pub scroll: u16,
     pub help: bool,
-    pub overlay: Option<Overlay>,
+    /// A download whose removal waits for the user to confirm it.
+    pub confirm: Option<TorrentId>,
     /// The footer's message. A new one replaces it.
     pub toast: Option<Toast>,
-    pub reduced_motion: bool,
     pub quit: bool,
     pub next_search: u64,
 }
@@ -234,18 +222,14 @@ impl State {
             prefetch: None,
             scroll: 0,
             help: false,
-            overlay: None,
+            confirm: None,
             toast: None,
-            reduced_motion: false,
             quit: false,
             next_search: 1,
         }
     }
 
     pub fn spinner(&self) -> &'static str {
-        if self.reduced_motion {
-            return "…";
-        }
         let frames = self.now.duration_since(self.started).as_millis() / SPIN_EVERY.as_millis();
         SPINNER[frames as usize % SPINNER.len()]
     }
@@ -331,9 +315,6 @@ impl State {
 
     /// Whether anything on screen animates, so the spinner tick should run.
     pub fn spinning(&self) -> bool {
-        if self.reduced_motion {
-            return false;
-        }
         let starting = self.engine == Engine::Starting;
         let searching = self.search.as_ref().is_some_and(|s| matches!(s.phase, SearchPhase::Running { .. }));
         let loading = self.files.values().any(|f| matches!(f, Files::Loading { .. }));

@@ -83,15 +83,6 @@ fn download_screens() {
 }
 
 #[test]
-fn palette_screens() {
-    snapshots("palette", |size| {
-        let mut state = searched(size);
-        state.update(ctrl('p'));
-        state
-    });
-}
-
-#[test]
 fn help_screens() {
     snapshots("help", |size| {
         let mut state = searched(size);
@@ -145,7 +136,7 @@ fn a_dialog_dims_the_screen_behind_it() {
     let mut state = searched((100, 30));
     let (x, y) = find(&render(&state), "torrential");
     assert_eq!(render(&state)[(x, y)].fg, theme::TEXT);
-    state.update(ctrl('p'));
+    press(&mut state, "dx");
     assert_eq!(render(&state)[(x, y)].fg, ratatui::style::Color::Rgb(0x69, 0x69, 0x69));
 }
 

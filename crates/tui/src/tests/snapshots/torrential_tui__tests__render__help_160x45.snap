@@ -42,7 +42,7 @@ expression: shot(&scenario(size))
 "                           space       pick a file · pause or resume            a        pick all or none                                                       "
 "                           D           download                                 s        sort results                                                           "
 "                           v  x        verify · remove                          o  y     open folder · copy path                                                "
-"                           g G         first · last                             ctrl+p   commands                                                               "
+"                           g G         first · last                             pgup pg… page                                                                   "
 "                           esc         back                                     q        quit · downloads keep running                                          "
 "                           Downloads stop at 100% and never seed.                                                                                               "
 "                           result 1 of 8                                                                                                                        "

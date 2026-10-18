@@ -4,7 +4,7 @@ use crossterm::event::KeyCode;
 use torrential_core::protocol::{Change, GetOutcome, GetReply};
 
 use super::*;
-use crate::state::{Files, Focus, JobAction, Overlay, Sort};
+use crate::state::{Files, Focus, JobAction};
 
 #[test]
 fn opens_on_the_downloads_when_there_are_some() {
@@ -236,27 +236,6 @@ fn streaming_results_follow_the_top_until_the_user_moves() {
 }
 
 #[test]
-fn the_palette_filters_commands_and_runs_one() {
-    let mut state = searched((100, 30));
-    state.update(ctrl('p'));
-    assert!(matches!(state.overlay, Some(Overlay::Palette(_))));
-    let labels: Vec<String> = state.palette_matches().into_iter().map(|c| c.label).take(3).collect();
-    assert_eq!(labels, ["Choose files", "Download", "Sort by seeds"]);
-    press(&mut state, "sort");
-    assert_eq!(state.palette_matches().len(), 1);
-    state.update(key(KeyCode::Enter));
-    assert_eq!((state.overlay.is_none(), state.sort), (true, Sort::Seeds));
-    state.update(ctrl('p'));
-    state.update(key(KeyCode::Down));
-    state.update(ctrl('n'));
-    state.update(ctrl('p'));
-    let Some(Overlay::Palette(p)) = &state.overlay else { panic!("closed") };
-    assert_eq!(p.selected, 1);
-    state.update(key(KeyCode::Esc));
-    assert!(state.overlay.is_none());
-}
-
-#[test]
 fn space_pauses_and_the_row_waits_for_the_engine() {
     let mut state = with_downloads((100, 30));
     let effects = press(&mut state, " ");
@@ -280,9 +259,9 @@ fn remove_asks_first_and_keeps_files() {
     press(&mut state, "jj");
     let stackexchange = id("91fd3b");
     assert_eq!(press(&mut state, "x"), []);
-    assert_eq!(state.overlay, Some(Overlay::ConfirmRemove(stackexchange)));
+    assert_eq!(state.confirm, Some(stackexchange));
     state.update(key(KeyCode::Esc));
-    assert_eq!(state.overlay, None);
+    assert_eq!(state.confirm, None);
     press(&mut state, "x");
     let effects = state.update(key(KeyCode::Enter));
     assert_eq!(effects, [Effect::Job { id: stackexchange, action: JobAction::Remove }]);
