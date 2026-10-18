@@ -14,7 +14,6 @@ pub struct Job {
     pub info_hash: InfoHash,
     /// Unknown until metadata arrives for a bare infohash.
     pub name: Option<String>,
-    /// The folder the download goes into.
     pub dir: PathBuf,
     /// `dir` joined with the torrent's name, once the name is known.
     pub path: Option<PathBuf>,
@@ -26,7 +25,6 @@ pub struct Job {
     pub added_at: i64,
 }
 
-/// Where a download is in its life. Each variant carries only what is true in that state.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum JobStatus {
@@ -111,7 +109,6 @@ impl Progress {
 pub struct PieceMap([Slice; PieceMap::SLICES]);
 
 impl PieceMap {
-    /// Splits evenly into the TUI's 8- and 16-cell gauges and keeps the string at 64 bytes.
     pub const SLICES: usize = 64;
 
     pub const fn new(slices: [Slice; Self::SLICES]) -> Self {

@@ -1,7 +1,3 @@
-//! What search ranks for: the machine torrential detects, with the user's preferences on
-//! top. The engine detects the machine once, after it starts, so nobody has to answer
-//! questions about their screen or player.
-
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::preferences::{Playback, Preferences};
@@ -58,7 +54,6 @@ impl Os {
     }
 }
 
-/// A CPU architecture, as software and ISO names write it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Arch {
     #[serde(rename = "x86_64")]
@@ -105,7 +100,6 @@ impl Arch {
         for (i, token) in tokens.iter().enumerate() {
             let next = tokens.get(i + 1).map_or("", String::as_str);
             let arch = match (token.as_str(), next) {
-                // `x86_64` and `x86-64` split into two tokens.
                 ("x86", "64") | ("amd64" | "x64", _) => Some(Self::X86_64),
                 ("arm64" | "aarch64", _) => Some(Self::Arm64),
                 ("x86" | "i386" | "i686", _) => Some(Self::X86),
@@ -125,7 +119,6 @@ impl Arch {
 #[serde(transparent)]
 pub struct Language(String);
 
-/// The words release names use to mark a language, kept to ones that rarely appear in titles.
 const MARKERS: [(&str, &str, &[&str]); 8] = [
     ("en", "English", &["english", "eng"]),
     ("es", "Spanish", &["spanish", "español", "espanol", "castellano", "latino"]),
@@ -169,7 +162,6 @@ impl Language {
     }
 }
 
-/// Where a value ranking used came from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
@@ -417,7 +409,6 @@ mod tests {
             read(&profile(Some(mac()), Preferences::default())),
             (Some((Resolution::P1080, Source::Detected)), Some((Playback::HevcHdr, Source::Detected)))
         );
-        // The TV's player is not this Mac's, so nothing is known about what it plays.
         assert_eq!(read(&profile(Some(mac()), tv)), (Some((Resolution::P2160, Source::Override)), None));
         assert_eq!(
             read(&profile(Some(mac()), h264)),
@@ -487,12 +478,10 @@ mod tests {
             Language::named_in(name, &words).iter().map(|l| l.code().to_string()).collect()
         };
         let film = "night of the living dead 1968";
-        // archive.org/advancedsearch.php-night-of-the-living-dead-1968.json
         assert_eq!(marked("Night Of The Living Dead ( 1968) Doblada Al Español FULL HD", film), ["es"]);
         assert_eq!(marked("Night Of The Living Dead ( 1968) English FULL HD", film), ["en"]);
         assert_eq!(marked("Night Of The Living Dead (with spanish subtitles)", film), ["es"]);
         assert_eq!(marked("Night of the Living Dead (1968) [colorised, 4k, 60FPS]", film), Vec::<String>::new());
-        // archive.org/advancedsearch.php-big-buck-bunny.json, apibay/q.php-ubuntu.json
         assert_eq!(marked("Big Buck Bunny (2008) German Blu-ray Disc", "big buck bunny"), ["de"]);
         assert_eq!(marked("Ubuntu Facile - Aprile 2015, [Pdf - Ita] [TNTVillage]", "ubuntu"), ["it"]);
         assert_eq!(marked("Movie 2024 VOSTFR 1080p", "movie"), ["fr"]);

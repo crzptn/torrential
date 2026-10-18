@@ -1,6 +1,3 @@
-//! Text from indexers and torrents comes from strangers. These functions make it safe
-//! to print in a terminal and in tab-separated output.
-
 /// Removes terminal escape sequences, control characters, and bidirectional overrides,
 /// and folds every run of whitespace, tabs and newlines included, into one space.
 pub fn sanitize(input: &str) -> String {

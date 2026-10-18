@@ -1,6 +1,3 @@
-//! Domain types and the wire protocol shared by the torrential engine process,
-//! the CLI, and the TUI. Everything here is plain data plus pure functions.
-
 pub mod error;
 pub mod id;
 pub mod job;

@@ -1,6 +1,3 @@
-//! What a release name says about its picture. Release groups tag names with the
-//! resolution, the codec, and HDR, as in `Movie 2024 2160p WEB-DL HDR10 x265`.
-
 use std::fmt;
 
 use serde::Serialize;
@@ -38,11 +35,8 @@ impl Resolution {
         }
     }
 
-    /// From a `1920x1080` tag. The width decides, so a widescreen crop such as
-    /// `1920x800` is still 1080p.
     fn from_dimensions(token: &str) -> Option<Resolution> {
         let (width, height) = token.split_once('x')?;
-        // Three digits each, so an episode tag such as `1x02` is not a size.
         if width.len() < 3 || height.len() < 3 || !height.bytes().all(|b| b.is_ascii_digit()) {
             return None;
         }
@@ -107,8 +101,6 @@ impl Quality {
             quality.hdr |= matches!(pair, ("hdr" | "hdr10" | "hdr10plus" | "dovi", _) | ("dolby", "vision"));
             dolby_vision |= pair.0 == "dv";
         }
-        // `DV` also names the camcorder tape format, so it counts only beside a tag that
-        // Dolby Vision always comes with.
         quality.hdr |=
             dolby_vision && (quality.resolution == Some(Resolution::P2160) || quality.codec == Some(Codec::Hevc));
         quality
@@ -128,11 +120,9 @@ impl fmt::Display for Quality {
 mod tests {
     use super::*;
 
-    /// Names from the search crate's recorded fixtures.
     #[test]
     fn reads_tags_from_recorded_names() {
         let cases = [
-            // knaben/v2-search-ubuntu.json
             ("Celtics City S01E08 Chapter VIII Ubuntu 2160p MAX WEB-DL DDP5 1 H 265-RAWR", "2160p hevc"),
             ("Celtics City S01E08 Chapter VIII Ubuntu 1080p AMZN WEB-DL DDP5 1 H 264-Kits", "1080p h264"),
             ("Celtics City S01E08 Chapter VIII Ubuntu 720p AMZN WEB-DL DDP5 1 H 264-RAWR", "720p h264"),
@@ -140,13 +130,11 @@ mod tests {
             ("5 Centimeters Per Second [BD][Web2.0][blogs][linux][bsd][eng][x264aac]", ""),
             ("Ubuntu 11.04 Desktop dvd amd64 (x64) .iso", ""),
             ("ubuntu-24.04.1-desktop-amd64.iso", ""),
-            // archive.org/advancedsearch.php-big-buck-bunny.json
             ("Big Buck Bunny (2008) 4K 60FPS Blender Animated Short - x265", "2160p hevc"),
             ("Big Buck Bunny (AV1 Ripped by Martin Eesmaa + 7z archives compressed)", "av1"),
             ("Test Video Contents for Encoders - Big Buck Bunny H265/HEVC (Lossless)", "hevc"),
             ("big buck bunny 720p h264", "720p h264"),
             ("big_buck_bunny_1080p_CLHD", "1080p"),
-            // archive.org/advancedsearch.php-night-of-the-living-dead-1968.json
             ("Night of the Living Dead (1968) 4K UHD Blu-ray Remux", "2160p"),
             ("Night of the Living Dead (1968) [colorised, 4k, 60FPS]", "2160p"),
             ("Night Of The Living Dead ( 1968) English FULL HD", "1080p"),

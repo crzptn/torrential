@@ -1,5 +1,3 @@
-//! Sizes, durations, and counts as people type and read them.
-
 use std::time::Duration;
 
 /// Parses `8GiB`, `1.5 GB`, `700MB`, or a plain byte count. IEC units (KiB, MiB, GiB,

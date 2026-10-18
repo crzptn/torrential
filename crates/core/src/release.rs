@@ -206,7 +206,6 @@ impl SearchQuery {
     }
 }
 
-/// What one source did during a search.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "outcome")]
 pub enum SourceOutcome {
