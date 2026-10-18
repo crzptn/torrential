@@ -15,7 +15,7 @@ use torrential_core::protocol::Event;
 use torrential_core::{Error, ErrorCode};
 
 use crate::backend::Backend;
-use crate::state::{Item, JobAction, SPIN_EVERY, State, Tone};
+use crate::state::{Item, JobAction, State, Tone};
 use crate::theme::ColorMode;
 use crate::update::{Effect, Msg};
 use crate::view;
@@ -124,7 +124,7 @@ fn run_loop<B: Backend>(
 /// The next time something happens without input: a spinner frame, a toast going away, or a
 /// file list to fetch.
 fn wake_at(state: &State) -> Option<Instant> {
-    let spin = state.spinning().then(|| state.now + SPIN_EVERY);
+    let spin = state.spinning().then(|| state.next_frame());
     let toast = state.toast.as_ref().map(|t| t.until);
     let prefetch = state.prefetch.map(|(_, at)| at);
     [spin, toast, prefetch].into_iter().flatten().min()

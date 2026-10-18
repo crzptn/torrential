@@ -295,6 +295,19 @@ fn ctrl_c_and_q_quit_but_q_types_in_the_query() {
 }
 
 #[test]
+fn the_ellipsis_moves_on_its_own_beat_whatever_else_arrives() {
+    let mut state = searched((100, 30));
+    let start = state.started;
+    later(&mut state, 240);
+    assert_eq!((state.spinner(), state.next_frame()), ("   ", start + Duration::from_millis(250)));
+    later(&mut state, 20);
+    state.update(Msg::Watch(Event::Job { job: Box::new(jobs()[0].clone()) }));
+    assert_eq!((state.spinner(), state.next_frame()), (".  ", start + Duration::from_millis(500)));
+    later(&mut state, 500);
+    assert_eq!(state.spinner(), "...");
+}
+
+#[test]
 fn toasts_go_away_on_a_tick_after_their_time() {
     let mut state = with_downloads((100, 30));
     press(&mut state, "s");

@@ -245,9 +245,18 @@ impl State {
         }
     }
 
+    fn frames(&self) -> u128 {
+        self.now.duration_since(self.started).as_millis() / SPIN_EVERY.as_millis()
+    }
+
     pub fn spinner(&self) -> &'static str {
-        let frames = self.now.duration_since(self.started).as_millis() / SPIN_EVERY.as_millis();
-        SPINNER[frames as usize % SPINNER.len()]
+        SPINNER[self.frames() as usize % SPINNER.len()]
+    }
+
+    /// When the spinner's next frame is due. Counted from the start, so messages arriving in
+    /// between do not push it back.
+    pub fn next_frame(&self) -> Instant {
+        self.started + SPIN_EVERY * (self.frames() as u32 + 1)
     }
 
     pub fn job(&self, id: TorrentId) -> Option<&Job> {
