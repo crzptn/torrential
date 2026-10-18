@@ -3,7 +3,7 @@
 <p align="center">Search and download torrents from your terminal, or ask your coding agent to.</p>
 
 <p align="center">
-  <img src="docs/demo.gif" alt="torrential searches archive.org for Big Buck Bunny, then downloads only its MP4" width="800">
+  <img src="docs/tui.gif" alt="The terminal UI searches for Big Buck Bunny, picks one file, and downloads it while the gauge fills" width="800">
 </p>
 
 ## Install
@@ -18,25 +18,48 @@ nix develop -c cargo install --path crates/torrential
 
 ## Use it
 
-Run `torrential` with no arguments to open the terminal UI.
+Run `torrential` with no arguments to open the terminal UI. Search, pick the files you want, and watch the download fill in as its pieces arrive.
+
+<p align="center">
+  <img src="docs/search.png" alt="Search results for Night of the Living Dead, ranked for this Mac" width="49%">
+  <img src="docs/files.png" alt="Picking the files to download from a result" width="49%">
+</p>
 
 Or run the commands yourself:
 
+<p align="center">
+  <img src="docs/cli.gif" alt="torrential search finds Big Buck Bunny on archive.org, then get downloads one of its files" width="800">
+</p>
+
 ```sh
-torrential search big buck bunny        # each result starts with a short ID
-torrential get b63eaa --files '*.mp4'   # download only the files you want
-torrential wait b63eaa                  # follow a download until it is done
-torrential status                       # list your downloads
-torrential pause b63eaa                 # pause a download
-torrential resume b63eaa                # continue it, or retry a failed one
-torrential rm b63eaa                    # stop tracking it, and keep its files
+torrential search big buck bunny            # each result starts with a short ID
+torrential get fd69b2 --files '*h264.mp4'   # download only the files you want
+torrential wait fd69b2                      # follow a download until it is done
+torrential status                           # list your downloads
+torrential pause fd69b2                     # pause a download
+torrential resume fd69b2                    # continue it, or retry a failed one
+torrential rm fd69b2                        # stop tracking it, and keep its files
 ```
 
 An ID is the start of the torrent's infohash, and any unique prefix of 4 or more characters works. `get` also takes a magnet link, a full infohash, or a `.torrent` file or URL.
 
 On a terminal, `get` shows progress until the download is done. Downloads run in a background engine, so they keep going after you press Ctrl-C or close the terminal.
 
-Every command takes `--json` for scripts, and `torrential schema` describes the commands, their output, and their errors.
+Every command takes `--json` for scripts, and `torrential schema` describes the commands, their flags, and their errors.
+
+## Ranked for your machine
+
+torrential reads your screen, CPU, and language, and ranks releases to fit them: 1080p on a laptop, arm64 builds on Apple silicon, and your language first. `torrential setup` shows what it found. If you watch on another screen, say so once:
+
+```sh
+torrential setup --screen tv-4k
+```
+
+In the terminal UI, press `S` to change it.
+
+<p align="center">
+  <img src="docs/ranking.png" alt="The ranking panel shows what torrential detected and lets you override it" width="800">
+</p>
 
 ## With your agent
 
@@ -68,11 +91,11 @@ Agent sandboxes block the connections BitTorrent needs. torrential checks for a 
 
 ## Settings
 
-torrential reads `~/.config/torrential/config.toml`. Downloads go to a `torrential` folder in your Downloads folder unless you set another:
+torrential reads `~/.config/torrential/config.yaml`. Downloads go to a `torrential` folder in your Downloads folder unless you set another:
 
-```toml
-[downloads]
-dir = "~/Downloads/torrents"
+```yaml
+downloads:
+  dir: ~/Downloads/torrents
 ```
 
 ## It never seeds
