@@ -500,6 +500,35 @@ fn verify_reports_a_corrupted_byte_and_repair_fixes_it() {
 }
 
 #[test]
+fn a_failed_check_outlives_the_engine_and_resume_repairs_the_damage() {
+    let fixture = Fixture::new("set", &SET, 11);
+    let seeder = Seeder::start(&fixture, None);
+    let home = Home::new(&seeder);
+    home.get(&fixture.torrent_file(), &[]);
+    assert_eq!(home.run(&["wait", &fixture.short()]).code, 0);
+    let damaged = fixture.downloaded(&home, "a.bin");
+    let offset = 3 * u64::from(PIECE) + 100;
+    let mut file = OpenOptions::new().write(true).open(&damaged).unwrap();
+    file.seek(SeekFrom::Start(offset)).unwrap();
+    file.write_all(&[!fixture.files["a.bin"][offset as usize]]).unwrap();
+    drop(file);
+    assert_eq!(home.ok(&["verify", &fixture.short()])["changes"][0]["result"], "checking");
+    home.until(&fixture.id(), "the check reports", |j| state(j) == "error");
+
+    home.ok(&["daemon", "stop"]);
+    let job = home.job(&fixture.id());
+    let short = fixture.total() - u64::from(PIECE);
+    assert_eq!((state(&job), verified(&job)), ("error", short), "the check outlived the engine: {job:#}");
+    let files = home.ok(&["files", &fixture.short()]);
+    let bytes: u64 = files["files"]["files"].as_array().unwrap().iter().map(|f| f["verified"].as_u64().unwrap()).sum();
+    assert_eq!(bytes, short, "the files hold what the check verified");
+    assert_eq!(home.ok(&["resume", &fixture.short()])["changes"][0]["result"], "resumed");
+    let wait = home.run(&["wait", &fixture.short()]);
+    assert_eq!(wait.code, 0, "{}{}", wait.stdout, wait.stderr);
+    assert!(fixture.intact(&home, "a.bin"), "resume downloaded the damaged piece again");
+}
+
+#[test]
 fn wait_exits_8_on_a_short_timeout_and_0_when_done() {
     let fixture = Fixture::new("big", &BIG, 7);
     let seeder = Seeder::start(&fixture, SLOW);

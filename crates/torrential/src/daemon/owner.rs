@@ -1025,11 +1025,21 @@ impl Owner {
             self.engine.send(EngineCommand::Remove(id));
             self.draining.insert(id);
             self.publish(id);
-        } else if self.store.save_resume(id, &data, verified, piece_map, files.as_deref(), now()).is_ok() {
-            let record = &mut self.jobs.get_mut(&id).expect("checked above").record;
-            record.verified = verified;
-            record.piece_map = piece_map;
-            record.files_verified = files;
+        } else {
+            let saved = self.store.save_resume(id, &data, verified, piece_map, files.as_deref(), now()).is_ok();
+            let job = self.jobs.get_mut(&id).expect("checked above");
+            if saved {
+                job.record.verified = verified;
+                job.record.piece_map = piece_map;
+                job.record.files_verified = files;
+            }
+            // A failed check held the torrent for this save. A new verify or a resume moved it on.
+            if matches!(job.record.intent, Intent::Failed { .. }) && job.observed == Observed::InEngine(Phase::Paused) {
+                job.observed = Observed::Absent;
+                self.engine.send(EngineCommand::Remove(id));
+                self.draining.insert(id);
+                self.publish(id);
+            }
         }
     }
 
@@ -1076,8 +1086,12 @@ impl Owner {
                     format!("{} in the selected files", crate::output::format::count(n as usize, "damaged piece")),
                 )
                 .with_hint(format!("torrential verify {short} --repair downloads them again"));
-                self.fail(id, error);
-                return;
+                let failed = Intent::Failed { error };
+                let _ = self.store.set_intent(id, &failed);
+                job.record.intent = failed;
+                // The check's resume data must reach the store before the torrent leaves, or a
+                // restart would trust the resume data of the finished download.
+                job.observed = Observed::InEngine(Phase::Paused);
             }
         }
         self.publish(id);
