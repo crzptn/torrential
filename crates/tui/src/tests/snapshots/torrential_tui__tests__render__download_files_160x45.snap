@@ -6,7 +6,7 @@ expression: shot(&scenario(size))
 "                                                                                                                                                                "
 "     search │ press / to search                                                                                                                                 "
 "            │                                                                                                                                                   "
-"    getting │ wikipedia-en-2026-09-text                                       ━━━╸────────────   22%      30m left                                              "
+"    getting │ wikipedia-en-2026-09-text                                       ▃▂▁▄▂▂▁▃▂▁▃▂▂▂▁▁   22%      30m left                                              "
 "     failed │ openwebtext-2019                                                ━━━━━╸──────────   36%                                                            "
 "     paused │ stackexchange                                                   ━━━━━───────────   33%                                                            "
 "            │   ~/Downloads/torrential/stackexchange                                                                                                            "

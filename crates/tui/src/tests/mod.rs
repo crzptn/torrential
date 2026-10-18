@@ -58,7 +58,7 @@ pub fn jobs() -> Vec<Job> {
     let failed =
         Error::new(ErrorCode::StorageError, "cannot write openwebtext-2019/urlsf_subset07.tar: permission denied")
             .with_hint("check that the download folder is writable, then press p to resume");
-    vec![
+    let mut jobs = vec![
         job("6f2c81", "wikipedia-en-2026-09-text", JobStatus::Downloading, 23 * GIB, 23 * GIB / 100 * 23, 10 * MIB, 0),
         job("a90d44", "openwebtext-2019", JobStatus::Error { error: failed }, 12 * GIB, 12 * GIB / 100 * 37, 0, 1),
         job("91fd3b", "stackexchange", JobStatus::Paused, 38 * GIB, 38 * GIB / 100 * 34, 0, 3),
@@ -80,7 +80,14 @@ pub fn jobs() -> Vec<Job> {
             0,
             31,
         ),
-    ]
+    ];
+    // Scattered the way a swarm fills a torrent. Wikipedia's last slices hold its two files with
+    // nothing yet.
+    jobs[0].progress.piece_map =
+        Some("4206224002006442024224020020406220240400262202424020022420000000".parse().unwrap());
+    jobs[2].progress.piece_map =
+        Some("2464024620426420420226440240426224206024246204224206240262420224".parse().unwrap());
+    jobs
 }
 
 fn release(
