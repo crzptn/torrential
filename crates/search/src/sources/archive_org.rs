@@ -1,10 +1,15 @@
-//! Internet Archive items that have a torrent, through the advancedsearch JSON API.
+//! Internet Archive items that have a torrent, through the advancedsearch JSON API, and the
+//! servers that hold an item, through the metadata API.
+
+use std::time::Duration;
 
 use serde::Deserialize;
-use torrential_core::{Category, Flag};
+use tokio::time::Instant;
+use torrential_core::{Category, Error, ErrorCode, Flag};
 use url::Url;
 
 use super::{Ctx, Failure, at};
+use crate::http::Http;
 use crate::observation::{Identity, Observation, infohash, web_url};
 
 const FIELDS: [&str; 10] = [
@@ -105,9 +110,15 @@ fn parse(body: &[u8], base: &Url) -> Result<Vec<Observation>, String> {
     Ok(feed.response.docs.into_iter().filter_map(|doc| observation(doc, base)).collect())
 }
 
+/// Archive.org identifiers start with a letter or digit, then letters, digits, `-`, `_`, and `.`.
+fn identifier(id: &str) -> bool {
+    id.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+}
+
 fn observation(doc: Doc, base: &Url) -> Option<Observation> {
     let id = &doc.identifier;
-    if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)) {
+    if !identifier(id) {
         return None;
     }
     let hash = doc.btih.as_ref().and_then(Text::first).and_then(infohash)?;
@@ -143,6 +154,81 @@ fn category(doc: &Doc) -> Option<Category> {
         "data" => Category::Dataset,
         _ => Category::Other,
     })
+}
+
+/// An archive.org item a torrent downloads from.
+#[derive(PartialEq, Eq, Debug)]
+pub(crate) struct Item {
+    identifier: String,
+    metadata: Url,
+    /// The scheme of the archive.org endpoint, for the item's servers too.
+    scheme: String,
+}
+
+/// The item behind a torrent one of whose web seeds is the download URL under `base`. libtorrent
+/// asks a multi-file torrent's web seed for `<seed><torrent name>/<path>`, so a torrent that
+/// works from the download URL is named after its item. Older torrents list it over http.
+pub(super) fn item(base: &Url, name: &str, web_seeds: &[String]) -> Option<Item> {
+    let download = at(base, "download/");
+    let listed = web_seeds.iter().filter_map(|seed| Url::parse(seed).ok()).any(|seed| {
+        (seed.host_str(), seed.port(), seed.path()) == (download.host_str(), download.port(), download.path())
+    });
+    (listed && identifier(name)).then(|| Item {
+        identifier: name.to_string(),
+        metadata: at(base, &format!("metadata/{name}")),
+        scheme: base.scheme().to_string(),
+    })
+}
+
+impl Item {
+    /// Web seeds on the servers the item's metadata names. Fails with `fetch_failed`.
+    pub async fn mirrors(&self, http: &Http) -> Result<Vec<String>, Error> {
+        const CAP: usize = 16 << 20;
+        const WITHIN: Duration = Duration::from_secs(20);
+        let body = http.get(&self.metadata, CAP, Instant::now() + WITHIN).await;
+        let why = match body {
+            Ok(body) => match mirrors(&body, self) {
+                Ok(seeds) => return Ok(seeds),
+                Err(why) => why,
+            },
+            Err(e) => crate::fetch_reason(e, WITHIN),
+        };
+        Err(Error::new(
+            ErrorCode::FetchFailed,
+            format!("archive.org did not name the servers of {}: {why}", self.identifier),
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+struct Metadata {
+    d1: Option<String>,
+    d2: Option<String>,
+    /// Where the item lives on each server, such as `/0/items/<identifier>`. Absent for an
+    /// unknown item, whose metadata is `{}`.
+    dir: Option<String>,
+}
+
+/// The servers' item directories serve each file without a redirect. libtorrent appends the
+/// torrent's name, the identifier, so each seed is the folder that holds the item's directory.
+fn mirrors(body: &[u8], item: &Item) -> Result<Vec<String>, String> {
+    let meta: Metadata = serde_json::from_slice(body).map_err(|e| format!("metadata JSON: {e}"))?;
+    let dir = meta.dir.ok_or("its metadata has no directory")?;
+    let parent = dir
+        .strip_suffix(&format!("/{}", item.identifier))
+        .filter(|p| p.starts_with('/') && p[1..].split('/').all(identifier))
+        .ok_or_else(|| format!("its directory {dir:?} does not hold it by name"))?;
+    let host = |h: &String| !h.is_empty() && h.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.:".contains(&b));
+    let seeds: Vec<String> = [meta.d1, meta.d2]
+        .into_iter()
+        .flatten()
+        .filter(host)
+        .map(|h| format!("{}://{h}{parent}/", item.scheme))
+        .collect();
+    if seeds.is_empty() {
+        return Err("its metadata names no server".into());
+    }
+    Ok(seeds)
 }
 
 #[cfg(test)]
@@ -189,5 +275,55 @@ mod tests {
             ids.map(category),
             [Some(Category::Video), Some(Category::Video), Some(Category::Audio), Some(Category::Video)]
         );
+    }
+
+    fn seeds(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_torrent_that_lists_the_download_url_downloads_from_the_item_it_is_named_after() {
+        let base = Url::parse("https://archive.org/").unwrap();
+        let caminandes =
+            seeds(&["https://archive.org/download/", "http://ia600208.us.archive.org/6/items/", "/6/items/"]);
+        let item = item(&base, "Caminandes1LlamaDrama", &caminandes).unwrap();
+        assert_eq!(item.metadata.as_str(), "https://archive.org/metadata/Caminandes1LlamaDrama");
+        let old = seeds(&["http://archive.org/download/", "http://ia600308.us.archive.org/35/items"]);
+        assert_eq!(
+            super::item(&base, "night_of_the_living_dead_dvd", &old).unwrap().identifier,
+            "night_of_the_living_dead_dvd"
+        );
+        for list in [&["http://dn801201.us.archive.org/0/items/"][..], &["https://archive.org/details/"], &[]] {
+            assert_eq!(super::item(&base, "BigBuckBunny_124", &seeds(list)), None, "{list:?}");
+        }
+        assert_eq!(super::item(&base, "..", &caminandes), None);
+    }
+
+    #[test]
+    fn an_items_servers_serve_the_folder_that_holds_its_directory() {
+        let base = Url::parse("https://archive.org/").unwrap();
+        let item = item(&base, "Caminandes1LlamaDrama", &seeds(&["https://archive.org/download/"])).unwrap();
+        let recorded = fixture::read("archive.org/metadata-Caminandes1LlamaDrama.json");
+        assert_eq!(mirrors(&recorded, &item).unwrap(), ["https://dn600203.us.archive.org/0/items/"]);
+        let both = br#"{"d1": "ia800208.us.archive.org", "d2": "ia600208.us.archive.org", "dir": "/6/items/Caminandes1LlamaDrama"}"#;
+        assert_eq!(
+            mirrors(both, &item).unwrap(),
+            ["https://ia800208.us.archive.org/6/items/", "https://ia600208.us.archive.org/6/items/"]
+        );
+        let refused = [
+            (&br#"{}"#[..], "its metadata has no directory"),
+            (
+                br#"{"d1": "a.archive.org", "dir": "/0/items/Caminandes2"}"#,
+                r#"its directory "/0/items/Caminandes2" does not hold it by name"#,
+            ),
+            (
+                br#"{"d1": "a.archive.org", "dir": "/../Caminandes1LlamaDrama"}"#,
+                r#"its directory "/../Caminandes1LlamaDrama" does not hold it by name"#,
+            ),
+            (br#"{"d1": "evil.example/x?", "dir": "/0/items/Caminandes1LlamaDrama"}"#, "its metadata names no server"),
+        ];
+        for (body, why) in refused {
+            assert_eq!(mirrors(body, &item).unwrap_err(), why);
+        }
     }
 }

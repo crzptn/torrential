@@ -208,17 +208,27 @@ impl Search {
         // A private tracker may count each request for a .torrent as a grab.
         let body = self.inner.http.fetch(&url, CAP, Instant::now() + WITHIN, Retry::Never).await;
         body.map_err(|e| {
-            let why = match e {
-                FetchError::Timeout => format!("no answer within {} seconds", WITHIN.as_secs()),
-                FetchError::Status(status) => format!("http {status}"),
-                FetchError::Connect(reason) | FetchError::Decode(reason) => {
-                    text::truncate(&text::sanitize(&reason), 160)
-                }
-                FetchError::TooLarge(cap) => format!("larger than {} MiB", cap >> 20),
-            };
-            Error::new(ErrorCode::FetchFailed, format!("could not fetch the .torrent file: {why}"))
-                .with_hint("check the network connection, or download by magnet link")
+            Error::new(
+                ErrorCode::FetchFailed,
+                format!("could not fetch the .torrent file: {}", fetch_reason(e, WITHIN)),
+            )
+            .with_hint("check the network connection, or download by magnet link")
         })
+    }
+
+    /// Web seeds on the servers that hold an archive.org torrent's files, to add to its own.
+    /// archive.org's download URL answers each file with a redirect to a server that holds it,
+    /// and libtorrent turns each redirect into a web seed that has only that file, so a piece
+    /// that spans two files sent to different servers has no source. `None` for a torrent that
+    /// does not download from archive.org, and while the archive.org source is disabled.
+    pub fn mirrors(
+        &self,
+        name: &str,
+        web_seeds: &[String],
+    ) -> Option<impl Future<Output = Result<Vec<String>, Error>> + Send + 'static> {
+        let item = self.inner.sources.iter().find_map(|s| s.archive_item(name, web_seeds))?;
+        let inner = self.inner.clone();
+        Some(async move { item.mirrors(&inner.http).await })
     }
 
     fn select(&self, names: &[String]) -> Result<Vec<Arc<Source>>, Error> {
@@ -263,6 +273,16 @@ impl Inner {
             Err(failure) => Answer::Failed(failure),
         };
         (answer, !ctx.partial.load(Ordering::Relaxed))
+    }
+}
+
+/// Why a fetch given `within` failed, safe to show: a reason can quote the server.
+fn fetch_reason(e: FetchError, within: Duration) -> String {
+    match e {
+        FetchError::Timeout => format!("no answer within {} seconds", within.as_secs()),
+        FetchError::Status(status) => format!("http {status}"),
+        FetchError::Connect(reason) | FetchError::Decode(reason) => text::truncate(&text::sanitize(&reason), 160),
+        FetchError::TooLarge(cap) => format!("larger than {} MiB", cap >> 20),
     }
 }
 

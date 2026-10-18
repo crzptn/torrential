@@ -192,6 +192,15 @@ impl Source {
         }
     }
 
+    /// The archive.org item a torrent with these web seeds downloads from. See
+    /// [`crate::Search::mirrors`].
+    pub fn archive_item(&self, name: &str, web_seeds: &[String]) -> Option<archive_org::Item> {
+        match self.adapter {
+            Adapter::ArchiveOrg => archive_org::item(&self.base, name, web_seeds),
+            _ => None,
+        }
+    }
+
     pub async fn search(&self, ctx: &Ctx<'_>) -> Result<Vec<Observation>, Failure> {
         let base = &self.base;
         match &self.adapter {
