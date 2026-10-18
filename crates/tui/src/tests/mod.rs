@@ -263,6 +263,18 @@ pub fn wikipedia_files() -> FilesReply {
     }
 }
 
+/// Twenty parts of the paused stackexchange download, the last one complete.
+pub fn stackexchange_files() -> FilesReply {
+    FilesReply {
+        id: id("91fd3b").to_hex(),
+        name: Some("stackexchange".into()),
+        total_size: 2_000 * MIB,
+        files: (1..=20).map(|i| file(&format!("part{i:02}.7z"), 100 * MIB, i * 5 * MIB, false)).collect(),
+        metadata_source: "download".into(),
+        elapsed_ms: 1,
+    }
+}
+
 /// A screen of the given size, with a fixed clock.
 pub fn app(size: (u16, u16)) -> State {
     let now = Instant::now();

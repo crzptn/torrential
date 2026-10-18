@@ -346,6 +346,9 @@ fn list(buf: &mut Buffer, state: &State, screen: &Screen) {
                 download_row(&mut sheet, state, job, &download_grid(right), y);
             }
             Block::DownloadDetail(id) => {
+                if layout::in_files(state, id) {
+                    last = Some("files");
+                }
                 if let Some(job) = state.job(id) {
                     download_detail(&mut sheet, state, job, &download_grid(right), (y, area.height));
                 }
@@ -411,7 +414,7 @@ fn selected(state: &State, item: Item) -> bool {
 
 fn download_row(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, y: u16) {
     let is_selected = selected(state, Item::Download(job.id));
-    if is_selected {
+    if is_selected && state.focus == Focus::List {
         mark(buf, y);
     }
     let done = matches!(job.status, JobStatus::Done { .. });
@@ -492,20 +495,42 @@ fn download_detail(buf: &mut Buffer, state: &State, job: &Job, g: &Grid, (y, vie
     }
     let (shown, more) = layout::download_file_rows(state, job, viewport);
     let Some(files) = state.download_files.get(&job.id) else { return };
-    let picked: Vec<_> = files.files.iter().filter(|f| f.selected).collect();
+    let picked = files.picked();
+    let inside = layout::in_files(state, job.id);
+    let skip = if inside { files.scroll } else { 0 };
     let ink = if job.status == JobStatus::Downloading { ACTION } else { PENCIL };
-    for file in picked.iter().take(shown) {
+    let first = row;
+    for (k, file) in picked.iter().enumerate().skip(skip).take(shown) {
+        let here = inside && k == files.cursor;
+        if inside && row == first {
+            margin(buf, row, "files", fg(PENCIL));
+        }
+        if here {
+            mark(buf, row);
+        }
         let name = file.path.rsplit('/').next().unwrap_or(&file.path);
         let room = g.rule - 2 - DETAIL;
-        put(buf, DETAIL, row, room, &middle(name, room as usize), fg(TEXT));
+        put(buf, DETAIL, row, room, &middle(name, room as usize), if here { bold(INK) } else { fg(TEXT) });
         let fraction = if file.size == 0 { 1.0 } else { file.verified as f64 / file.size as f64 };
         progress(buf, g.rule, row, g.rule_cells, Some(fraction), ink);
         put_right(buf, g.percent, row, &percent(file.verified, file.size), fg(PENCIL));
         put_right(buf, g.right, row, &size(file.size), fg(PENCIL));
         row += 1;
     }
+    let mut arrow = |y: u16, glyph: &str| {
+        if buf[(MARK, y)].symbol() == "│" {
+            put(buf, MARK, y, 1, glyph, fg(PENCIL));
+        }
+    };
+    if skip > 0 {
+        arrow(first, "↑");
+    }
+    if inside && skip + shown < picked.len() {
+        arrow(row - 1, "↓");
+    }
     if more {
-        put(buf, DETAIL, row, room, &format!("and {} more files", picked.len() - shown), fg(PENCIL));
+        let text = format!("and {} more files · press enter to list them", picked.len() - shown);
+        put(buf, DETAIL, row, room, &text, fg(PENCIL));
     }
 }
 
@@ -722,7 +747,17 @@ const HELP: [(&str, &[(&str, &str)]); 6] = [
     ("typing", &[("/", "search"), ("enter", "search again"), ("ctrl+u", "clear"), ("tab", "into the list")]),
     ("results", &[("enter", "files"), ("D", "download"), ("s", "sort"), ("h l", "close, open")]),
     ("files", &[("space", "pick"), ("a", "all or none"), ("h l", "fold folders"), ("enter", "download")]),
-    ("download", &[("space", "pause, resume"), ("v", "verify"), ("x", "remove"), ("o", "open"), ("y", "copy path")]),
+    (
+        "download",
+        &[
+            ("enter", "files"),
+            ("space", "pause, resume"),
+            ("v", "verify"),
+            ("x", "remove"),
+            ("o", "open"),
+            ("y", "copy path"),
+        ],
+    ),
     ("always", &[("?", "keys"), ("esc", "back"), ("q", "quit"), ("ctrl+c", "quit")]),
 ];
 
@@ -778,6 +813,9 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
         _ if state.help => vec![("esc", "close")],
         (Focus::Query, _) if state.items().is_empty() => vec![("enter", "search")],
         (Focus::Query, _) => vec![("enter", "search"), ("↓", "list")],
+        (Focus::Files, Some(Item::Download(_))) => {
+            vec![("space", pause), ("esc", "back"), ("o", "open"), ("?", "keys")]
+        }
         (Focus::Files, _) => vec![("space", "pick"), ("a", "all"), ("enter", "download"), ("esc", "back")],
         (Focus::List, Some(Item::Download(_))) => vec![("space", pause), ("x", "remove"), ("o", "open"), ("?", "keys")],
         (Focus::List, Some(Item::Result(_))) if downloaded => vec![("d", "downloads"), ("s", "sort"), ("?", "keys")],

@@ -15,7 +15,8 @@ pub enum Item {
     Result(ReleaseId),
 }
 
-/// Where keys go. `Files` means the cursor is inside the selected result's file tree.
+/// Where keys go. `Files` means the cursor is inside the selected item's files: a result's tree,
+/// or the list of a download's files.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
     Query,
@@ -93,11 +94,45 @@ pub enum Files {
     Failed(Error),
 }
 
-/// A download's files with their progress, and when they were last asked for.
+/// A download's files with their progress, when they were last asked for, and where the
+/// cursor is among the picked ones.
 #[derive(Clone, PartialEq, Debug)]
 pub struct DownloadFiles {
     pub files: Vec<TorrentFile>,
     pub asked: Instant,
+    /// An index into [`DownloadFiles::picked`].
+    pub cursor: usize,
+    /// The first picked file shown while the cursor is inside the list.
+    pub scroll: usize,
+}
+
+impl DownloadFiles {
+    pub fn new(asked: Instant) -> Self {
+        Self { files: Vec::new(), asked, cursor: 0, scroll: 0 }
+    }
+
+    /// The files the download gets, which are the ones it lists.
+    pub fn picked(&self) -> Vec<&TorrentFile> {
+        self.files.iter().filter(|f| f.selected).collect()
+    }
+
+    pub fn move_by(&mut self, delta: isize) {
+        self.cursor = self.cursor.saturating_add_signed(delta);
+    }
+
+    /// Keeps the cursor on a file and inside the `rows` shown, with a file past it in view so
+    /// the arrow saying more lie beyond stays visible.
+    pub fn settle(&mut self, rows: usize) {
+        let count = self.picked().len();
+        self.cursor = self.cursor.min(count.saturating_sub(1));
+        let context = usize::from(rows > 2);
+        if self.cursor < self.scroll + context {
+            self.scroll = self.cursor.saturating_sub(context);
+        } else if rows > 0 && self.cursor + context >= self.scroll + rows {
+            self.scroll = self.cursor + context + 1 - rows;
+        }
+        self.scroll = self.scroll.min(count.saturating_sub(rows.max(1)));
+    }
 }
 
 /// An action sent to the engine whose answer has not come back yet.

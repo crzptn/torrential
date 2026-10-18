@@ -124,28 +124,42 @@ fn empty_message(state: &State) -> bool {
     }
 }
 
-/// How many of a download's files its details list, and whether a `+N more` line follows.
+/// Whether keys go to this download's list of files.
+pub fn in_files(state: &State, id: TorrentId) -> bool {
+    state.focus == Focus::Files && state.cursor == Some(Item::Download(id))
+}
+
+/// How many of a download's files its details list, and whether an `and N more` line follows.
+/// With the cursor inside the list, it takes the rows the list has to spare, the way a
+/// result's file tree does, and scrolls.
 pub fn download_file_rows(state: &State, job: &Job, viewport: u16) -> (usize, bool) {
+    let n = state.download_files.get(&job.id).map_or(0, |f| f.picked().len());
+    if n <= 1 {
+        return (0, false);
+    }
+    if in_files(state, job.id) {
+        let fixed = 5 + error_lines(job) + u16::from(state.confirm == Some(job.id));
+        return (n.min(usize::from(viewport.saturating_sub(fixed).max(1))), false);
+    }
     let cap = match viewport {
         24.. => 8,
         16.. => 5,
         _ => 3,
     };
-    let picked = state.download_files.get(&job.id).map(|f| f.files.iter().filter(|f| f.selected).count());
-    match picked {
-        Some(n) if n > 1 => (n.min(cap), n > cap),
-        _ => (0, false),
+    (n.min(cap), n > cap)
+}
+
+fn error_lines(job: &Job) -> u16 {
+    match &job.status {
+        JobStatus::Error { error } => 1 + u16::from(error.hint.is_some()),
+        _ => 0,
     }
 }
 
 fn download_detail_height(state: &State, job: &Job, viewport: u16) -> u16 {
-    let error = match &job.status {
-        JobStatus::Error { error } => 1 + u16::from(error.hint.is_some()),
-        _ => 0,
-    };
     let confirm = u16::from(state.confirm == Some(job.id));
     let (files, more) = download_file_rows(state, job, viewport);
-    2 + error + confirm + files as u16 + u16::from(more)
+    2 + error_lines(job) + confirm + files as u16 + u16::from(more)
 }
 
 /// File rows shown in an open tree: as many as fit beside the result row and the total.

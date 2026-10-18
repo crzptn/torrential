@@ -85,6 +85,18 @@ fn download_screens() {
 }
 
 #[test]
+fn download_files_screens() {
+    snapshots("download_files", |size| {
+        let mut state = with_downloads(size);
+        press(&mut state, "jj");
+        state.update(Msg::Files { item: Item::Download(id("91fd3b")), result: Ok(stackexchange_files()) });
+        state.update(key(KeyCode::Enter));
+        press(&mut state, "jjjjjjjjjjjjjj");
+        state
+    });
+}
+
+#[test]
 fn help_screens() {
     snapshots("help", |size| {
         let mut state = searched(size);
@@ -143,6 +155,25 @@ fn a_toast_never_pushes_out_the_first_hint() {
     state.update(Msg::Resize(60, 16));
     let footer = line(&render(&state), 15);
     assert_eq!(footer, format!("{:14}Started Night of the Living…     space pause", ""));
+}
+
+#[test]
+fn every_file_of_a_download_is_one_key_away() {
+    let mut state = with_downloads((80, 24));
+    press(&mut state, "jj");
+    state.update(Msg::Files { item: Item::Download(id("91fd3b")), result: Ok(stackexchange_files()) });
+    let screen = shot(&state);
+    assert!(screen.contains("and 15 more files · press enter to list them"), "{screen}");
+    state.update(key(KeyCode::Enter));
+    press(&mut state, "G");
+    let buf = render(&state);
+    let (_, y) = find(&buf, "part20.7z");
+    assert_eq!(buf[(MARK, y)].symbol(), "●");
+    assert!(line(&buf, y).ends_with("100%       100 MiB"), "{}", line(&buf, y));
+    assert_eq!(buf[(MARK, y - 12)].symbol(), "↑", "more files above");
+    assert!(line(&buf, 23).ends_with("space resume   esc back   o open   ? keys"), "{}", line(&buf, 23));
+    state.update(key(KeyCode::Esc));
+    assert_eq!(state.focus, crate::state::Focus::List);
 }
 
 #[test]

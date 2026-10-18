@@ -198,6 +198,15 @@ impl State {
         {
             tree.settle(layout::tree_rows(tree.visible().len(), viewport));
         }
+        if let Some(Item::Download(id)) = self.cursor
+            && layout::in_files(self, id)
+            && let Some(job) = self.job(id)
+        {
+            let (rows, _) = layout::download_file_rows(self, job, viewport);
+            if let Some(files) = self.download_files.get_mut(&id) {
+                files.settle(rows);
+            }
+        }
         let placed = layout::blocks(self, viewport);
         let mut scroll = i32::from(self.scroll);
         if let (Some((item, row)), Some(cursor)) = (before, self.cursor)
@@ -238,8 +247,8 @@ impl State {
         if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
             return None;
         }
-        let files = self.focus == Focus::Files;
         let download = matches!(self.cursor, Some(Item::Download(_)));
+        let picking = self.focus == Focus::Files && !download;
         Some(match key.code {
             Char('q') => Action::Quit,
             Char('?') => Action::Help,
@@ -255,11 +264,11 @@ impl State {
             PageUp => Action::Move(Move::PageUp),
             Home | Char('g') => Action::Move(Move::First),
             End | Char('G') => Action::Move(Move::Last),
-            Enter if files && self.tree_ready() => Action::Download,
+            Enter if picking && self.tree_ready() => Action::Download,
             Enter | Right | Char('l') => Action::Open,
             Left | Char('h') => Action::Collapse,
-            Char(' ') if files => Action::Pick,
-            Char('a') if files => Action::PickAll,
+            Char(' ') if picking => Action::Pick,
+            Char('a') if picking => Action::PickAll,
             Char('D') => Action::Download,
             Char('s') => Action::Sort,
             Char(' ' | 'p') if download => Action::TogglePause,
@@ -286,10 +295,14 @@ impl State {
             Action::Back => self.back(),
             Action::Move(m) => return self.move_cursor(m),
             Action::Open => return self.open(),
-            Action::Collapse => match self.tree() {
-                Some(tree) => tree.fold(),
-                None => self.collapsed = true,
-            },
+            Action::Collapse => {
+                let in_files = self.focus == Focus::Files;
+                match self.tree() {
+                    Some(tree) => tree.fold(),
+                    None if in_files => self.focus = Focus::List,
+                    None => self.collapsed = true,
+                }
+            }
             Action::Download => {
                 if let Some(Item::Result(id)) = self.cursor {
                     return self.download(id);
@@ -370,6 +383,15 @@ impl State {
         }
     }
 
+    /// A download's file list, when the cursor is inside one.
+    fn download_files(&mut self) -> Option<&mut DownloadFiles> {
+        let Some(Item::Download(id)) = self.cursor else { return None };
+        match self.focus {
+            Focus::Files => self.download_files.get_mut(&id),
+            _ => None,
+        }
+    }
+
     /// The esc ladder: close help, leave the file tree, then go to the query.
     fn back(&mut self) {
         if self.help {
@@ -397,16 +419,20 @@ impl State {
     }
 
     fn move_cursor(&mut self, m: Move) -> Vec<Effect> {
+        let delta = match m {
+            Move::Up => -1,
+            Move::Down => 1,
+            Move::PageUp => -10,
+            Move::PageDown => 10,
+            Move::First => isize::MIN / 2,
+            Move::Last => isize::MAX / 2,
+        };
         if let Some(tree) = self.tree() {
-            let page = 10;
-            match m {
-                Move::Up => tree.move_by(-1),
-                Move::Down => tree.move_by(1),
-                Move::PageUp => tree.move_by(-page),
-                Move::PageDown => tree.move_by(page),
-                Move::First => tree.move_by(isize::MIN / 2),
-                Move::Last => tree.move_by(isize::MAX / 2),
-            }
+            tree.move_by(delta);
+            return Vec::new();
+        }
+        if let Some(files) = self.download_files() {
+            files.move_by(delta);
             return Vec::new();
         }
         let items = self.items();
@@ -506,7 +532,13 @@ impl State {
         }
         match self.cursor {
             Some(Item::Result(id)) => self.open_files(id, false),
-            _ => Vec::new(),
+            Some(Item::Download(id)) => {
+                if self.download_files.get(&id).is_some_and(|f| f.picked().len() > 1) {
+                    self.focus = Focus::Files;
+                }
+                Vec::new()
+            }
+            None => Vec::new(),
         }
     }
 
@@ -755,8 +787,7 @@ impl State {
         if !known || !due {
             return Vec::new();
         }
-        let entry =
-            self.download_files.entry(id).or_insert_with(|| DownloadFiles { files: Vec::new(), asked: self.now });
+        let entry = self.download_files.entry(id).or_insert_with(|| DownloadFiles::new(self.now));
         entry.asked = self.now;
         vec![Effect::Files(Item::Download(id))]
     }

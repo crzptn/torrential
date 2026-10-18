@@ -413,3 +413,16 @@ fn a_started_toast_names_the_download_after_the_results_change() {
     state.update(Msg::Started { release: result_id("4c1e9a"), result: Ok(Box::new(reply)) });
     assert_eq!(state.toast.as_ref().unwrap().text, "Started night_of_the_living_dead");
 }
+
+#[test]
+fn inside_a_download_files_space_still_pauses_and_h_steps_back() {
+    let mut state = with_downloads((100, 30));
+    state.update(Msg::Files { item: Item::Download(id("6f2c81")), result: Ok(wikipedia_files()) });
+    state.update(key(KeyCode::Enter));
+    assert_eq!(state.focus, Focus::Files);
+    press(&mut state, "j");
+    assert_eq!(state.download_files[&id("6f2c81")].cursor, 1);
+    assert_eq!(press(&mut state, " "), [Effect::Job { id: id("6f2c81"), action: JobAction::Pause }]);
+    press(&mut state, "h");
+    assert_eq!((state.focus, cursor_name(&state)), (Focus::List, "wikipedia-en-2026-09-text".into()));
+}
