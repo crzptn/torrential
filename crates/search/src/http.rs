@@ -126,7 +126,6 @@ fn classify(err: reqwest::Error) -> FetchError {
         return FetchError::Timeout;
     }
     let decode = err.is_decode();
-    // Drop the URL: a Torznab URL carries the user's API key.
     let err = err.without_url();
     let mut parts: Vec<String> = Vec::new();
     let mut cause: Option<&dyn std::error::Error> = Some(&err);

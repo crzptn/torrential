@@ -138,6 +138,7 @@ fn category(doc: &Doc) -> Option<Category> {
     let video = || doc.format.as_ref().is_some_and(|f| f.all().iter().any(|f| VIDEO_FORMATS.contains(&f.as_str())));
     Some(match doc.mediatype.as_ref().and_then(Text::first)? {
         "movies" => Category::Video,
+        // Archive.org files Big Buck Bunny under audio, with color and video formats.
         "audio" if doc.color.is_some() && video() => Category::Video,
         "audio" | "etree" => Category::Audio,
         "software" => Category::Software,

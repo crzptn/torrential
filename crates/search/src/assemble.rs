@@ -97,7 +97,6 @@ fn all_failed(sources: Vec<SourceReport>) -> Error {
 pub(crate) struct Candidate {
     pub release: Release,
     hash: Option<InfoHash>,
-    /// The private source the `.torrent` URL came from, which may have put an API key in it.
     private_url: Option<String>,
     /// The trackers came from a private source and carry the user's passkey.
     private_trackers: bool,

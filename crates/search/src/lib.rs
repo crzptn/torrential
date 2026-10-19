@@ -84,8 +84,9 @@ pub struct SourceInfo {
     pub lawful: bool,
 }
 
-/// A search under way: the sources that have answered, merged and ranked the way
-/// the final result is, and the sources still to answer, most authoritative first.
+/// A search under way, with answers merged and ranked like the final result.
+/// Pending sources follow the query's source order, or authority order when it
+/// names none.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Progress {
     pub result: SearchResult,
