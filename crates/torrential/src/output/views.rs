@@ -14,6 +14,7 @@ use super::format::{self, NONE};
 use super::theme::Token;
 use super::{Body, Cell, Doc};
 use crate::skill::{Change as SkillChange, Installed, State};
+use crate::update::Policy;
 
 const SHORT_ID: usize = 6;
 const MAX_FILE_ROWS: usize = 200;
@@ -629,9 +630,13 @@ pub fn doctor(checks: &[Check], fix: Option<String>) -> Doc {
     }
 }
 
-pub fn setup(profile: &Profile, file: &Path, result: &str) -> Doc {
+pub fn setup(profile: &Profile, updates: Policy, file: &Path, result: &str) -> Doc {
     let detected = profile.detected.as_ref().map_or_else(|| "nothing".to_string(), machine);
-    let fields = vec![("detected", Cell::new(detected)), ("file", Cell::new(file.display().to_string()))];
+    let fields = vec![
+        ("detected", Cell::new(detected)),
+        ("updates", Cell::new(updates.as_str())),
+        ("file", Cell::new(file.display().to_string())),
+    ];
     let title = match result {
         "shown" => Vec::new(),
         word => vec![Cell::styled(word, Token::Mint)],

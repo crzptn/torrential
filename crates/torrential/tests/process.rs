@@ -422,8 +422,8 @@ fn setup_shows_the_detected_machine_and_saves_and_clears_overrides() {
     let home = Home::new();
     let config = home.dir.path().join("th/config/config.yaml");
     let file = config.display().to_string();
-    let flags =
-        "torrential setup --screen phone|laptop|tv|tv-4k|auto --max-size 8GB|none --playback hevc-hdr|hevc|h264|auto";
+    let flags = "torrential setup --screen phone|laptop|tv|tv-4k|auto --max-size 8GB|none --playback \
+                 hevc-hdr|hevc|h264|auto --updates notify|auto|off";
     let mac = "detected: 3024x1964 display with HDR, arm64, English";
 
     let shown = home.run(&["setup"]);
@@ -435,7 +435,7 @@ fn setup_shows_the_detected_machine_and_saves_and_clears_overrides() {
     assert_eq!(
         shown.stdout,
         format!(
-            "{mac}\nfile:     {file}\n\
+            "{mac}\nupdates:  notify\nfile:     {file}\n\
              # ranking for this Mac: 1080p screen, shows HDR, plays HEVC, arm64, English · overrides: none\n\
              next:     {flags}\n"
         )
@@ -443,7 +443,7 @@ fn setup_shows_the_detected_machine_and_saves_and_clears_overrides() {
     assert_eq!(
         saved.stdout,
         format!(
-            "saved\n{mac}\nfile:     {file}\n\
+            "saved\n{mac}\nupdates:  notify\nfile:     {file}\n\
              # ranking for this Mac: 2160p screen, up to 8 GB, arm64, English · overrides: screen tv-4k, max_size \
              8GB\n# get refuses a download over 8 GB unless --max-size allows it\nnext:     torrential search <words>\n"
         )
@@ -461,6 +461,11 @@ fn setup_shows_the_detected_machine_and_saves_and_clears_overrides() {
     assert_eq!(cleared.code, 0, "{}", cleared.stderr);
     assert!(cleared.stdout.contains("· overrides: none\n"), "{}", cleared.stdout);
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "");
+
+    let off = home.json(&["setup", "--updates", "off", "--json"]);
+    assert_eq!((&off["result"], &off["updates"]), (&serde_json::json!("saved"), &serde_json::json!("off")));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "updates: off\n");
+    assert!(home.run(&["setup"]).stdout.contains("\nupdates:  off\n"));
 }
 
 fn fake_torrent(name: &str, size: u64) -> Vec<u8> {

@@ -55,7 +55,7 @@ pub enum Command {
     Verify(VerifyArgs),
     /// Show what search ranks for on this machine, or set where you watch instead
     #[command(
-        after_help = "Examples:\n  torrential setup\n  torrential setup --screen tv-4k\n  torrential setup --screen auto --max-size none"
+        after_help = "Examples:\n  torrential setup\n  torrential setup --screen tv-4k\n  torrential setup --screen auto --max-size none\n  torrential setup --updates auto"
     )]
     Setup(SetupArgs),
     /// Diagnose sandbox, disk, state, engine, config, and sources
@@ -126,10 +126,13 @@ pub struct SetupArgs {
     /// What your player handles, when it is not this machine's. auto goes back to the display
     #[arg(long, value_enum)]
     pub playback: Option<PlaybackArg>,
+    /// Whether torrential says when a newer version is out, installs it in the background, or never looks
+    #[arg(long, value_enum)]
+    pub updates: Option<crate::update::Policy>,
 }
 
-pub const SETUP_FLAGS: &str =
-    "torrential setup --screen phone|laptop|tv|tv-4k|auto --max-size 8GB|none --playback hevc-hdr|hevc|h264|auto";
+pub const SETUP_FLAGS: &str = "torrential setup --screen phone|laptop|tv|tv-4k|auto --max-size 8GB|none --playback \
+                               hevc-hdr|hevc|h264|auto --updates notify|auto|off";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Limit(pub Option<u64>);

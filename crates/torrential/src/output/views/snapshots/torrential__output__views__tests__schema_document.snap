@@ -304,6 +304,18 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
             "h264",
             "auto"
           ]
+        },
+        {
+          "name": "--updates",
+          "help": "Whether torrential says when a newer version is out, installs it in the background, or never looks",
+          "takes_value": true,
+          "repeatable": false,
+          "value_name": "UPDATES",
+          "values": [
+            "notify",
+            "auto",
+            "off"
+          ]
         }
       ]
     },

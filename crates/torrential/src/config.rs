@@ -11,6 +11,7 @@ use torrential_search::{SearchConfig, TorznabConfig};
 use crate::env::Env;
 use crate::paths::Paths;
 use crate::skill::{Writes, write_atomic};
+use crate::update::Policy;
 
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Config {
@@ -18,6 +19,7 @@ pub struct Config {
     pub search: SearchConfig,
     pub file: Option<PathBuf>,
     pub preferences: Preferences,
+    pub updates: Policy,
 }
 
 #[derive(Deserialize, Default)]
@@ -26,12 +28,19 @@ struct File {
     downloads: Downloads,
     sources: Sources,
     preferences: Option<Overrides>,
+    updates: Option<Policy>,
 }
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct PreferencesOnly {
     preferences: Option<Overrides>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct UpdatesOnly {
+    updates: Option<Policy>,
 }
 
 #[derive(Deserialize, Default)]
@@ -97,11 +106,40 @@ pub fn preferences(paths: &Paths) -> Result<Preferences, Error> {
 }
 
 pub fn save_preferences(paths: &Paths, preferences: &Preferences, writes: &Writes) -> Result<(PathBuf, bool), Error> {
+    save(paths, writes, "preferences block", |text| {
+        let edited = if preferences.is_empty() {
+            without_block(text)
+        } else {
+            with_block(text, "preferences", &block(preferences))
+        };
+        (read_preferences(&edited).ok() == Some(*preferences)).then_some(edited)
+    })
+}
+
+pub fn updates(paths: &Paths) -> Result<Policy, Error> {
+    let Some((path, text)) = read(paths)? else { return Ok(Policy::default()) };
+    read_updates(&text).map_err(|(line, message)| invalid(&path, line, &message))
+}
+
+pub fn save_updates(paths: &Paths, policy: Policy, writes: &Writes) -> Result<(PathBuf, bool), Error> {
+    save(paths, writes, "updates line", |text| {
+        let edited = with_block(text, "updates", &format!("updates: {}\n", policy.as_str()));
+        (read_updates(&edited).ok() == Some(policy)).then_some(edited)
+    })
+}
+
+/// Rewrites one part of the config file with `edit`, which returns `None` when the result would
+/// not read back as intended.
+fn save(
+    paths: &Paths,
+    writes: &Writes,
+    part: &str,
+    edit: impl FnOnce(&str) -> Option<String>,
+) -> Result<(PathBuf, bool), Error> {
     let (path, text) = read(paths)?.unwrap_or_else(|| (path(paths), String::new()));
-    let edited = if preferences.is_empty() { without_block(&text) } else { with_block(&text, &block(preferences)) };
-    if read_preferences(&edited).ok() != Some(*preferences) {
-        return Err(invalid(&path, None, "setup cannot rewrite the preferences block in this file"));
-    }
+    let Some(edited) = edit(&text) else {
+        return Err(invalid(&path, None, &format!("setup cannot rewrite the {part} in this file")));
+    };
     if edited == text {
         return Ok((path, false));
     }
@@ -116,6 +154,11 @@ pub fn save_preferences(paths: &Paths, preferences: &Preferences, writes: &Write
 fn read_preferences(text: &str) -> Result<Preferences, Problem> {
     let file: PreferencesOnly = serde_saphyr::from_str(text).map_err(|e| problem(&e))?;
     file.preferences.unwrap_or_default().read()
+}
+
+fn read_updates(text: &str) -> Result<Policy, Problem> {
+    let file: UpdatesOnly = serde_saphyr::from_str(text).map_err(|e| problem(&e))?;
+    Ok(file.updates.unwrap_or_default())
 }
 
 impl Overrides {
@@ -145,8 +188,8 @@ fn block(preferences: &Preferences) -> String {
     format!("preferences:\n{}\n", lines.join("\n"))
 }
 
-fn block_lines(lines: &[&str]) -> Option<(usize, usize)> {
-    let is_key = |line: &&str| line.strip_prefix("preferences").is_some_and(|rest| rest.starts_with(':'));
+fn block_lines(lines: &[&str], key: &str) -> Option<(usize, usize)> {
+    let is_key = |line: &&str| line.strip_prefix(key).is_some_and(|rest| rest.starts_with(':'));
     let start = lines.iter().position(is_key)?;
     let mut end = start + 1;
     while end < lines.len() && (lines[end].starts_with([' ', '\t']) || lines[end].trim().is_empty()) {
@@ -160,7 +203,7 @@ fn block_lines(lines: &[&str]) -> Option<(usize, usize)> {
 
 fn without_block(text: &str) -> String {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let Some((start, mut end)) = block_lines(&lines) else { return text.to_string() };
+    let Some((start, mut end)) = block_lines(&lines, "preferences") else { return text.to_string() };
     while end < lines.len() && lines[end].trim().is_empty() {
         end += 1;
     }
@@ -174,9 +217,9 @@ fn without_block(text: &str) -> String {
     before + &lines[end..].concat()
 }
 
-fn with_block(text: &str, block: &str) -> String {
+fn with_block(text: &str, key: &str, block: &str) -> String {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let Some((start, end)) = block_lines(&lines) else {
+    let Some((start, end)) = block_lines(&lines, key) else {
         let mut out = text.to_string();
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
@@ -262,7 +305,7 @@ fn parse(text: &str, env: &Env) -> Result<Config, Problem> {
         .collect::<Result<_, _>>()?;
     let search = SearchConfig { torznab, disabled: file.sources.disabled, ..SearchConfig::default() };
     let preferences = file.preferences.unwrap_or_default().read()?;
-    Ok(Config { downloads, search, file: None, preferences })
+    Ok(Config { downloads, search, file: None, preferences, updates: file.updates.unwrap_or_default() })
 }
 
 fn describe(error: &serde_saphyr::Error) -> String {
@@ -548,6 +591,35 @@ sources:
 
         let mode = std::fs::metadata(&config).unwrap().permissions().mode() & 0o777;
         assert_eq!((format!("{mode:o}"), preferences(&folder.paths).unwrap()), ("600".to_string(), LAPTOP));
+    }
+
+    #[test]
+    fn updates_default_to_notify_and_a_bad_value_names_the_line() {
+        let read = |text: &str| parse(text, &env()).unwrap().updates;
+        assert_eq!(
+            [read(""), read("updates: auto\n"), read("updates: off\n")],
+            [Policy::Notify, Policy::Auto, Policy::Off]
+        );
+        let error = load("sources: {}\nupdates: always\n").unwrap_err();
+        assert_eq!(
+            error.message,
+            "$TORRENTIAL_HOME/config/config.yaml line 2: unknown variant `always`, expected one of notify, auto, off"
+        );
+    }
+
+    #[test]
+    fn setup_writes_the_updates_line_and_keeps_the_rest() {
+        let folder = Folder::new();
+        folder.write("# indexers\nsources:\n  disabled: [nyaa]\n");
+        let writes = Writes { sandboxed: false, rerun: "torrential setup".into() };
+        let save = |policy| save_updates(&folder.paths, policy, &writes).unwrap().1;
+
+        assert!(save(Policy::Auto));
+        assert_eq!(folder.text(), "# indexers\nsources:\n  disabled: [nyaa]\n\nupdates: auto\n");
+        assert!(save(Policy::Off));
+        assert_eq!(folder.text(), "# indexers\nsources:\n  disabled: [nyaa]\n\nupdates: off\n");
+        assert!(!save(Policy::Off), "saving the same policy again changes nothing");
+        assert_eq!(updates(&folder.paths).unwrap(), Policy::Off);
     }
 
     #[test]

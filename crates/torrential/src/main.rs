@@ -9,6 +9,7 @@ mod output;
 mod paths;
 mod schema;
 mod skill;
+mod update;
 mod wire;
 
 use std::io::IsTerminal;
