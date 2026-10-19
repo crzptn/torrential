@@ -104,7 +104,6 @@ struct Profiled {
     kind: Option<String>,
 }
 
-/// The largest display in `system_profiler SPDisplaysDataType -json`. XDR panels show HDR.
 fn profiled_display(json: &str) -> Option<Display> {
     let profiler: Profiler = serde_json::from_str(json).ok()?;
     profiler
@@ -125,9 +124,6 @@ fn dimensions(text: &str) -> Option<(u32, u32)> {
     Some((numbers.next()?, numbers.next()?))
 }
 
-/// The largest mode of any connected connector under `/sys/class/drm`, which lists one mode
-/// per line, as `3840x2160` or `1920x1080i`. Linux does not say there whether a display shows
-/// HDR, so none does.
 fn drm_display(root: &Path) -> Option<Display> {
     let read = |dir: &Path, file: &str| std::fs::read_to_string(dir.join(file)).ok();
     std::fs::read_dir(root)

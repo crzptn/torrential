@@ -106,8 +106,6 @@ fn no_home() -> Error {
 pub fn network_filesystem(path: &Path) -> std::io::Result<Option<String>> {
     use std::os::unix::ffi::OsStrExt;
     let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
-    // SAFETY: statfs is plain data, so all zeros is a valid value. The call writes only into it,
-    // and c_path is NUL-terminated.
     let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statfs(c_path.as_ptr(), &mut stat) } != 0 {
         return Err(std::io::Error::last_os_error());
@@ -117,7 +115,6 @@ pub fn network_filesystem(path: &Path) -> std::io::Result<Option<String>> {
 
 #[cfg(target_os = "macos")]
 fn network_kind(stat: &libc::statfs) -> Option<String> {
-    // SAFETY: the kernel NUL-terminates f_fstypename.
     let name = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) }.to_string_lossy().into_owned();
     ["nfs", "smbfs", "afpfs", "webdav", "cifs", "ftp"].contains(&name.as_str()).then_some(name)
 }

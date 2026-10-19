@@ -75,11 +75,8 @@ pub fn plan(
     Ok(Plan { wanted, selected_size, destination: dir.join(&metainfo.name), links, conflicts, space })
 }
 
-/// Symbolic links between `dir` and the files `wanted` picks. A write follows a link wherever it
-/// points, so none may sit inside the download folder, though `dir` itself may be one, such as a
-/// Downloads folder on another disk. An empty file's own path is left out: libtorrent never writes
-/// into an empty file that exists, and creates a torrent's symbolic links as empty files whose
-/// targets it keeps inside the torrent's folder.
+/// libtorrent never writes a zero-length file that already exists. Torrent
+/// symlinks have zero length and targets confined to the torrent's folder.
 pub fn links(metainfo: &Metainfo, dir: &Path, wanted: &[bool], disk: &dyn Disk) -> Vec<PathBuf> {
     let mut links = BTreeSet::new();
     for (file, _) in metainfo.files.iter().zip(wanted).filter(|(_, w)| **w) {
@@ -221,8 +218,6 @@ impl Disk for RealDisk {
         let existing = path.ancestors().find(|p| p.exists()).unwrap_or(Path::new("/"));
         let device = std::fs::metadata(existing)?.dev();
         let c_path = std::ffi::CString::new(existing.as_os_str().as_bytes())?;
-        // SAFETY: statvfs is plain data, so all zeros is a valid value. The call writes only into it,
-        // and c_path is NUL-terminated.
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) } != 0 {
             return Err(std::io::Error::last_os_error());

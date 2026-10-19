@@ -115,7 +115,6 @@ pub struct SearchArgs {
     pub fresh: bool,
 }
 
-/// Each flag overrides what torrential detected, and leaves the others as they were.
 #[derive(Args, Debug)]
 pub struct SetupArgs {
     /// Where you watch, when it is not this machine's display. auto goes back to the display

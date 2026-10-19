@@ -270,8 +270,6 @@ fn prepare_runtime_dir(dir: &Path) -> Result<(), Error> {
         .map_err(|e| refuse(format!("cannot protect {}: {e}", dir.display())))
 }
 
-/// An exclusive `flock` held for the process lifetime: one engine per state directory.
-/// The kernel releases it when the process dies, so a crash leaves nothing stale.
 pub struct OwnerLock {
     _file: File,
 }

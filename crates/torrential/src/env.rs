@@ -38,8 +38,6 @@ impl Env {
         self.vars.get(key).map(String::as_str).filter(|v| !v.is_empty())
     }
 
-    /// The harness whose sandbox applies. Codex marks its sandbox explicitly, and that mark
-    /// wins over agent variables inherited from an outer harness.
     pub fn sandbox_harness(&self) -> Option<Agent> {
         if self.var("CODEX_SANDBOX").is_some() || self.var("CODEX_SANDBOX_NETWORK_DISABLED").is_some() {
             return Some(Agent::Codex);

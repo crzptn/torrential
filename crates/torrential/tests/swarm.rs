@@ -105,7 +105,6 @@ impl Home {
         let pid = self.pid();
         unsafe { libc::kill(pid, libc::SIGKILL) };
         let deadline = Instant::now() + Duration::from_secs(5);
-        // SAFETY: signal 0 only checks that the process exists.
         while unsafe { libc::kill(pid, 0) } == 0 {
             assert!(Instant::now() < deadline, "the killed engine is still alive");
             std::thread::sleep(Duration::from_millis(20));

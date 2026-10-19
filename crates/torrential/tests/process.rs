@@ -98,7 +98,6 @@ impl Drop for Home {
 }
 
 fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 

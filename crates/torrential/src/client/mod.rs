@@ -219,7 +219,6 @@ fn job_refs(references: &[String], cwd: &Path) -> Result<Vec<String>, Error> {
             Target::Prefix(prefix) => Ok(prefix),
             Target::InfoHash(_) => Ok(reference.trim().to_string()),
             Target::Magnet(magnet) => Ok(magnet),
-            // A URL can carry an API key, so the error names what was passed, not the URL.
             Target::TorrentUrl(_) => Err(not_a_download("a .torrent URL")),
             Target::TorrentFile(_) => Err(not_a_download("a .torrent file")),
         })

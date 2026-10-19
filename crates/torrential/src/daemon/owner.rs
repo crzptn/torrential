@@ -318,7 +318,6 @@ impl Owner {
                 }
             }
             Target::InfoHash(hash) => self.find_job(&hash).ok_or_else(|| no_download(reference)),
-            // A magnet's trackers can carry a passkey, so the error names its hash.
             Target::Magnet(uri) => {
                 let hash = magnet::parse(&uri)?.info_hash;
                 self.find_job(&hash).ok_or_else(|| no_download(&hash.id().to_hex()))
@@ -972,6 +971,7 @@ impl Owner {
         job.forget_sources();
         let saving = matches!(job.record.intent, Intent::Failed { .. })
             && matches!(job.observed, Observed::InEngine(Phase::Pausing | Phase::Paused));
+        // libtorrent counts hash-checked pieces even when their disk writes fail.
         let disk = matches!(error.code, ErrorCode::DiskFull | ErrorCode::StorageError);
         if !saving {
             let intent = Intent::Failed { error };
@@ -1371,6 +1371,7 @@ impl Owner {
     }
 }
 
+// Default macOS filesystems ignore case.
 fn claim_key(path: &Path) -> String {
     path.to_string_lossy().to_lowercase()
 }

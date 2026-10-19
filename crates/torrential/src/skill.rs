@@ -1,9 +1,3 @@
-//! The agent skill this binary carries, and the copies of it installed where coding agents load
-//! skills. The `agents` target is a folder at `.agents/skills/torrential`, which Codex, Gemini
-//! CLI, Cursor, and others read. The `claude` target is a link to that folder from
-//! `.claude/skills/torrential`. A sidecar file beside `SKILL.md` records what torrential wrote, so
-//! `SKILL.md` stays exactly the shipped text.
-
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -20,7 +14,6 @@ use crate::output::format;
 pub const SKILL: &str = include_str!("../../../skills/torrential/SKILL.md");
 const FILE: &str = "SKILL.md";
 const SIDECAR: &str = ".torrential.json";
-/// From `.claude/skills/torrential` to `.agents/skills/torrential`, the same in either scope.
 const LINK: &str = "../../.agents/skills/torrential";
 
 #[derive(Subcommand, Debug)]
@@ -99,9 +92,7 @@ pub enum State {
     Missing,
     UpToDate,
     Outdated,
-    /// torrential wrote it and someone edited it since.
     Modified,
-    /// torrential did not write it.
     Foreign,
 }
 
@@ -117,7 +108,6 @@ impl State {
     }
 }
 
-/// The skill text this binary writes, and the version recorded beside it.
 #[derive(Clone, Copy, Debug)]
 pub struct Shipped<'a> {
     pub text: &'a str,
@@ -129,7 +119,6 @@ pub struct Installed {
     pub target: Target,
     pub path: PathBuf,
     pub state: State,
-    /// The torrential version that wrote it.
     pub version: Option<String>,
 }
 
@@ -158,9 +147,7 @@ impl Sidecar {
 }
 
 pub struct Layout {
-    /// The `agents` folder, which holds the files.
     pub copy: PathBuf,
-    /// The `claude` link.
     pub link: PathBuf,
 }
 
@@ -203,13 +190,11 @@ impl Layout {
     }
 }
 
-/// How a failed write reads. Under an agent's sandbox it names the command for the human to run.
 pub struct Writes {
     pub sandboxed: bool,
     pub rerun: String,
 }
 
-/// The `torrential skill <verb>` command with these arguments, ready to paste into a terminal.
 pub fn command(verb: &str, args: &TargetArgs, force: bool, cwd: &Path) -> String {
     let mut words = vec!["torrential", "skill", verb];
     match args.agent {
@@ -263,8 +248,6 @@ pub fn status(layout: &Layout, shipped: Shipped) -> Result<Vec<Installed>, Error
     ])
 }
 
-/// Writes the `agents` copy, which every link serves, and the `claude` link when asked. Refuses to
-/// replace an edited or foreign copy unless forced. Running it twice changes nothing.
 pub fn install(
     layout: &Layout,
     agent: AgentArg,
@@ -304,7 +287,6 @@ pub fn install(
     Ok(changes)
 }
 
-/// Removes what torrential wrote and nobody edited. The `claude` link goes with the copy it serves.
 pub fn uninstall(layout: &Layout, agent: AgentArg, shipped: Shipped, writes: &Writes) -> Result<Vec<Change>, Error> {
     let (copy, _) = copy_state(&layout.copy, shipped)?;
     let kept = |state| match state {
@@ -380,8 +362,6 @@ fn write_copy(
     let record = serde_json::to_vec_pretty(&wanted).expect("a sidecar serializes");
     let write = |path: PathBuf, bytes: &[u8]| write_atomic(&path, bytes).map_err(|e| writes.error(&path, e));
     std::fs::create_dir_all(dir).map_err(|e| writes.error(dir, e))?;
-    // A first install claims the folder before SKILL.md lands, so a crash between reads as
-    // missing, not foreign.
     if sidecar.is_none() {
         write(dir.join(SIDECAR), &record)?;
     }
@@ -411,8 +391,6 @@ fn write_link(link: &Path, writes: &Writes) -> Result<(), Error> {
         .map_err(|e| writes.error(link, e))
 }
 
-/// A rename replaces a file or a link in one step. A folder holding only a copied SKILL.md goes
-/// first. Any other folder holds files torrential will not delete.
 fn replace_with_link(link: &Path, writes: &Writes) -> Result<(), Error> {
     if link.symlink_metadata().is_ok_and(|m| m.is_dir()) {
         let entries: Vec<PathBuf> = std::fs::read_dir(link)
@@ -435,7 +413,6 @@ fn replace_with_link(link: &Path, writes: &Writes) -> Result<(), Error> {
     write_link(link, writes)
 }
 
-/// The new file keeps the mode of the one it replaces, so a private config stays private.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let kept = std::fs::metadata(path).ok().map(|m| m.permissions());
     let partial = temporary(path);
@@ -520,7 +497,6 @@ mod tests {
             std::fs::read_to_string(self.layout.copy.join(FILE)).unwrap()
         }
 
-        /// Every path under the home folder, with its contents or link target.
         fn tree(&self) -> Vec<(PathBuf, String)> {
             let mut out = Vec::new();
             let mut pending = vec![self.dir.path().to_path_buf()];

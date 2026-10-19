@@ -1,8 +1,3 @@
-//! Measured under Codex: a child that keeps the tool's process group dies when the call
-//! returns, and a child holding the tool's stdout hangs the call until it times out. So the
-//! client starts a short-lived launcher in a new session, the launcher closes every
-//! inherited descriptor, and the engine writes only to its log.
-
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -24,7 +19,6 @@ pub enum Blocked {
     Ipc { socket: PathBuf },
 }
 
-/// An engine started inside a sandbox inherits it for life and never reaches a peer.
 pub fn sandbox_signal(env: &Env, send_udp: impl FnOnce() -> std::io::Result<()>) -> Option<String> {
     if env.var("CODEX_SANDBOX_NETWORK_DISABLED") == Some("1") {
         return Some("CODEX_SANDBOX_NETWORK_DISABLED=1".to_string());
@@ -174,9 +168,6 @@ fn close_inherited_descriptors() {
         (3..max).collect()
     });
     for fd in open.into_iter().filter(|fd| *fd > 2) {
-        // SAFETY: nothing in this process has opened a descriptor yet, so every one above
-        // stderr was inherited and is safe to close. The listing's own descriptor is already
-        // closed, so closing its number again only fails.
         unsafe { libc::close(fd) };
     }
 }

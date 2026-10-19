@@ -32,12 +32,11 @@ pub enum Network {
 pub struct Libtorrent {
     session: lt::Session,
     torrents: BTreeMap<TorrentId, Torrent>,
-    /// Removals libtorrent has not confirmed. It forgets a torrent at once and confirms once the
-    /// files close, so the owner may add the torrent again in between.
+    /// libtorrent forgets removed torrents at once, then confirms after their files close.
     removing: BTreeMap<TorrentId, u32>,
     events: Vec<EngineEvent>,
     dht_state: Option<PathBuf>,
-    /// libtorrent reports a bootstrap for each listen socket, and the log needs one.
+    /// libtorrent reports a bootstrap for each listen socket.
     dht_bootstrapped: bool,
     peers: Vec<SocketAddr>,
     mirrors: Mirrors,
@@ -66,7 +65,7 @@ impl Mirrors {
 #[derive(Default)]
 struct Torrent {
     files: Option<Vec<lt::FileIndex>>,
-    /// The owner's selection. `None` fetches metadata only, which libtorrent counts as finished.
+    /// libtorrent counts metadata-only torrents as finished.
     wanted: Option<Vec<bool>>,
     /// Priority changes libtorrent has not confirmed. Until it does, `TorrentFinished` can describe
     /// the previous selection.
@@ -76,8 +75,7 @@ struct Torrent {
     failed: bool,
 }
 
-/// A recheck the owner asked for. `hold` means the torrent was paused, and libtorrent hashes only a
-/// running torrent, so it runs for the check and pauses again after.
+/// libtorrent hashes only running torrents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Check {
     #[default]

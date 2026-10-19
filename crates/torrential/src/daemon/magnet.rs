@@ -6,7 +6,6 @@ use torrential_core::{Error, ErrorCode, InfoHash};
 pub struct Magnet {
     pub info_hash: InfoHash,
     pub name: Option<String>,
-    /// `xl`: the total size, when the link states it.
     pub exact_length: Option<u64>,
     pub uri: String,
 }
