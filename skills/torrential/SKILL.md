@@ -61,6 +61,10 @@ The download does not depend on you. You can end your turn, and a later session 
 - `torrential verify <id>` starts re-hashing the files and returns at once. Follow it with `torrential wait <id>`, which reports any damage. `torrential verify <id> --repair` downloads the damaged pieces again.
 - `torrential rm <id>` stops tracking a download and keeps its files. torrential never deletes files. If the user wants them gone, tell them the path.
 
+## Updates
+
+A `# update:` line on stderr means a newer torrential is out. Tell the user once and offer to run `torrential update`. If they want new versions installed without asking, run `torrential setup --updates auto`. A `# updated torrential` line then reports each install.
+
 ## Errors
 
 | Exit | Codes | What to do |

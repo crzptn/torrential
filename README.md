@@ -106,6 +106,8 @@ downloads:
   dir: ~/Downloads/torrents
 ```
 
+torrential looks for a new version once a day, says when one is out, and `torrential update` installs it. Set `updates: auto` to install new versions in the background, or `updates: off` to stop looking.
+
 ## It never seeds
 
 torrential never uploads a piece, and a download stops as soon as it finishes. Among equally good matches it puts lawful sources such as archive.org and official Linux torrents first, and you should download only what you have the right to.
