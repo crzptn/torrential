@@ -3,11 +3,8 @@ use torrential_core::{Job, JobStatus, ReleaseId, TorrentId};
 
 use crate::state::{Engine, Files, Focus, Item, ROWS, SearchPhase, State, label};
 
-pub const MIN_SIZE: (u16, u16) = (60, 16);
-pub const MARGIN: u16 = 10;
-pub const MARK: u16 = MARGIN + 2;
-pub const CONTENT: u16 = MARK + 2;
-pub const DETAIL: u16 = CONTENT + 2;
+pub const MIN_SIZE: (u16, u16) = (30, 10);
+const WIDE: u16 = 60;
 const MAX_CONTENT: u16 = 100;
 const CONTEXT: u16 = 2;
 
@@ -15,10 +12,34 @@ pub const MASTHEAD: u16 = 0;
 pub const SEARCH: u16 = 2;
 const LIST_TOP: u16 = 4;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Indent {
+    pub margin: Option<u16>,
+    pub mark: u16,
+    pub content: u16,
+    pub detail: u16,
+}
+
+const WITH_MARGIN: Indent = Indent { margin: Some(10), mark: 12, content: 14, detail: 16 };
+const NARROW: Indent = Indent { margin: None, mark: 0, content: 2, detail: 4 };
+
 pub struct Screen {
     pub right: u16,
     pub list: Rect,
     pub footer: u16,
+    pub at: Indent,
+}
+
+impl Indent {
+    pub fn narrow(self) -> bool {
+        self.margin.is_none()
+    }
+}
+
+impl Screen {
+    pub fn narrow(&self) -> bool {
+        self.at.narrow()
+    }
 }
 
 pub fn screen(size: (u16, u16)) -> Option<Screen> {
@@ -26,9 +47,14 @@ pub fn screen(size: (u16, u16)) -> Option<Screen> {
     if w < MIN_SIZE.0 || h < MIN_SIZE.1 {
         return None;
     }
-    let right = (w - 2).min(CONTENT + MAX_CONTENT);
+    let (at, right) =
+        if w < WIDE { (NARROW, w - 1) } else { (WITH_MARGIN, (w - 2).min(WITH_MARGIN.content + MAX_CONTENT)) };
     let list = Rect::new(0, LIST_TOP, right, h - LIST_TOP - 2);
-    Some(Screen { right, list, footer: h - 1 })
+    Some(Screen { right, list, footer: h - 1, at })
+}
+
+fn narrow(state: &State) -> bool {
+    screen(state.size).is_some_and(|s| s.narrow())
 }
 
 pub fn list_height(state: &State) -> u16 {
@@ -37,6 +63,7 @@ pub fn list_height(state: &State) -> u16 {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Block {
+    Label(&'static str),
     Download(TorrentId),
     DownloadDetail(TorrentId),
     Folded(&'static str),
@@ -67,7 +94,13 @@ pub fn blocks(state: &State, viewport: u16) -> Vec<Placed> {
         top += height;
     };
     if !state.downloads.is_empty() {
+        let mut last = None;
         for job in state.download_rows() {
+            let word = label(&job.status);
+            if narrow(state) && last != Some(word) {
+                push(Block::Label(word), 1);
+            }
+            last = Some(word);
             push(Block::Download(job.id), 1);
             if expanded(state, Item::Download(job.id)) || state.confirm == Some(job.id) {
                 push(Block::DownloadDetail(job.id), download_detail_height(state, job, viewport));
@@ -120,7 +153,7 @@ pub fn download_file_rows(state: &State, job: &Job, viewport: u16) -> (usize, bo
         return (0, false);
     }
     if in_files(state, job.id) {
-        let fixed = 5 + error_lines(job) + u16::from(state.confirm == Some(job.id));
+        let fixed = 5 + error_lines(job) + confirm_lines(state, job);
         return (n.min(usize::from(viewport.saturating_sub(fixed).max(1))), false);
     }
     let cap = match viewport {
@@ -131,6 +164,14 @@ pub fn download_file_rows(state: &State, job: &Job, viewport: u16) -> (usize, bo
     (n.min(cap), n > cap)
 }
 
+fn confirm_lines(state: &State, job: &Job) -> u16 {
+    match state.confirm == Some(job.id) {
+        false => 0,
+        true if narrow(state) => 2,
+        true => 1,
+    }
+}
+
 fn error_lines(job: &Job) -> u16 {
     match &job.status {
         JobStatus::Error { error } => 1 + u16::from(error.hint.is_some()),
@@ -139,9 +180,8 @@ fn error_lines(job: &Job) -> u16 {
 }
 
 fn download_detail_height(state: &State, job: &Job, viewport: u16) -> u16 {
-    let confirm = u16::from(state.confirm == Some(job.id));
     let (files, more) = download_file_rows(state, job, viewport);
-    2 + error_lines(job) + confirm + files as u16 + u16::from(more)
+    2 + error_lines(job) + confirm_lines(state, job) + files as u16 + u16::from(more)
 }
 
 pub fn tree_rows(nodes: usize, viewport: u16) -> usize {
@@ -150,7 +190,7 @@ pub fn tree_rows(nodes: usize, viewport: u16) -> usize {
 
 fn result_detail_height(state: &State, id: ReleaseId, viewport: u16) -> u16 {
     if state.focus != Focus::Files {
-        return 1;
+        return if narrow(state) { 2 } else { 1 };
     }
     match state.files.get(&id) {
         Some(Files::Ready(tree)) => tree_rows(tree.visible().len(), viewport) as u16 + 2,

@@ -9,7 +9,7 @@ use torrential_core::{
 };
 
 use crate::format::{first_fit, home_path};
-use crate::layout::{self, CONTENT};
+use crate::layout;
 use crate::state::{
     DownloadFiles, Edit, Engine, Files, Focus, Input, Item, JobAction, RankedFor, Ranking, Search, SearchPhase, State,
     Tone, Upgrade,
@@ -448,7 +448,7 @@ impl State {
             0 => format!("Saved {}.", changes[..n].join(", ")),
             more => format!("Saved {} and {more} more.", changes[..n].join(", ")),
         });
-        let room = layout::screen(self.size).map_or(0, |s| s.right - CONTENT - 16);
+        let room = layout::screen(self.size).map_or(0, |s| s.right - s.at.content - 16);
         let counted = format!("Saved {}.", count(changes.len(), "change"));
         self.say(Tone::Success, first_fit(listed.chain([counted]), room.into()).unwrap_or_else(|| "Saved.".into()));
         let Some(text) = self.search.as_ref().map(|s| s.text.clone()) else { return Vec::new() };

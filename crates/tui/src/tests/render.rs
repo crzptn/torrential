@@ -9,9 +9,9 @@ use torrential_core::{Preferences, Profile};
 
 use super::*;
 use crate::theme::{self, ColorMode};
-use crate::view;
+use crate::{layout, view};
 
-const SIZES: [(u16, u16); 3] = [(80, 24), (100, 30), (160, 45)];
+const SIZES: [(u16, u16); 5] = [(80, 24), (100, 30), (160, 45), (47, 40), (47, 19)];
 
 fn shot(state: &State) -> String {
     let (w, h) = state.size;
@@ -565,8 +565,37 @@ fn a_search_without_qualities_keeps_the_room_for_names() {
 
 #[test]
 fn a_small_window_asks_to_grow() {
-    let state = app((52, 14));
-    assert!(shot(&state).contains("Make the window at least 60×16."));
+    assert!(shot(&app((80, 9))).contains("Make the window at least 30×10."));
+    let narrow = shot(&app((24, 12)));
+    assert!(narrow.contains("Make the window") && narrow.contains("at least 30×10."), "{narrow}");
+}
+
+#[test]
+fn every_screen_draws_at_every_size_from_the_smallest_up() {
+    let scenarios: [fn((u16, u16)) -> State; 7] = [
+        idle,
+        streaming,
+        file_tree,
+        download,
+        ranking,
+        |size| {
+            let mut state = searched(size);
+            press(&mut state, "?");
+            state
+        },
+        |size| {
+            let mut state = with_downloads(size);
+            press(&mut state, "jjx");
+            state
+        },
+    ];
+    for w in layout::MIN_SIZE.0..=61 {
+        for h in [layout::MIN_SIZE.1, 12, 16, 19, 24] {
+            for scenario in scenarios {
+                shot(&scenario((w, h)));
+            }
+        }
+    }
 }
 
 fn render(state: &State) -> Buffer {
@@ -595,7 +624,7 @@ fn line(buf: &Buffer, y: u16) -> String {
     (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string()
 }
 
-const MARK: u16 = crate::layout::MARK;
+const MARK: u16 = 12;
 
 #[test]
 fn the_selected_row_is_bright_and_bold_with_the_mark_beside_it() {

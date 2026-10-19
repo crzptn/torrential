@@ -1,0 +1,23 @@
+---
+source: crates/tui/src/tests/render.rs
+expression: shot(&scenario(size))
+---
+"  torrential                      ↓ 10.0 MiB/s "
+"                                               "
+"│ night of the living de…   8 found · 2 failed "
+"│                                              "
+"│ move                                         "
+"│   j k up, down   g G first, last             "
+"│   pgup pgdn a page   d r downloads, results  "
+"│ typing                                       "
+"│   / search   enter search again              "
+"│   ctrl+u clear   tab into the list           "
+"│ results                                      "
+"│   enter files   D download   s sort          "
+"│   h l close, open                            "
+"│ files                                        "
+"│   space pick   a all or none                 "
+"│   h l fold folders   enter download          "
+"│ download                                     "
+"                                               "
+"                                     esc close "

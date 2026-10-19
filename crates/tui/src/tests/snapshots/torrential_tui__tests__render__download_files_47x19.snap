@@ -1,0 +1,23 @@
+---
+source: crates/tui/src/tests/render.rs
+expression: shot(&scenario(size))
+---
+"  torrential                      ↓ 10.0 MiB/s "
+"                                               "
+"│ press / to search                            "
+"│                                              "
+"↑ paused                                       "
+"│ stackexchange                ━━━───────  33% "
+"│   ~/Downloads/torrential/stackexchange       "
+"│   12.9 GiB of 38.0 GiB                       "
+"↑   part09.7z                  ━━━━╸─────  45% "
+"│   part10.7z                  ━━━━━─────  50% "
+"│   part11.7z                  ━━━━━╸────  55% "
+"│   part12.7z                  ━━━━━━────  60% "
+"│   part13.7z                  ━━━━━━╸───  65% "
+"│   part14.7z                  ━━━━━━━───  70% "
+"●   part15.7z                  ━━━━━━━╸──  75% "
+"↓   part16.7z                  ━━━━━━━━──  80% "
+"↓ done                                         "
+"                                               "
+"     space resume   esc back   o open   ? keys "
