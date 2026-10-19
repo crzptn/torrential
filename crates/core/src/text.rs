@@ -30,7 +30,10 @@ pub fn truncate(input: &str, max: usize) -> String {
     if input.chars().count() <= max {
         return input.to_string();
     }
-    let mut out: String = input.chars().take(max.saturating_sub(1)).collect();
+    let Some(keep) = max.checked_sub(1) else {
+        return String::new();
+    };
+    let mut out: String = input.chars().take(keep).collect();
     out.push('…');
     out
 }
@@ -84,5 +87,7 @@ mod tests {
     fn truncates_with_an_ellipsis() {
         assert_eq!(truncate("archlinux-2026.10.01", 9), "archlinu…");
         assert_eq!(truncate("short", 9), "short");
+        assert_eq!(truncate("short", 1), "…");
+        assert_eq!(truncate("short", 0), "");
     }
 }
