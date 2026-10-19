@@ -1,3 +1,4 @@
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -5,7 +6,7 @@ use serde::Deserialize;
 use torrential_core::protocol::{Change, Event, FilesReply, GetReply, GetRequest, Request, Response};
 use torrential_core::{Error, ErrorCode, Machine, Preferences, Profile, SearchQuery, SearchResult, Target};
 
-use torrential_tui::Edit;
+use torrential_tui::{Edit, Exit};
 
 use super::connect::{self, Conn, DEFAULT_REPLY_WITHIN};
 use crate::config::{self, Config};
@@ -14,14 +15,22 @@ use crate::daemon::server::METADATA_WAIT;
 use crate::env::Env;
 use crate::paths::Paths;
 use crate::skill::Writes;
+use crate::update::{self, Outcome, Releases};
 use crate::wire;
 
 pub fn run(env: &Env) -> Result<u8, Error> {
     let paths = Paths::from_process(env)?;
     let downloads = Config::load(&paths, env).map_or_else(|_| paths.downloads.clone(), |c| c.downloads_dir(&paths));
+    let exe = update::executable();
     let backend = EngineBackend { paths, downloads, env: env.clone() };
-    torrential_tui::run(backend).map_err(|e| Error::internal(format!("the terminal UI stopped: {e}")))?;
-    Ok(0)
+    match torrential_tui::run(backend).map_err(|e| Error::internal(format!("the terminal UI stopped: {e}")))? {
+        Exit::Quit => Ok(0),
+        Exit::Restart => {
+            let exe = exe?;
+            let error = std::process::Command::new(&exe).args(std::env::args_os().skip(1)).exec();
+            Err(Error::internal(format!("cannot start the new torrential at {}: {error}", exe.display())))
+        }
+    }
 }
 
 struct EngineBackend {
@@ -148,5 +157,18 @@ impl torrential_tui::Backend for EngineBackend {
         let writes = Writes::new(&self.env, "torrential setup".into());
         config::save_preferences(&self.paths, &preferences, &writes)?;
         Ok(preferences)
+    }
+
+    fn newer_version(&self) -> Option<String> {
+        update::available(&self.paths, &self.env).map(|latest| latest.to_string())
+    }
+
+    fn upgrade(&self) -> Result<Option<String>, Error> {
+        let releases = Releases::required(&self.env)?;
+        let install = update::install(&releases, &self.paths, &self.env, crate::daemon::owner::now());
+        Ok(match update::runtime()?.block_on(install)? {
+            Outcome::Updated(latest) => Some(latest.to_string()),
+            Outcome::Latest(_) => None,
+        })
     }
 }

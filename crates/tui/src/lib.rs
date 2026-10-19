@@ -12,5 +12,5 @@ mod view;
 mod tests;
 
 pub use backend::Backend;
-pub use runtime::run;
+pub use runtime::{Exit, run};
 pub use state::Edit;

@@ -34,4 +34,9 @@ pub trait Backend: Send + Sync + 'static {
     /// Applies `edit` to the overrides in config.yaml, read fresh, and saves the result, which it
     /// returns. Later searches rank with it, and downloads take their size cap from it.
     fn save_preferences(&self, edit: Edit) -> Result<Preferences, Error>;
+    /// A newer torrential that the engine's last check found, unless updates are off.
+    fn newer_version(&self) -> Option<String>;
+    /// Installs the latest torrential over this binary and returns its version, or `None` when
+    /// this binary is already the latest.
+    fn upgrade(&self) -> Result<Option<String>, Error>;
 }

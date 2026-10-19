@@ -12,7 +12,7 @@ use crate::format::{first_fit, home_path};
 use crate::layout::{self, CONTENT};
 use crate::state::{
     DownloadFiles, Edit, Engine, Files, Focus, Input, Item, JobAction, RankedFor, Ranking, Search, SearchPhase, State,
-    Tone,
+    Tone, Upgrade,
 };
 use crate::tree::Tree;
 
@@ -32,6 +32,8 @@ pub enum Msg {
     Preferences(Preferences),
     Machine(Machine),
     Saved { edit: Edit, result: Result<Preferences, Error> },
+    NewerVersion(String),
+    Upgraded(Result<Option<String>, Error>),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -44,6 +46,7 @@ pub enum Effect {
     Open(PathBuf),
     Copy(String),
     SavePreferences(Edit),
+    Upgrade,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -69,6 +72,7 @@ pub enum Action {
     Pick,
     PickAll,
     Ranking,
+    Upgrade,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -143,6 +147,14 @@ impl State {
                 Vec::new()
             }
             Msg::Saved { edit, result } => self.saved(edit, result),
+            Msg::NewerVersion(latest) => {
+                self.upgrade.get_or_insert(Upgrade::Available(latest));
+                Vec::new()
+            }
+            Msg::Upgraded(result) => {
+                self.upgraded(result);
+                Vec::new()
+            }
         });
         self.plan_prefetch();
         self.settle(before);
@@ -276,6 +288,7 @@ impl State {
             Char('D') => Action::Download,
             Char('s') => Action::Sort,
             Char('S') => Action::Ranking,
+            Char('U') => Action::Upgrade,
             Char(' ' | 'p') if download => Action::TogglePause,
             Char('v') if download => Action::Verify,
             Char('x') if download => Action::Remove,
@@ -369,8 +382,33 @@ impl State {
                 self.help = false;
                 self.focus = Focus::List;
             }
+            Action::Upgrade => {
+                if let Some(Upgrade::Available(latest)) = self.upgrade.take() {
+                    self.upgrade = Some(Upgrade::Installing(latest));
+                    return vec![Effect::Upgrade];
+                }
+            }
         }
         Vec::new()
+    }
+
+    fn upgraded(&mut self, result: Result<Option<String>, Error>) {
+        match result {
+            Ok(Some(_)) => {
+                self.upgrade = Some(Upgrade::Installed);
+                self.quit = true;
+            }
+            Ok(None) => {
+                self.upgrade = None;
+                self.say(Tone::Info, "This torrential is the latest.");
+            }
+            Err(error) => {
+                if let Some(Upgrade::Installing(latest)) = self.upgrade.take() {
+                    self.upgrade = Some(Upgrade::Available(latest));
+                }
+                self.say(Tone::Error, format!("Updating failed: {}", error.message));
+            }
+        }
     }
 
     fn ranking_key(&mut self, mut ranking: Ranking, key: KeyEvent) -> Vec<Effect> {

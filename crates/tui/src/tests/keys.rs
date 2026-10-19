@@ -2,7 +2,7 @@ use crossterm::event::KeyCode;
 use torrential_core::protocol::{Change, GetOutcome, GetReply};
 
 use super::*;
-use crate::state::{Files, Focus, JobAction};
+use crate::state::{Files, Focus, JobAction, Upgrade};
 
 #[test]
 fn opens_on_the_downloads_when_there_are_some() {
@@ -434,4 +434,40 @@ fn f1_opens_help_while_typing_where_question_mark_types() {
     assert_eq!((state.query.text.as_str(), state.help, state.focus), ("night?", true, Focus::Query));
     state.update(key(KeyCode::F(1)));
     assert!(!state.help);
+}
+
+#[test]
+fn u_installs_a_newer_version_and_quits_to_restart_once_it_is_in_place() {
+    let mut state = with_downloads((100, 30));
+    assert_eq!(press(&mut state, "U"), [], "U does nothing until a newer version is known");
+    state.update(Msg::NewerVersion("0.1.1".into()));
+
+    let effects = press(&mut state, "U");
+    let installing = (state.upgrade.clone(), state.spinning());
+    state.update(Msg::Upgraded(Ok(Some("0.1.1".into()))));
+
+    assert_eq!((effects, installing), (vec![Effect::Upgrade], (Some(Upgrade::Installing("0.1.1".into())), true)));
+    assert_eq!((state.upgrade, state.quit), (Some(Upgrade::Installed), true));
+}
+
+#[test]
+fn a_failed_update_says_why_and_u_can_try_again() {
+    let mut state = with_downloads((100, 30));
+    state.update(Msg::NewerVersion("0.1.1".into()));
+    press(&mut state, "U");
+    let failed = Error::new(ErrorCode::NetworkUnavailable, "cannot reach github.com");
+
+    state.update(Msg::Upgraded(Err(failed)));
+
+    assert_eq!(state.upgrade, Some(Upgrade::Available("0.1.1".into())));
+    assert_eq!(state.toast.as_ref().map(|t| t.text.as_str()), Some("Updating failed: cannot reach github.com"));
+    assert!(!state.quit);
+    assert_eq!(press(&mut state, "U"), [Effect::Upgrade]);
+}
+
+#[test]
+fn typing_u_in_the_search_box_types_it() {
+    let mut state = app((100, 30));
+    state.update(Msg::NewerVersion("0.1.1".into()));
+    assert_eq!((press(&mut state, "U"), state.query.text.as_str()), (vec![], "U"));
 }

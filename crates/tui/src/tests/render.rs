@@ -79,6 +79,15 @@ fn idle_screens() {
 }
 
 #[test]
+fn a_newer_version_shows_in_the_footer() {
+    snapshots("newer_version", |size| {
+        let mut state = idle(size);
+        state.update(Msg::NewerVersion("0.1.1".into()));
+        state
+    });
+}
+
+#[test]
 fn streaming_screens() {
     snapshots("streaming", streaming);
 }

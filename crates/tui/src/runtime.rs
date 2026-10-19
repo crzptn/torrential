@@ -11,7 +11,7 @@ use torrential_core::protocol::Event;
 use torrential_core::{Error, ErrorCode};
 
 use crate::backend::Backend;
-use crate::state::{Item, JobAction, State, Tone};
+use crate::state::{Item, JobAction, State, Tone, Upgrade};
 use crate::theme::ColorMode;
 use crate::update::{Effect, Msg};
 use crate::view;
@@ -19,18 +19,29 @@ use crate::view;
 const NUMBERS_EVERY: Duration = Duration::from_millis(500);
 const WATCH_RETRY: Duration = Duration::from_secs(2);
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Exit {
+    Quit,
+    /// A newer torrential replaced this binary, so the caller starts it in place of this process.
+    Restart,
+}
+
 /// Runs the TUI until the user quits. Downloads keep running in the engine afterwards.
-pub fn run(backend: impl Backend) -> io::Result<()> {
+pub fn run(backend: impl Backend) -> io::Result<Exit> {
     let mode = ColorMode::detect(|key| std::env::var(key).ok());
     let mut terminal = ratatui::try_init()?;
     let result = session(&mut terminal, Arc::new(backend), mode);
     ratatui::restore();
-    match result?.active() {
+    let state = result?;
+    if state.upgrade == Some(Upgrade::Installed) {
+        return Ok(Exit::Restart);
+    }
+    match state.active() {
         0 => {}
         1 => println!("1 download continues in the background."),
         n => println!("{n} downloads continue in the background."),
     }
-    Ok(())
+    Ok(Exit::Quit)
 }
 
 fn session<B: Backend>(terminal: &mut ratatui::DefaultTerminal, backend: Arc<B>, mode: ColorMode) -> io::Result<State> {
@@ -49,6 +60,9 @@ fn session<B: Backend>(terminal: &mut ratatui::DefaultTerminal, backend: Arc<B>,
         }
         if let Some(machine) = reader.machine() {
             let _ = sender.send(Msg::Machine(machine));
+        }
+        if let Some(latest) = reader.newer_version() {
+            let _ = sender.send(Msg::NewerVersion(latest));
         }
     });
     run_loop(terminal, &mut state, &rx, &tx, &backend, mode)?;
@@ -217,6 +231,11 @@ fn perform<B: Backend>(effect: Effect, backend: &Arc<B>, tx: &Sender<Msg>) {
             thread::spawn(move || {
                 let result = backend.save_preferences(edit);
                 let _ = tx.send(Msg::Saved { edit, result });
+            });
+        }
+        Effect::Upgrade => {
+            thread::spawn(move || {
+                let _ = tx.send(Msg::Upgraded(backend.upgrade()));
             });
         }
     }

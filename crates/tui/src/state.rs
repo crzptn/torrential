@@ -271,6 +271,15 @@ pub struct Toast {
     pub until: Instant,
 }
 
+/// A newer torrential: found by the last check, installing, or installed and about to replace
+/// this process.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Upgrade {
+    Available(String),
+    Installing(String),
+    Installed,
+}
+
 pub fn group(status: &JobStatus) -> u8 {
     match status {
         JobStatus::Downloading | JobStatus::Checking | JobStatus::Metadata | JobStatus::Queued => 0,
@@ -326,6 +335,7 @@ pub struct State {
     pub preferences: Option<Preferences>,
     pub machine: Option<Machine>,
     pub toast: Option<Toast>,
+    pub upgrade: Option<Upgrade>,
     pub quit: bool,
     pub next_search: u64,
 }
@@ -367,6 +377,7 @@ impl State {
             preferences: None,
             machine: None,
             toast: None,
+            upgrade: None,
             quit: false,
             next_search: 1,
         }
@@ -485,7 +496,8 @@ impl State {
         let searching = self.search.as_ref().is_some_and(|s| matches!(s.phase, SearchPhase::Running { .. }));
         let loading = self.files.values().any(|f| matches!(f, Files::Loading { .. }));
         let busy_job = self.downloads.iter().any(|j| matches!(j.status, JobStatus::Metadata | JobStatus::Checking));
-        starting || searching || loading || busy_job || !self.pending.is_empty()
+        let upgrading = matches!(self.upgrade, Some(Upgrade::Installing(_)));
+        starting || searching || loading || busy_job || upgrading || !self.pending.is_empty()
     }
 
     pub fn say(&mut self, tone: Tone, text: impl Into<String>) {

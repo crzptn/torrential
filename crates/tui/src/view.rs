@@ -13,7 +13,9 @@ use crate::format::{
     self, age, ellipsize, first_fit, home_path, middle, percent, rate, seeds, shortenings, size, width,
 };
 use crate::layout::{self, Block, CONTENT, DETAIL, MARGIN, MARK, MASTHEAD, SEARCH, Screen};
-use crate::state::{Engine, Files, Focus, Item, ROWS, RankedFor, Ranking, Row, SearchPhase, Sort, State, Tone, label};
+use crate::state::{
+    Engine, Files, Focus, Item, ROWS, RankedFor, Ranking, Row, SearchPhase, Sort, State, Tone, Upgrade, label,
+};
 use crate::theme::*;
 use crate::tree::{Check, NodeKind, Tree};
 
@@ -932,13 +934,24 @@ fn footer(buf: &mut Buffer, state: &State, screen: &Screen) {
     };
     let mut room = screen.right - CONTENT;
     let first = pairs.first().map_or(0, |pair| hints_width(&[*pair]) + 4);
-    if let Some(toast) = &state.toast {
-        let color = match toast.tone {
-            Tone::Info => TEXT,
-            Tone::Success => ACTION,
-            Tone::Warning | Tone::Error => ERROR,
-        };
-        let used = put(buf, CONTENT, y, room.saturating_sub(first), &toast.text, fg(color));
+    let note = match (&state.toast, &state.upgrade) {
+        (Some(toast), _) => {
+            let color = match toast.tone {
+                Tone::Info => TEXT,
+                Tone::Success => ACTION,
+                Tone::Warning | Tone::Error => ERROR,
+            };
+            Some((toast.text.clone(), color))
+        }
+        (None, Some(Upgrade::Available(latest))) if state.focus == Focus::Query => {
+            Some((format!("torrential {latest} is out"), PENCIL))
+        }
+        (None, Some(Upgrade::Available(latest))) => Some((format!("torrential {latest} is out · U updates"), PENCIL)),
+        (None, Some(Upgrade::Installing(latest))) => Some((format!("Updating to {latest}{}", state.spinner()), PENCIL)),
+        (None, Some(Upgrade::Installed) | None) => None,
+    };
+    if let Some((text, color)) = note {
+        let used = put(buf, CONTENT, y, room.saturating_sub(first), &text, fg(color));
         room = room.saturating_sub(used + 4);
     }
     if !pairs.is_empty() {
