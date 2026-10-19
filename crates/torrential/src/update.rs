@@ -511,6 +511,16 @@ mod tests {
     }
 
     #[test]
+    fn a_test_engine_looks_for_releases_only_where_the_test_points_it() {
+        let base = |pairs: &[(&str, &str)]| Releases::from_env(&Env::from_pairs(pairs.iter().copied())).map(|r| r.base);
+        let local = ("TORRENTIAL_TEST_RELEASES", "http://127.0.0.1:8080/");
+        assert_eq!(base(&[]).as_deref(), Some("https://github.com/nexxeln/torrential/releases"));
+        assert_eq!(base(&[("TORRENTIAL_TEST_NETWORK", "loopback")]), None);
+        assert_eq!(base(&[("TORRENTIAL_TEST_ENGINE", "fake")]), None);
+        assert_eq!(base(&[("TORRENTIAL_TEST_NETWORK", "loopback"), local]).as_deref(), Some("http://127.0.0.1:8080"));
+    }
+
+    #[test]
     fn the_engine_checks_a_day_after_an_answer_and_an_hour_after_a_failure() {
         let t = 1_790_000_000;
         let next = |checked_at, failed_at| Checked { checked_at, failed_at, ..Checked::default() }.next_check();
