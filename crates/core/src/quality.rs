@@ -89,7 +89,6 @@ impl Quality {
                 ("576p" | "576i" | "480p" | "480i" | "360p" | "dvdrip", _) => Some(Resolution::Sd),
                 (token, _) => Resolution::from_dimensions(token),
             };
-            // Indexes that turn dots into spaces write H.264 as `H 264`.
             let codec = match pair {
                 ("x265" | "h265" | "hevc", _) | ("h", "265") => Some(Codec::Hevc),
                 ("x264" | "h264" | "avc", _) | ("h", "264") => Some(Codec::H264),

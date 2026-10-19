@@ -234,7 +234,7 @@ pub enum Target {
 
 impl Target {
     /// Parses user input in a fixed order: magnet link, URL, full infohash, existing
-    /// `.torrent` path, then ID prefix. `cwd` resolves relative paths.
+    /// file path, then ID prefix. `cwd` resolves relative paths.
     pub fn parse(input: &str, cwd: &std::path::Path) -> Result<Self, Error> {
         let input = input.trim();
         if input.get(..8).is_some_and(|scheme| scheme.eq_ignore_ascii_case("magnet:?")) {
@@ -335,7 +335,6 @@ fn decode_base32_20(s: &str) -> Option<[u8; 20]> {
 }
 
 fn invalid_ref(input: &str, why: &str) -> Error {
-    // A URL can carry an API key or a passkey, so it is never quoted back.
     let message = if input.contains(':') {
         "a URL is not a torrent reference unless it is a magnet link or an http or https URL".to_string()
     } else {

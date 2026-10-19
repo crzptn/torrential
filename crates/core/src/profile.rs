@@ -201,8 +201,8 @@ impl Profile {
         }
     }
 
-    /// The detected display decides HDR, and macOS and Linux players decode HEVC. A preferred
-    /// screen is somewhere else, whose player nothing detected, so it plays anything.
+    /// An explicit playback preference wins. Otherwise the detected display chooses
+    /// HEVC with or without HDR. A screen override leaves playback unknown.
     pub fn playback(&self) -> Option<Setting<Playback>> {
         if let Some(playback) = self.preferences.playback {
             return Some(Setting { value: playback, source: Source::Override });
