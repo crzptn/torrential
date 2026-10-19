@@ -289,7 +289,7 @@ fn update_check_reports_without_installing() {
 
 #[test]
 fn an_unwritable_folder_is_refused_before_the_download() {
-    if target().is_none() {
+    if target().is_none() || unsafe { libc::geteuid() } == 0 {
         return;
     }
     let server = Server::start("0.1.1", SCRIPT, None);
