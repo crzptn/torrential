@@ -79,6 +79,16 @@ pub enum Command {
         #[command(subcommand)]
         command: crate::skill::SkillCommand,
     },
+    /// Install the latest torrential, or check whether a newer one is out
+    #[command(after_help = "Examples:\n  torrential update\n  torrential update --check")]
+    Update(UpdateArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct UpdateArgs {
+    /// Report the latest version without installing it
+    #[arg(long)]
+    pub check: bool,
 }
 
 #[derive(Args, Debug)]

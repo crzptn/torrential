@@ -216,7 +216,8 @@ mod tests {
                 "daemon",
                 "schema",
                 "completions",
-                "skill"
+                "skill",
+                "update"
             ]
         );
         let daemon = &schema()["commands"][12]["subcommands"];

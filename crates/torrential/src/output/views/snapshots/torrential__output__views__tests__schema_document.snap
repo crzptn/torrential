@@ -504,6 +504,19 @@ expression: "serde_json::to_string_pretty(&value).unwrap()"
           ]
         }
       ]
+    },
+    {
+      "name": "update",
+      "about": "Install the latest torrential, or check whether a newer one is out",
+      "arguments": [],
+      "flags": [
+        {
+          "name": "--check",
+          "help": "Report the latest version without installing it",
+          "takes_value": false,
+          "repeatable": false
+        }
+      ]
     }
   ],
   "global_flags": [

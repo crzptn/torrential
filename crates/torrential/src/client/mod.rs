@@ -4,6 +4,7 @@ mod probe;
 pub mod service;
 mod setup;
 pub mod tui;
+mod update;
 pub mod wait;
 
 use std::io::Write;
@@ -122,6 +123,7 @@ fn dispatch(command: Command, mode: Mode, env: &Env) -> Result<u8, Error> {
             Ok(0)
         }
         Command::Skill { command } => skill(command, mode, env, &cwd),
+        Command::Update(args) => update::run(args, mode, env),
         Command::Completions { shell } => {
             let setup = crate::completions::setup(shell);
             match mode {
@@ -352,6 +354,13 @@ fn skill(command: SkillCommand, mode: Mode, env: &Env, cwd: &Path) -> Result<u8,
             let changes = skill::install(&layout, args.target.agent, args.force, shipped, &writes)?;
             let body = Changes { scope: args.target.scope, changes: &changes };
             Ok(emit(mode, &views::skill_changes(&changes), &Typed { kind: "skill_install", body }))
+        }
+        SkillCommand::Refresh => {
+            let writes = Writes::new(env, "torrential skill install".into());
+            for scope in [skill::Scope::User, skill::Scope::Project] {
+                skill::refresh(&skill::Layout::new(scope, env, cwd)?, shipped, &writes)?;
+            }
+            Ok(0)
         }
         SkillCommand::Uninstall(args) => {
             let layout = skill::Layout::new(args.scope, env, cwd)?;

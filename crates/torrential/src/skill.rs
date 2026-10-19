@@ -29,6 +29,9 @@ pub enum SkillCommand {
     Show,
     /// Remove the copies torrential wrote, and keep any that were edited
     Uninstall(TargetArgs),
+    /// Rewrite the copies an older torrential wrote and nobody edited, after torrential update
+    #[command(hide = true)]
+    Refresh,
 }
 
 #[derive(Args, Debug)]
@@ -287,6 +290,14 @@ pub fn install(
     Ok(changes)
 }
 
+pub fn refresh(layout: &Layout, shipped: Shipped, writes: &Writes) -> Result<(), Error> {
+    let (state, sidecar) = copy_state(&layout.copy, shipped)?;
+    if state == State::Outdated {
+        write_copy(&layout.copy, state, sidecar, shipped, writes)?;
+    }
+    Ok(())
+}
+
 pub fn uninstall(layout: &Layout, agent: AgentArg, shipped: Shipped, writes: &Writes) -> Result<Vec<Change>, Error> {
     let (copy, _) = copy_state(&layout.copy, shipped)?;
     let kept = |state| match state {
@@ -456,7 +467,7 @@ fn conflict(conflicts: &[(PathBuf, State)], writes: &Writes) -> Error {
         ))
 }
 
-fn sha256(bytes: &[u8]) -> String {
+pub fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
