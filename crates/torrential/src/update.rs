@@ -1,6 +1,6 @@
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,15 +10,21 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use torrential_core::{Error, ErrorCode};
 
+use crate::daemon::owner::now;
 use crate::env::Env;
+use crate::output::Mode;
+use crate::output::theme::{Token, paint};
 use crate::paths::Paths;
 use crate::skill::{Writes, sha256, write_atomic};
 
 const RELEASES: &str = "https://github.com/nexxeln/torrential/releases";
 const ISSUES: &str = "https://github.com/nexxeln/torrential/issues";
+const DAY: i64 = 24 * 60 * 60;
+const HOUR: i64 = 60 * 60;
 const CHECK_WITHIN: Duration = Duration::from_secs(10);
 const MAX_ASSET: usize = 256 << 20;
 const CHECKED: &str = "update.json";
+const UPDATED: &str = "updated.json";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -108,6 +114,33 @@ impl Checked {
     fn write(&self, paths: &Paths) {
         write_json(&paths.state.join(CHECKED), self);
     }
+
+    /// A day after the last answer, and an hour after the last failure.
+    pub fn next_check(&self) -> i64 {
+        let answered = self.checked_at.map_or(i64::MIN, |at| at + DAY);
+        let failed = self.failed_at.map_or(i64::MIN, |at| at + HOUR);
+        answered.max(failed)
+    }
+
+    pub fn newer(&self, current: &str) -> Option<Version> {
+        Version::parse(self.latest.as_deref()?).filter(|latest| latest.newer_than(current))
+    }
+
+    /// Auto mode installs a newer version it knows of, and waits a day after a failed install.
+    pub fn install_due(&self, current: &str, now: i64) -> bool {
+        self.newer(current).is_some() && due(self.install_failed_at, now)
+    }
+}
+
+/// True when nothing happened within the last day.
+pub fn due(last: Option<i64>, now: i64) -> bool {
+    last.is_none_or(|at| !(at..at + DAY).contains(&now))
+}
+
+#[derive(Serialize, Deserialize)]
+struct Updated {
+    from: String,
+    to: String,
 }
 
 pub struct Releases {
@@ -327,6 +360,122 @@ impl Drop for Partial {
     }
 }
 
+/// Runs in the engine: looks for a release when the engine starts and then once a day, and in
+/// auto mode installs a newer one.
+pub async fn watch(env: Env, paths: Paths) {
+    let Some(releases) = Releases::from_env(&env) else { return };
+    let current = env.version();
+    loop {
+        let now = now();
+        let wait = match crate::config::updates(&paths) {
+            Ok(Policy::Off) | Err(_) => HOUR,
+            Ok(policy) => {
+                if Checked::read(&paths).next_check() <= now
+                    && let Err(e) = check(&releases, &paths, now).await
+                {
+                    crate::daemon::log(&format!("update check failed: {}", e.message));
+                }
+                let checked = Checked::read(&paths);
+                if policy == Policy::Auto && checked.install_due(&current, now) {
+                    match install(&releases, &paths, &env, now).await {
+                        Ok(Outcome::Updated(to)) => {
+                            crate::daemon::log(&format!("installed torrential {to}"));
+                            write_json(&paths.state.join(UPDATED), &Updated { from: current, to: to.to_string() });
+                            return;
+                        }
+                        Ok(Outcome::Latest(_)) => {}
+                        Err(e) => {
+                            crate::daemon::log(&format!("update failed: {}", e.message));
+                            let mut checked = Checked::read(&paths);
+                            checked.install_failed_at = Some(now);
+                            checked.write(&paths);
+                        }
+                    }
+                }
+                (Checked::read(&paths).next_check() - now).clamp(60, HOUR)
+            }
+        };
+        tokio::time::sleep(Duration::from_secs(wait as u64)).await;
+    }
+}
+
+/// A newer version the last check found, unless updates are off.
+pub fn available(paths: &Paths, env: &Env) -> Option<Version> {
+    if crate::config::updates(paths).ok()? == Policy::Off {
+        return None;
+    }
+    Checked::read(paths).newer(&env.version())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Audience {
+    Person,
+    Agent,
+}
+
+impl Audience {
+    pub fn of(mode: Mode, env: &Env, stderr_is_terminal: bool) -> Option<Audience> {
+        match mode {
+            Mode::Json => None,
+            _ if env.agent().is_some() => Some(Audience::Agent),
+            _ if stderr_is_terminal => Some(Audience::Person),
+            _ => None,
+        }
+    }
+
+    fn out(self, current: &str, latest: Version) -> String {
+        let news = format!("torrential {latest} is out (you have {current}). Run torrential update to install it.");
+        match self {
+            Self::Person => news,
+            Self::Agent => format!("# update: {news}"),
+        }
+    }
+
+    fn updated(self, from: &str, to: &str) -> String {
+        match self {
+            Self::Person => format!("Updated torrential to {to}."),
+            Self::Agent => format!("# updated torrential from {from} to {to}"),
+        }
+    }
+
+    fn notice_file(self, paths: &Paths) -> PathBuf {
+        let name = match self {
+            Self::Person => "update-notice-person",
+            Self::Agent => "update-notice-agent",
+        };
+        paths.state.join(name)
+    }
+}
+
+/// The line to print after a command: once after the engine installed a new version, and at
+/// most once a day for each audience while a newer version is out.
+pub fn notice(paths: &Paths, env: &Env, audience: Audience, now: i64) -> Option<String> {
+    let updated = paths.state.join(UPDATED);
+    if let Some(Updated { from, to }) = read_json(&updated)
+        && std::fs::remove_file(&updated).is_ok()
+    {
+        return Some(audience.updated(&from, &to));
+    }
+    let latest = available(paths, env)?;
+    let file = audience.notice_file(paths);
+    let last = std::fs::read_to_string(&file).ok().and_then(|text| text.trim().parse().ok());
+    if !due(last, now) {
+        return None;
+    }
+    let _ = write_atomic(&file, now.to_string().as_bytes());
+    Some(audience.out(&env.version(), latest))
+}
+
+pub fn print_notice(mode: Mode, env: &Env) {
+    let Some(audience) = Audience::of(mode, env, std::io::stderr().is_terminal()) else { return };
+    let Ok(paths) = Paths::from_process(env) else { return };
+    match (notice(&paths, env, audience, now()), audience) {
+        (Some(line), Audience::Person) => anstream::eprintln!("{}", paint(Token::Muted, &line)),
+        (Some(line), Audience::Agent) => eprintln!("{line}"),
+        (None, _) => {}
+    }
+}
+
 fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
@@ -373,5 +522,80 @@ mod tests {
         assert_eq!(target("linux", "x86_64"), Some("x86_64-unknown-linux-musl"));
         assert_eq!(target("macos", "x86_64"), None);
         assert_eq!(target("linux", "aarch64"), None);
+    }
+
+    #[test]
+    fn the_engine_checks_a_day_after_an_answer_and_an_hour_after_a_failure() {
+        let t = 1_790_000_000;
+        let next = |checked_at, failed_at| Checked { checked_at, failed_at, ..Checked::default() }.next_check();
+        assert!(next(None, None) <= t);
+        assert_eq!(next(Some(t), None), t + DAY);
+        assert_eq!(next(None, Some(t)), t + HOUR);
+        assert_eq!(next(Some(t), Some(t + 25 * HOUR)), t + 26 * HOUR);
+        assert_eq!(next(Some(t + HOUR), Some(t)), t + HOUR + DAY);
+    }
+
+    #[test]
+    fn a_notice_waits_a_day_after_the_last() {
+        let t = 1_790_000_000;
+        assert!(due(None, t));
+        assert!(!due(Some(t), t));
+        assert!(!due(Some(t), t + DAY - 1));
+        assert!(due(Some(t), t + DAY));
+        assert!(due(Some(t + HOUR), t), "a clock that went back does not silence notices for good");
+    }
+
+    #[test]
+    fn auto_mode_installs_a_newer_version_and_waits_a_day_after_a_failure() {
+        let t = 1_790_000_000;
+        let checked = |latest: &str, install_failed_at| Checked {
+            latest: Some(latest.into()),
+            install_failed_at,
+            ..Checked::default()
+        };
+        assert!(checked("0.1.1", None).install_due("0.1.0", t));
+        assert!(!checked("0.1.0", None).install_due("0.1.0", t));
+        assert!(!checked("0.1.1", Some(t - HOUR)).install_due("0.1.0", t));
+        assert!(checked("0.1.1", Some(t - DAY)).install_due("0.1.0", t));
+    }
+
+    #[test]
+    fn people_and_agents_get_their_own_lines() {
+        let env = |pairs: &[(&str, &str)]| Env::from_pairs(pairs.iter().copied());
+        let latest = version("0.1.1");
+        assert_eq!(Audience::of(Mode::Json, &env(&[("CLAUDECODE", "1")]), true), None);
+        assert_eq!(Audience::of(Mode::Plain, &env(&[("CLAUDECODE", "1")]), false), Some(Audience::Agent));
+        assert_eq!(Audience::of(Mode::Human, &env(&[]), true), Some(Audience::Person));
+        assert_eq!(Audience::of(Mode::Plain, &env(&[]), false), None);
+        assert_eq!(
+            Audience::Person.out("0.1.0", latest),
+            "torrential 0.1.1 is out (you have 0.1.0). Run torrential update to install it."
+        );
+        assert_eq!(
+            Audience::Agent.out("0.1.0", latest),
+            "# update: torrential 0.1.1 is out (you have 0.1.0). Run torrential update to install it."
+        );
+        assert_eq!(Audience::Person.updated("0.1.0", "0.1.1"), "Updated torrential to 0.1.1.");
+        assert_eq!(Audience::Agent.updated("0.1.0", "0.1.1"), "# updated torrential from 0.1.0 to 0.1.1");
+    }
+
+    #[test]
+    fn each_audience_hears_once_a_day_and_off_silences_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().display().to_string();
+        let env = Env::from_pairs([("HOME", home.as_str()), ("TORRENTIAL_HOME", home.as_str())]);
+        let paths = Paths::resolve(&env, 501, None).unwrap();
+        let t = 1_790_000_000;
+        Checked { latest: Some("9.0.0".into()), checked_at: Some(t), ..Checked::default() }.write(&paths);
+        let heard = |audience, now| notice(&paths, &env, audience, now).is_some();
+
+        assert_eq!(
+            [heard(Audience::Person, t), heard(Audience::Person, t + HOUR), heard(Audience::Agent, t + HOUR)],
+            [true, false, true]
+        );
+        assert!(heard(Audience::Person, t + DAY));
+        std::fs::create_dir_all(&paths.config).unwrap();
+        std::fs::write(paths.config.join("config.yaml"), "updates: off\n").unwrap();
+        assert!(!heard(Audience::Person, t + 3 * DAY));
     }
 }

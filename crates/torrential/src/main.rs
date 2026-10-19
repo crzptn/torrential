@@ -64,7 +64,18 @@ fn main() -> ExitCode {
         return ExitCode::from(client::launch::launch_stage(&env));
     }
     let mode = Mode::detect(cli.json, stdout_is_terminal, &env);
-    ExitCode::from(client::run(command, mode, &env))
+    let notices = !matches!(
+        command,
+        Command::Tui
+            | Command::Update(_)
+            | Command::Completions { .. }
+            | Command::Daemon { command: DaemonCommand::Run { .. } }
+    );
+    let exit = client::run(command, mode, &env);
+    if notices {
+        update::print_notice(mode, &env);
+    }
+    ExitCode::from(exit)
 }
 
 fn usage_error(e: &clap::Error, args: &[String]) -> Error {

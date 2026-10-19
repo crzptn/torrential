@@ -315,3 +315,84 @@ fn an_unwritable_folder_is_refused_before_the_download() {
     );
     assert_eq!(server.asked(), ["/latest"]);
 }
+
+fn eventually(what: &str, done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !done() {
+        assert!(std::time::Instant::now() < deadline, "timed out waiting until {what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+impl Install {
+    fn agent_with_engine(server: &Server) -> Install {
+        let mut install = Install::new(server);
+        install.set("TORRENTIAL_TEST_ENGINE", "fake");
+        install.set("CLAUDECODE", "1");
+        install
+    }
+
+    fn state(&self) -> PathBuf {
+        self.dir.path().join("th/state")
+    }
+
+    fn found(&self, latest: &str) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        std::fs::create_dir_all(self.state()).unwrap();
+        let checked = serde_json::json!({"latest": latest, "checked_at": now});
+        std::fs::write(self.state().join("update.json"), checked.to_string()).unwrap();
+    }
+
+    fn engine(&self) -> (i64, String) {
+        let doc: serde_json::Value = serde_json::from_str(&self.run(&["daemon", "status", "--json"]).stdout).unwrap();
+        (doc["pid"].as_i64().unwrap(), doc["version"].as_str().unwrap().to_string())
+    }
+}
+
+#[test]
+fn an_agent_hears_of_a_newer_version_once_a_day_and_json_output_never_changes() {
+    let server = Server::start("0.1.1", SCRIPT, None);
+    let install = Install::agent_with_engine(&server);
+    install.found("0.1.1");
+
+    let json = install.run(&["status", "--json"]);
+    let first = install.run(&["status"]);
+    let second = install.run(&["status"]);
+
+    assert_eq!((json.code, json.stderr.as_str()), (0, ""));
+    assert!(json.stdout.starts_with("{\"schema\":1,\"type\":\"jobs\""), "{}", json.stdout);
+    assert_eq!(
+        first.stderr,
+        "# update: torrential 0.1.1 is out (you have 0.1.0). Run torrential update to install it.\n"
+    );
+    assert_eq!(second.stderr, "");
+    assert_eq!(server.asked(), Vec::<String>::new(), "a check from the last day needs no new one");
+}
+
+#[test]
+fn auto_mode_installs_a_found_release_and_the_next_command_says_so_once() {
+    let Some(target) = target() else { return };
+    let server = Server::start("0.1.1", &std::fs::read(env!("CARGO_BIN_EXE_torrential")).unwrap(), None);
+    let mut install = Install::agent_with_engine(&server);
+    std::fs::create_dir_all(install.dir.path().join("th/config")).unwrap();
+    std::fs::write(install.dir.path().join("th/config/config.yaml"), "updates: auto\n").unwrap();
+    install.found("0.1.1");
+    let old_inode = std::fs::metadata(install.exe()).unwrap().ino();
+
+    let started = install.run(&["status", "--json"]);
+    let (old_pid, old_version) = install.engine();
+    eventually("the engine installed 0.1.1", || install.state().join("updated.json").exists());
+    install.set("TORRENTIAL_TEST_VERSION", "0.1.1");
+    let first = install.run(&["status"]);
+    let second = install.run(&["status"]);
+
+    assert_eq!((started.code, started.stderr.as_str(), old_version.as_str()), (0, "", "0.1.0"));
+    assert_ne!(std::fs::metadata(install.exe()).unwrap().ino(), old_inode, "the engine replaced the binary");
+    assert_eq!(first.stderr, "# updated torrential from 0.1.0 to 0.1.1\n");
+    assert_eq!(second.stderr, "");
+    let (pid, version) = install.engine();
+    assert_eq!(version, "0.1.1", "the next command restarted the engine on the new version");
+    assert_ne!(pid, old_pid);
+    let [tarball, sum] = assets(target);
+    assert_eq!(server.asked(), ["/latest".to_string(), tarball, sum]);
+}

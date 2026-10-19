@@ -232,9 +232,11 @@ fn serve(env: &Env, paths: &Paths, service: bool) -> Result<(), Startup> {
             }
         });
         let signals = tokio::spawn(stop_on_signal(running.ctx.owner.clone()));
+        let updates = tokio::spawn(crate::update::watch(env.clone(), paths.clone()));
         let _ = running.owner.await;
         accept.abort();
         signals.abort();
+        updates.abort();
         let _ = std::fs::remove_file(&socket);
         Ok::<_, Error>(running.engine)
     })?;
