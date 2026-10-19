@@ -1,3 +1,6 @@
+//! Codex kills a tool call's process group when the call returns, so the engine starts
+//! from a launcher in a new session.
+
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
