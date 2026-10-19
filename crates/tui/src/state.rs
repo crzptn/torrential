@@ -271,8 +271,6 @@ pub struct Toast {
     pub until: Instant,
 }
 
-/// A newer torrential: found by the last check, installing, or installed and about to replace
-/// this process.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Upgrade {
     Available(String),

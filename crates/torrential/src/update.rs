@@ -53,7 +53,6 @@ pub struct Version {
     major: u64,
     minor: u64,
     patch: u64,
-    /// False for a pre-release such as 0.2.0-rc1, which comes before 0.2.0.
     release: bool,
 }
 
@@ -96,7 +95,6 @@ pub fn target(os: &str, arch: &str) -> Option<&'static str> {
     }
 }
 
-/// What the last look at the releases found, kept in the state folder.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Checked {
@@ -115,7 +113,6 @@ impl Checked {
         write_json(&paths.state.join(CHECKED), self);
     }
 
-    /// A day after the last answer, and an hour after the last failure.
     pub fn next_check(&self) -> i64 {
         let answered = self.checked_at.map_or(i64::MIN, |at| at + DAY);
         let failed = self.failed_at.map_or(i64::MIN, |at| at + HOUR);
@@ -126,13 +123,11 @@ impl Checked {
         Version::parse(self.latest.as_deref()?).filter(|latest| latest.newer_than(current))
     }
 
-    /// Auto mode installs a newer version it knows of, and waits a day after a failed install.
     pub fn install_due(&self, current: &str, now: i64) -> bool {
         self.newer(current).is_some() && due(self.install_failed_at, now)
     }
 }
 
-/// True when nothing happened within the last day.
 pub fn due(last: Option<i64>, now: i64) -> bool {
     last.is_none_or(|at| !(at..at + DAY).contains(&now))
 }
@@ -229,7 +224,6 @@ pub fn runtime() -> Result<tokio::runtime::Runtime, Error> {
         .map_err(|e| Error::internal(format!("cannot start the async runtime: {e}")))
 }
 
-/// Asks for the latest release and records the answer, or the failure, in the state folder.
 pub async fn check(releases: &Releases, paths: &Paths, now: i64) -> Result<Version, Error> {
     let mut checked = Checked::read(paths);
     let latest = releases.latest().await;
@@ -249,7 +243,6 @@ pub enum Outcome {
     Updated(Version),
 }
 
-/// Checks again, then replaces this binary with the latest release when it is newer.
 pub async fn install(releases: &Releases, paths: &Paths, env: &Env, now: i64) -> Result<Outcome, Error> {
     let latest = check(releases, paths, now).await?;
     if !latest.newer_than(&env.version()) {
@@ -319,8 +312,6 @@ fn unpack(asset: &str, tarball: &[u8]) -> Result<Vec<u8>, Error> {
     Err(Error::new(ErrorCode::FetchFailed, format!("{asset} holds no torrential binary")))
 }
 
-/// The new binary, written beside the old one and renamed over it, so the path always holds a
-/// whole binary. It is created before the download, so a folder you cannot write fails first.
 struct Partial {
     path: PathBuf,
     file: File,
@@ -360,8 +351,6 @@ impl Drop for Partial {
     }
 }
 
-/// Runs in the engine: looks for a release when the engine starts and then once a day, and in
-/// auto mode installs a newer one.
 pub async fn watch(env: Env, paths: Paths) {
     let Some(releases) = Releases::from_env(&env) else { return };
     let current = env.version();
@@ -399,7 +388,6 @@ pub async fn watch(env: Env, paths: Paths) {
     }
 }
 
-/// A newer version the last check found, unless updates are off.
 pub fn available(paths: &Paths, env: &Env) -> Option<Version> {
     if crate::config::updates(paths).ok()? == Policy::Off {
         return None;
@@ -447,8 +435,6 @@ impl Audience {
     }
 }
 
-/// The line to print after a command: once after the engine installed a new version, and at
-/// most once a day for each audience while a newer version is out.
 pub fn notice(paths: &Paths, env: &Env, audience: Audience, now: i64) -> Option<String> {
     let updated = paths.state.join(UPDATED);
     if let Some(Updated { from, to }) = read_json(&updated)

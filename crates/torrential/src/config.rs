@@ -128,8 +128,6 @@ pub fn save_updates(paths: &Paths, policy: Policy, writes: &Writes) -> Result<(P
     })
 }
 
-/// Rewrites one part of the config file with `edit`, which returns `None` when the result would
-/// not read back as intended.
 fn save(
     paths: &Paths,
     writes: &Writes,

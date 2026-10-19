@@ -45,8 +45,6 @@ fn tarball(binary: &[u8]) -> Vec<u8> {
     builder.into_inner().unwrap().finish().unwrap()
 }
 
-/// Serves one release the way GitHub does: `/latest` redirects to the tag, and each asset has a
-/// `.sha256` file beside it.
 struct Server {
     base: String,
     asked: Arc<Mutex<Vec<String>>>,
@@ -105,7 +103,6 @@ fn respond(mut stream: TcpStream, (status, headers, body): (u16, Vec<(&str, Stri
     let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(&body));
 }
 
-/// A copy of the binary in a temporary folder, the way install.sh leaves it in ~/.local/bin.
 struct Install {
     dir: tempfile::TempDir,
     vars: Vec<(&'static str, String)>,
