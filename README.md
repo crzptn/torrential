@@ -8,7 +8,15 @@
 
 ## Install
 
-You need Rust and Nix with flakes turned on.
+```sh
+curl -fsSL https://raw.githubusercontent.com/nexxeln/torrential/main/install.sh | sh
+```
+
+This puts one file at `~/.local/bin/torrential`. It runs on macOS 14 or later on Apple silicon, and on 64-bit Linux on Intel or AMD.
+
+### Build from source
+
+On other machines, build it with Rust and Nix, with flakes turned on:
 
 ```sh
 git clone --recursive https://github.com/nexxeln/torrential
