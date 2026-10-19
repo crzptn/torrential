@@ -218,10 +218,8 @@ lt::session_params make_params(SessionSettings const& s) {
   // waits until libtorrent retries those seeds, min_reconnect_time (60 s) or
   // more later.
   p.set_bool(lt::settings_pack::close_redundant_connections, false);
-  // libtorrent connects at most 3 web seeds per torrent, counting each interesting one in the
-  // order added. A web seed whose files all redirected elsewhere never reconnects yet stays
-  // interesting, and the seeds the redirects made stay connected, so web seeds added later,
-  // such as archive.org's servers, never got a slot. 0 lifts the limit to 100.
+  // libtorrent counts interesting web seeds in order, including connected ones,
+  // so redirected seeds can fill the slots. 0 raises the limit from 3 to 100.
   p.set_int(lt::settings_pack::max_web_seed_connections, 0);
   p.set_int(lt::settings_pack::alert_queue_size, 10000);
   p.set_int(lt::settings_pack::alert_mask, lt::alert_category::status | lt::alert_category::error |

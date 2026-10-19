@@ -97,9 +97,6 @@ impl Default for ClientIdentity {
     }
 }
 
-/// The Azureus-style `-XXabcd-` prefix, one character per version component:
-/// 0 to 9, then A to Z for 10 to 35. Larger components stay at Z, where
-/// libtorrent's `generate_fingerprint` would run past Z into punctuation.
 fn azureus_prefix(code: &str, version: &str) -> String {
     let digit = |n: u32| match n {
         0..=9 => char::from(b'0' + n as u8),

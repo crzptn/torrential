@@ -76,8 +76,7 @@ fn required_env(name: &str) -> String {
         .unwrap_or_else(|_| panic!("{name} is not set; run cargo inside `nix develop` from the workspace root"))
 }
 
-/// The `-D` flags from libtorrent's generated pkg-config file. Compiling the
-/// shim with different definitions than the library breaks the ABI silently.
+/// The shim must use libtorrent's build definitions to preserve ABI compatibility.
 fn exported_defines(pc: &Path) -> Vec<String> {
     let text = fs::read_to_string(pc).unwrap_or_else(|e| panic!("reading {}: {e}", pc.display()));
     let cflags = text

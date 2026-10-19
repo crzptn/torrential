@@ -102,9 +102,7 @@ impl Node {
         panic!("timed out waiting for {what}; alerts seen: {:#?}", self.log);
     }
 
-    /// Waits for the torrent to finish, then pauses it. `TorrentFinished`
-    /// arrives once the pieces pass their hash checks, which can be before
-    /// libtorrent has written them; `TorrentPaused` follows the writes.
+    /// `TorrentFinished` can precede libtorrent's disk writes; `TorrentPaused` follows them.
     pub fn finish(&mut self, id: TorrentId) {
         self.wait_for("finish", |a| matches!(a, Alert::TorrentFinished { .. }));
         self.session.pause(id).unwrap();
