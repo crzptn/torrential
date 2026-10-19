@@ -233,8 +233,8 @@ pub enum Target {
 }
 
 impl Target {
-    /// Parses user input in a fixed order: magnet link, URL, full infohash, existing
-    /// file path, then ID prefix. `cwd` resolves relative paths.
+    /// Parses user input in a fixed order: magnet link, URL, full infohash, `.torrent`
+    /// path, ID prefix, then any other existing file. `cwd` resolves relative paths.
     pub fn parse(input: &str, cwd: &std::path::Path) -> Result<Self, Error> {
         let input = input.trim();
         if input.get(..8).is_some_and(|scheme| scheme.eq_ignore_ascii_case("magnet:?")) {
@@ -248,15 +248,18 @@ impl Target {
             return Ok(Self::InfoHash(hash));
         }
         let path = cwd.join(input);
-        if lower.ends_with(".torrent") || path.is_file() {
+        if lower.ends_with(".torrent") {
             return if path.is_file() {
                 Ok(Self::TorrentFile(path))
             } else {
                 Err(Error::new(ErrorCode::InvalidRef, format!("no such file: {}", path.display())))
             };
         }
-        let prefix: HexPrefix = input.parse()?;
-        Ok(Self::Prefix(if prefix.locator { format!("u{}", prefix.hex) } else { prefix.hex }))
+        match input.parse::<HexPrefix>() {
+            Ok(prefix) => Ok(Self::Prefix(if prefix.locator { format!("u{}", prefix.hex) } else { prefix.hex })),
+            Err(_) if path.is_file() => Ok(Self::TorrentFile(path)),
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -366,6 +369,19 @@ mod tests {
         );
         assert_eq!(Target::parse("9b5", cwd).unwrap_err().code, ErrorCode::InvalidRef);
         assert_eq!(Target::parse("missing.torrent", cwd).unwrap_err().code, ErrorCode::InvalidRef);
+    }
+
+    #[test]
+    fn a_file_named_like_an_id_does_not_hide_the_id() {
+        let cwd = std::env::temp_dir().join(format!("torrential-id-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("9b5212"), b"").unwrap();
+        std::fs::write(cwd.join("film"), b"").unwrap();
+        let parsed = (Target::parse("9b5212", &cwd), Target::parse("film", &cwd), Target::parse("./9b5212", &cwd));
+        std::fs::remove_dir_all(&cwd).unwrap();
+        assert_eq!(parsed.0.unwrap(), Target::Prefix("9b5212".into()));
+        assert_eq!(parsed.1.unwrap(), Target::TorrentFile(cwd.join("film")));
+        assert_eq!(parsed.2.unwrap(), Target::TorrentFile(cwd.join("./9b5212")));
     }
 
     #[test]
