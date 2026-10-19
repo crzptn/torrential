@@ -582,6 +582,23 @@ async fn resume_leaves_a_download_over_its_cap_stopped() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn repair_leaves_a_download_over_its_cap_stopped() {
+    let h = Harness::new();
+    let film = over_its_setup_cap(&h, 41).await;
+
+    let err = h.changes(Request::Verify { reference: prefix(&film), repair: true }).await.unwrap_err();
+
+    assert_eq!(
+        (err.code, err.hint.as_deref()),
+        (
+            ErrorCode::TooLarge,
+            Some("torrential get 292929 --max-size 3GiB allows it, or pick fewer files with --files")
+        )
+    );
+    assert_eq!(h.status().await[0].status.name(), "error");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn other_downloads_on_the_same_disk_count_against_free_space() {
     let h = Harness::new();
     h.disk.set_free(90 * GIB);

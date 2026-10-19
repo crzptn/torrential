@@ -792,6 +792,9 @@ impl Owner {
             )
             .with_hint(format!("torrential wait {short} --until metadata")));
         };
+        if repair && let Some(size) = job.selected_size() {
+            admission::check_size(size, job.record.cap, Some(id))?;
+        }
         if job.verify.is_some() || job.observed == Observed::InEngine(Phase::Checking) {
             return Ok(vec![self.change(id, "checking")]);
         }
