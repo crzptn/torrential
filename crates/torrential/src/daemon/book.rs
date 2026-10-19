@@ -150,6 +150,15 @@ impl JobEntry {
         files::wanted(self.metainfo.as_deref()?, &self.record.selection).ok()
     }
 
+    fn path(&self) -> Option<PathBuf> {
+        let targets =
+            self.metainfo.as_deref().zip(self.wanted()).map(|(m, wanted)| files::targets(m, &self.record.dir, &wanted));
+        match targets.as_deref() {
+            Some([only]) => Some(only.clone()),
+            _ => self.record.name.as_ref().map(|n| self.record.dir.join(n)),
+        }
+    }
+
     pub fn selected_size(&self) -> Option<u64> {
         let metainfo = self.metainfo.as_deref()?;
         let wanted = self.wanted()?;
@@ -196,7 +205,7 @@ impl JobEntry {
             info_hash: self.record.info_hash,
             name: self.record.name.as_deref().map(torrential_core::text::sanitize),
             dir: self.record.dir.clone(),
-            path: self.record.name.as_ref().map(|n| self.record.dir.join(n)),
+            path: self.path(),
             status,
             progress: Progress {
                 size,
@@ -306,6 +315,18 @@ mod tests {
         let stats = Stats { down_rate: 10 << 20, missing, peers: 2, ..Stats::default() };
         job.sample(stats, start + Duration::from_secs(23));
         assert_eq!(job.view().progress.eta, None, "bytes arrive, but no source has the pieces still missing");
+    }
+
+    #[test]
+    fn the_path_is_the_file_when_one_file_is_picked() {
+        let mut job = entry(1, 0, Intent::Running, Observed::Absent);
+        let files = vec![MetaFile { path: "bbb.mp4".into(), size: 1 }, MetaFile { path: "bbb.mov".into(), size: 1 }];
+        let metainfo = Metainfo::new(job.record.info_hash, "Big Buck Bunny".into(), files, false, Vec::new()).unwrap();
+        job.metainfo = Some(Arc::new(metainfo));
+        job.record.name = Some("Big Buck Bunny".into());
+        assert_eq!(job.view().path, Some(PathBuf::from("/d/Big Buck Bunny")));
+        job.record.selection = Selection::Patterns(vec!["*.mp4".into()]);
+        assert_eq!(job.view().path, Some(PathBuf::from("/d/Big Buck Bunny/bbb.mp4")));
     }
 
     #[test]
