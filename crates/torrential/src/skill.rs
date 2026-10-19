@@ -623,6 +623,9 @@ mod tests {
     #[test]
     fn a_blocked_write_in_a_sandbox_names_the_command_for_the_human() {
         use std::os::unix::fs::PermissionsExt;
+        if crate::paths::uid() == 0 {
+            return;
+        }
         let home = Home::new();
         let locked = |mode| std::fs::set_permissions(home.dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
         locked(0o555);

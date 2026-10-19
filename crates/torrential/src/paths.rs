@@ -15,9 +15,9 @@ pub struct Paths {
 
 /// `sun_path` is 104 bytes on macOS and 108 on Linux, each including the final NUL.
 #[cfg(target_os = "macos")]
-const MAX_SOCKET_PATH: usize = 103;
+pub const MAX_SOCKET_PATH: usize = 103;
 #[cfg(not(target_os = "macos"))]
-const MAX_SOCKET_PATH: usize = 107;
+pub const MAX_SOCKET_PATH: usize = 107;
 
 impl Paths {
     pub fn from_process(env: &Env) -> Result<Self, Error> {

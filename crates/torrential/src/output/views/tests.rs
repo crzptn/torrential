@@ -739,7 +739,8 @@ fn every_error_class() {
             serde_json::to_string_pretty(&value).unwrap()
         ));
     }
-    insta::assert_snapshot!(out);
+    let limit = format!("over the {}-byte limit", crate::paths::MAX_SOCKET_PATH);
+    insta::assert_snapshot!(out.replace(&limit, "over the <max>-byte limit"));
 }
 
 #[test]

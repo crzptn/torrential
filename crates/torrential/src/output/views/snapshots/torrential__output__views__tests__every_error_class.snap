@@ -243,7 +243,7 @@ hint: run torrential daemon install from a terminal outside any sandbox
   "next": null
 }
 === daemon_unavailable, exit 6
-error[daemon_unavailable]: the engine socket path /tmp/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/run/engine.sock is 141 bytes, over the 103-byte limit
+error[daemon_unavailable]: the engine socket path /tmp/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/run/engine.sock is 141 bytes, over the <max>-byte limit
 hint: set TORRENTIAL_HOME to a shorter directory
 --- json
 {
@@ -251,7 +251,7 @@ hint: set TORRENTIAL_HOME to a shorter directory
   "type": "error",
   "error": {
     "code": "daemon_unavailable",
-    "message": "the engine socket path /tmp/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/run/engine.sock is 141 bytes, over the 103-byte limit",
+    "message": "the engine socket path /tmp/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/run/engine.sock is 141 bytes, over the <max>-byte limit",
     "hint": "set TORRENTIAL_HOME to a shorter directory"
   },
   "next": null
