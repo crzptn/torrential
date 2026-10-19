@@ -147,7 +147,7 @@ def tmux(*args):
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--size", default="100x30")
     ap.add_argument("--keys", default="")
     ap.add_argument("--settle", type=float, default=1.0)
