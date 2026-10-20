@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# No services or authentication need restoring. The repository-scoped login
+# hook installed by setup activates Rust and the Nix environment on wake.

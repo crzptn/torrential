@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+if ! command -v nix >/dev/null 2>&1; then
+  if [[ ! -x "$HOME/.nix-profile/bin/nix" ]]; then
+    curl --proto '=https' --tlsv1.2 -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon
+  fi
+  source "$HOME/.nix-profile/etc/profile.d/nix.sh"
+fi
+
+export PATH="$HOME/.cargo/bin:$PATH"
+if ! command -v rustup >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
+fi
+if ! rustup run stable rustc --version >/dev/null 2>&1; then
+  rustup toolchain install stable --profile minimal
+fi
+rustup default stable
+rustup component add rustfmt clippy
+
+git submodule update --init --recursive
+
+dev_env="$(nix --extra-experimental-features 'nix-command flakes' print-dev-env --no-update-lock-file "$repo_root")"
+eval "$dev_env"
+
+cargo fetch --locked
+
+# Amp and supervised services start in separate non-interactive login shells.
+# Export the complete dev shell there, without spawning a nested shell.
+profile_marker='# torrential orb development environment'
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$profile_marker
+if [[ "\$PWD" == "$repo_root" || "\$PWD" == "$repo_root/"* ]]; then
+  export PATH="\$HOME/.cargo/bin:\$PATH"
+  if [[ -z "\${IN_NIX_SHELL:-}" ]]; then
+    eval "\$("$(command -v nix)" --extra-experimental-features 'nix-command flakes' print-dev-env --no-update-lock-file "$repo_root")"
+  fi
+fi
+EOF
+fi
